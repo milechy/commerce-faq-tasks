@@ -195,16 +195,24 @@ type SearchV1Response = {
    - `q: string`
    - `topK?: number`（1〜50）
 2. `hybridSearch(q)` の実行
-   - Embedding 生成（LLM ベースの埋め込み。Phase17 では計測をまとめて `search_ms` に含める）
-   - Elasticsearch 検索
-   - pgvector 検索（Phase17 では無効化されているケースが多い）
+   - Embedding 生成（OpenAI `text-embedding-3-small`。`search_ms` にまとめて計測を含める）
+   - pgvector 検索(意味検索)が主経路。2026-08-25是正: 以前は pgvector と ES を
+     常に両方実行していたが、`src/agent/flow/searchAgent.ts` は
+     `pgVectorItems.length === 0` のときだけ ES(`hybridSearch`)を補完的に呼ぶ
+     方式に統一済み(重複クエリの除去。「pgvectorが無効化されているケースが
+     多い」という以前の記述は逆で、pgvectorが主・ESが補完)
    - マージ + ソート
    - 内部メトリクスの組み立て:
      - `note: "search_ms=... es_ms=... es_hits=... pg_hits=..."` 形式の文字列
 3. `rerank(q, results.items, k)` の実行
-   - Cross-Encoder による再ランク。
-   - Phase17 時点では `engine: "dummy"` で、実質 no-op に近い軽量処理。
-   - 将来 ONNX ランタイムを利用した Cross-Encoder に差し替える想定。
+   - Stage1: 軽量 heuristic で全件をスコアリング(`scoreHeuristic`)。
+   - Stage2: `CE_ENGINE=onnx` かつクエリ長・候補数などの条件を満たすときだけ
+     Cross-Encoder で再ランクする(`shouldUseCE`、`src/search/rerank.ts:24-29,144-163`)。
+   - 2026-08-25 是正: 「`engine: "dummy"` で無条件に実質no-op」は誤り。
+     本番の `CE_ENGINE` は `onnx` 以外(`onnx` でなければ全て dummy 扱いになり
+     CEはスキップされる)に設定されており、結果として `rerank()` の戻り値は
+     `engine: "heuristic"`(Stage1のみ)になる。CE自体は実装済みで、
+     `CE_ENGINE=onnx` にすれば有効化できる。
 4. メタ情報の組み立てとレスポンス返却
    - `route`: `"hybrid:es50+pg50"` など、パイプラインルートの識別子。
    - `flags`:

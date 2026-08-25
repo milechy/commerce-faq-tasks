@@ -116,7 +116,8 @@
 
 #### 5. 未回答質問 `/admin/knowledge-gaps` — Chat-complete
 - サイドバー: `AppSidebar.tsx:61` / ルート: `App.tsx:208`
-- カバー済み: `get_knowledge_gaps` (`toolDefinitions.ts:405` / `actionExecutor.ts:880`)、`dismiss_knowledge_gap` (`:420` / `:900`)。ギャップから FAQ を作る「ワンクリック改善」に相当する動作は `suggest_faq` → `save_faq` で完結する。
+- カバー済み: `get_knowledge_gaps` (`toolDefinitions.ts:405` / `actionExecutor.ts:880`)、`dismiss_knowledge_gap` (`:420` / `:900`)。
+- **2026-08-25是正: 「`suggest_faq` → `save_faq` で完結する」は過大な記述だった。** `save_faq` は gap id を受け取らず、FAQは作られてもギャップ自体は `open` のままになる(ギャップを`resolved`にする経路はレガシーUIの `POST /v1/admin/knowledge-gaps/:id/add-knowledge` のみで、チャット側から呼ばれていない)。承認済みギャップからチャットで知識を追加してギャップも閉じる機能は別タスク(GID `1217811043900566`)として計画中・未着手。現時点では「ギャップの一覧・却下」のみがChat-completeで、「ギャップ→知識化してクローズ」はチャットから完結しない。
 - handoff `feature` キーは存在しない = チャット側に逃げ道が用意されていない = 設計上すでにチャットで閉じている扱い。
 - 旧UIへの流入は `pages/admin/index.tsx:382` の1本だけ。
 

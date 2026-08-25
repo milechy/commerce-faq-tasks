@@ -2,10 +2,16 @@
 
 このプロジェクトは「Commerce-FAQ / Sales AaaS」として、EC/オンラインビジネス向けに **FAQ回答 + セールス支援** を行うエージェントを提供するバックエンドです。
 
-- エンドユーザー向け: `/agent.search` で FAQ / セールストークを自動回答
+- エンドユーザー向け: `/api/chat`(widget からのチャット。RAG検索→合成回答)。
+  `/agent.search`・`/agent/search` は検索のみを返す下位API(デバッグ・ツール用途)で、
+  エンドユーザーの主経路ではない
 - 運用者向け: `/admin/*` + React 管理 UI で FAQ を CRUD ＋ ES / pgvector を自動同期
 - マルチテナント対応: `tenant_id` 列と `tenantId` パラメータでテナントごとにデータを分離
 - 認証: Supabase Auth（管理 UI） + API Key / Basic 認証（エージェント API）
+
+> 2026-08-25 ナレッジ配線是正監査での訂正点(この文書内)は
+> `.claude/rules/knowledge.md` を一次情報として同期済み。配線の詳細
+> (書き込み経路の実数・可視性述語・出所別RAG予算など)はそちらを参照。
 
 ## 全体構成
 
@@ -41,7 +47,8 @@
 ### Embedding / LLM レイヤー
 
 - Embedding:
-  - 現状: Groq API（`GROQ_COMPOUND_MINI` = `groq/compound-mini`）を利用し、1536 次元のベクトルを生成
+  - 現状: OpenAI Embedding API（`text-embedding-3-small`、`src/agent/llm/openaiEmbeddingClient.ts`）を
+    利用し、1536 次元のベクトルを生成(Groq ではない)
   - `faq_embeddings.embedding` (vector(1536)) に保存
   - `metadata` に `source`, `faq_id` などを保存
 - LLM 応答生成:
@@ -54,16 +61,24 @@
 
 - `admin-ui/` 配下の Vite + React + TypeScript プロジェクト
 - Supabase Auth を利用したログインページ（`Login.tsx`）
-- 管理画面（`FaqList.tsx`）で:
+- 知識管理画面（`admin-ui/src/pages/admin/knowledge/index.tsx` 等。`FaqList.tsx` は現存しない）で:
   - Supabase Auth でログイン
-  - 取得した JWT を使って Node バックエンドの `/admin/faqs` を呼び出し
+  - 取得した JWT を使って Node バックエンドの `/admin/*` を呼び出し
   - FAQ 一覧・詳細・編集（answer 更新など）
 
 ## 主なリクエストフロー
 
-### 1. エージェント API: `/agent.search`
+### 1. エンドユーザーのチャット: `/api/chat`
 
-1. クライアント（チャット UI 等）が `/agent.search` に POST:
+widget からのチャットはこちらが実経路。検索(ES + pgvector)→ 合成(`synthesisTool.ts`)で
+RAG抜粋・`tuning_rules`・`learned_memory` を組み込んだ回答を生成し、ヒットが薄い/無い会話は
+`knowledge_gaps` に記録される(詳細: `.claude/rules/knowledge.md`)。
+
+### 2. エージェント API(検索のみ): `/agent.search`・`/agent/search`
+
+エンドユーザーの主経路ではなく、検索結果のみを返す下位API(デバッグ・ツール用途)。
+
+1. クライアントが `/agent.search` に POST:
    - ヘッダ: `x-api-key: <secret>` または Basic 認証
    - ボディ: `q`, `topK`, `tenantId`, `debug`, `useLlmPlanner` など
 2. 認証ミドルウェアで API Key / Basic を検証
@@ -77,11 +92,11 @@
 
 詳細は `docs/search-pipeline.md` と `docs/api-agent.md` を参照。
 
-### 2. 管理 UI から FAQ 編集
+### 3. 管理 UI から FAQ 編集
 
 1. 管理者が admin-ui の `Login` 画面で Supabase Auth にログイン
 2. Supabase から返ってきた `access_token` を保持（例: メモリ / localStorage）
-3. FaqList 画面で:
+3. 知識管理画面で:
    - `Authorization: Bearer <access_token>` を付与して `/admin/faqs?tenantId=demo` を取得
    - FAQ 一覧を表示
 4. 行をクリックして詳細を表示し、`answer` を編集
@@ -89,8 +104,8 @@
    - Node バックエンドの `/admin/faqs/:id?tenantId=demo` に PUT
    - `faq_docs` の該当行を更新
    - Elasticsearch の `faqs` インデックス該当ドキュメントを更新
-   - Groq Embedding API を使って新しいベクトルを生成し、`faq_embeddings` を upsert
-6. 以降の `/agent.search` では更新後の内容で検索・回答される
+   - OpenAI Embedding API を使って新しいベクトルを生成し、`faq_embeddings` を upsert
+6. 以降の `/api/chat`（および `/agent.search`）では更新後の内容で検索・回答される
 
 詳細は `docs/api-admin.md`, `docs/db-schema.md` を参照。
 
