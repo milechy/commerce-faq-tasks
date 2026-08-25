@@ -69,9 +69,12 @@ function makeSingleClaimMock() {
         rows: [{ tenant_id: TENANT, user_question: '返品できますか', detection_source: 'no_rag', frequency: 1 }],
       });
     }
-    if (/SELECT tenant_id, recommendation_status FROM knowledge_gaps/.test(sql)) {
-      // claim後に失敗側が理由特定のために読むフォールバックSELECT
-      return Promise.resolve({ rows: [{ tenant_id: TENANT, recommendation_status: 'resolved' }] });
+    if (/SELECT tenant_id, recommendation_status, status FROM knowledge_gaps/.test(sql)) {
+      // claim後に失敗側が理由特定のために読むフォールバックSELECT。
+      // 2回の呼び出しがほぼ同時であるため、この時点では knowledge_gaps.status
+      // (ライフサイクル、resolved_faq_idと同時に確定する)はまだ元の値のまま
+      // (recommendation_statusだけが先着のclaimで'resolved'に書き換わっている)。
+      return Promise.resolve({ rows: [{ tenant_id: TENANT, recommendation_status: 'resolved', status: 'open' }] });
     }
     if (/INSERT INTO faq_docs/.test(sql)) {
       return Promise.resolve({ rows: [{ id: 999 }] });
