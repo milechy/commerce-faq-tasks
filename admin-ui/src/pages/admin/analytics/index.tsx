@@ -37,6 +37,7 @@ import { ConversionSection } from "./ConversionSection";
 import { AvatarSettingsSection } from "./AvatarSettingsSection";
 import { FlowFunnelSection } from "./FlowFunnelSection";
 import { MetricsTimeseriesSection } from "./MetricsTimeseriesSection";
+import { SectionErrorBoundary } from "../../../components/common/SectionErrorBoundary";
 
 ChartJS.register(
   CategoryScale,
@@ -429,11 +430,13 @@ export default function AnalyticsDashboardPage() {
           {/* ============================================================ */}
           {/* Phase72-C: 会話フロー 遷移ファネル */}
           {/* ============================================================ */}
-          <FlowFunnelSection
-            period={period}
-            tenantId={tenantId}
-            isSuperAdmin={isSuperAdmin}
-          />
+          <SectionErrorBoundary sectionLabel="会話フロー 遷移ファネル">
+            <FlowFunnelSection
+              period={period}
+              tenantId={tenantId}
+              isSuperAdmin={isSuperAdmin}
+            />
+          </SectionErrorBoundary>
           {/* Phase72-D: メトリクス時系列（super_admin のみ表示） */}
           {isSuperAdmin && <MetricsTimeseriesSection isSuperAdmin={isSuperAdmin} />}
         </>
