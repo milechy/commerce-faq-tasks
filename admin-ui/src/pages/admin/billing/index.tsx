@@ -34,17 +34,48 @@ import { PlanSection } from "./PlanSection";
 export default function BillingPage() {
   const navigate = useNavigate();
   const { t } = useLang();
-  const { isSuperAdmin, user, previewMode, previewTenantId, previewTenantName, tenantPlan } = useAuth();
+  const {
+    isSuperAdmin, user, previewMode, previewTenantId, previewTenantName,
+    tenantPlan, onboardingStageResolved,
+  } = useAuth();
 
   // プラン変更後は useAuth 側の再取得を待たず、この画面の表示を即座に合わせる。
   const [planOverride, setPlanOverride] = useState<TenantPlan | null>(null);
-  const effectivePlan = planOverride ?? tenantPlan;
 
   const currentMonth = new Date().toISOString().slice(0, 7);
 
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [selectedTenantId, setSelectedTenantId] = useState<string>("");
   const [selectedMonth, setSelectedMonth] = useState<string>(currentMonth);
+
+  // GID 1217808323616744(P1-7): super_admin の GET /v1/admin/tenants 取得状況。
+  // auth context 側は直さない方針のため、super_admin のプランはここ(選択中テナント由来)
+  // だけで解決する。取得中/失敗/成功の3状態を PlanSection の「確認中」固定に渡す。
+  const [superAdminTenantsStatus, setSuperAdminTenantsStatus] =
+    useState<"loading" | "error" | "ready">("loading");
+
+  const selectedTenant = tenants.find((t) => t.id === selectedTenantId);
+
+  // プランの由来:
+  // - super_admin: 選択中テナントの plan(/v1/admin/tenants 一覧レスポンスに含まれる。個別取得しない)
+  // - client_admin(previewMode含む): 従来どおり auth context の tenantPlan(回帰させない)
+  const rawPlan: TenantPlan | null = isSuperAdmin ? (selectedTenant?.plan ?? null) : tenantPlan;
+
+  // client_admin側には「取得試行が完了したか」を示すフラグが auth context に無いため、
+  // 同じ loadTenantPlan effect に相乗りしている onboardingStageResolved を流用する
+  // (tenantPlan と同時に確定するフラグ。auth context 自体には手を入れない)。
+  const planStatus: "loading" | "error" | "ready" =
+    planOverride !== null
+      ? "ready"
+      : isSuperAdmin
+        ? superAdminTenantsStatus
+        : !onboardingStageResolved
+          ? "loading"
+          : tenantPlan !== null
+            ? "ready"
+            : "error";
+
+  const effectivePlan = planOverride ?? rawPlan;
 
   const [summary, setSummary] = useState<BillingSummary | null>(null);
   const [daily, setDaily] = useState<DailyUsage[]>([]);
@@ -95,15 +126,20 @@ export default function BillingPage() {
               tenants: Array<{
                 id: string; name: string; is_active?: boolean;
                 billing_free_from?: string | null; billing_free_until?: string | null;
+                plan?: TenantPlan | null;
               }>;
             };
             setTenants(data.tenants);
             if (data.tenants.length > 0) {
               setSelectedTenantId(data.tenants[0].id);
             }
+            setSuperAdminTenantsStatus("ready");
+          } else {
+            setSuperAdminTenantsStatus("error");
           }
         } catch {
-          // テナント取得失敗時は空のまま
+          // テナント取得失敗時は空のまま。プラン表示は「取得できませんでした」に倒す。
+          setSuperAdminTenantsStatus("error");
         }
       } else {
         // Client Admin（本人またはプレビューモード）: 自テナントのみ
@@ -406,8 +442,6 @@ export default function BillingPage() {
     fetchBillingData();
   }, [fetchBillingData]);
 
-  const selectedTenant = tenants.find((t) => t.id === selectedTenantId);
-
   // 請求ステータスバッジ
   const statusBadge = (status: BillingSummary["billing_status"]) => {
     const map = {
@@ -673,6 +707,7 @@ export default function BillingPage() {
       {/* プラン変更（テナント自身の操作。super_admin は /admin/tenants/:id 側で行う） */}
       <PlanSection
         currentPlan={effectivePlan}
+        planStatus={planStatus}
         onChanged={(p) => setPlanOverride(p)}
         showToast={showToast}
       />

@@ -1,3 +1,5 @@
+import type { TenantPlan } from "../../../auth/useAuth";
+
 // ─── 型定義 ────────────────────────────────────────────────
 export interface Tenant {
   id: string;
@@ -5,6 +7,9 @@ export interface Tenant {
   is_active?: boolean;
   billing_free_from?: string | null;
   billing_free_until?: string | null;
+  // GET /v1/admin/tenants の一覧応答に含まれる(src/api/admin/tenants/routes.ts の
+  // SELECT に t.plan がある)。super_admin のプラン表示はここから引く。個別取得はしない。
+  plan?: TenantPlan | null;
 }
 
 export interface BillingAdjustment {
