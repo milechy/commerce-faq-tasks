@@ -1,7 +1,8 @@
 ---
 name: lane-1-docs
 description: R2C docs 変更 (docs/, .claude/lane-templates/, .claude/agents/) を担当する Lane 1 エージェント。Tier B docs タスクを処理。
-model: claude-sonnet-4-6
+model: claude-sonnet-5
+isolation: worktree
 memory: project
 tools:
   - Bash

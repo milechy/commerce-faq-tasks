@@ -1,7 +1,7 @@
 ---
 name: team-orchestrator
 description: Agent Team の全体設計図。Asana タスク1件を Planner→Generator→Evaluator→Tester のパイプラインで自走実装する。worktree 隔離・人間承認ゲート・トークンルーティング・チェックポイントを規定する。メインセッション（Opus 4.8）が読む orchestration 契約書。
-model: claude-opus-4-8
+model: claude-opus-5
 ---
 
 # Team Orchestrator（Agent Team 全体設計図）

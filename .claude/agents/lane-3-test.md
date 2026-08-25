@@ -1,7 +1,8 @@
 ---
 name: lane-3-test
 description: R2C テスト作成 (src/__tests__/, admin-ui/__tests__/) を担当する Lane 3 エージェント。テストのみの PR を担当。
-model: claude-sonnet-4-6
+model: claude-sonnet-5
+isolation: worktree
 memory: project
 tools:
   - Bash

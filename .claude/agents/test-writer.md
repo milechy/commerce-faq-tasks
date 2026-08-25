@@ -1,7 +1,7 @@
 ---
 name: test-writer
 description: TEST_DEPLOY_GATE.md準拠のテスト作成専門エージェント
-model: claude-sonnet-4-6
+model: claude-sonnet-5
 effort: high
 tools:
   - Bash

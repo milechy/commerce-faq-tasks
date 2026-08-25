@@ -1,7 +1,7 @@
 ---
 name: Evaluator
 description: 下流エージェント。Generator の実装をレビューする。セキュリティ・anti-slop・lint・dead code を機械チェック + 静的レビュー。read-only、GO/NO-GO 判定を返す。
-model: claude-sonnet-4-6
+model: claude-opus-5
 memory: project
 tools:
   - Bash
