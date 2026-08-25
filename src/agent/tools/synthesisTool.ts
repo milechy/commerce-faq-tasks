@@ -225,7 +225,11 @@ export async function synthesizeAnswer(input: SynthesisInput): Promise<Synthesis
           sessionId: _sid,
           userMessage: _msg,
           ragResultCount: _hitCount,
-          topRerankScore: _topScore > 0 ? _topScore : undefined,
+          // ナレッジ配線是正P13: `_topScore > 0 ? ... : undefined` だと
+          // 実スコアがちょうど0.0のヒットが low_confidence 判定をすり抜けていた
+          // (detectGap は no_rag→low_confidence の優先順位で判定するため、
+          // hitCount===0 のケースは no_rag が先に拾う。0.0 をそのまま渡して問題ない)。
+          topRerankScore: _topScore,
         })
       ).catch((_err: unknown) => {
         // silent — non-blocking
