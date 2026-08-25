@@ -63,11 +63,54 @@ describe("fetchMeasurementHealth", () => {
 
     await fetchMeasurementHealth(db, "tenant-a", "30d");
 
-    for (const call of db.query.mock.calls) {
+    // knowledgeIndexDrift(countFaqIndexMismatch)は独立した1引数クエリ形式
+    // ($1=tenantIdのみ)で、faqIndexSync.test.ts 側でテナント絞り込みを検証済み。
+    // ここでは元々の5指標クエリ(interval + tenant_id=$2)の絞り込みのみを検証する。
+    const originalMetricCalls = db.query.mock.calls.filter(
+      ([sql]: [string]) => !/FROM faq_docs|FROM faq_embeddings/.test(sql),
+    );
+    expect(originalMetricCalls.length).toBeGreaterThan(0);
+    for (const call of originalMetricCalls) {
       const [sql, params] = call as [string, unknown[]];
       expect(sql).toMatch(/tenant_id = \$2/);
       expect(params).toEqual(["30 days", "tenant-a"]);
     }
+  });
+
+  it("knowledgeIndexDrift: tenantId指定時は3ストア突合を返す", async () => {
+    // countFaqIndexMismatch のクエリ順は呼び出し順に依存しないよう、
+    // SQL文の特徴的な部分文字列で振り分ける(連番配列だと内部クエリ数の
+    // 変更に弱いため。variant.test.ts 等と同じ流儀)。
+    const query = jest.fn().mockImplementation((sql: string) => {
+      if (/FROM faq_docs fd\s+WHERE fd\.tenant_id/.test(sql)) return Promise.resolve({ rows: [{ c: 1 }] });
+      if (/FROM faq_embeddings fe/.test(sql)) return Promise.resolve({ rows: [{ c: 2 }] });
+      if (/FROM faq_docs\s+WHERE tenant_id/.test(sql)) return Promise.resolve({ rows: [{ c: 10 }] });
+      return Promise.resolve({ rows: [] });
+    });
+    const db = { query };
+
+    const result = await fetchMeasurementHealth(db, "tenant-a", "30d");
+
+    expect(result.knowledgeIndexDrift).toEqual({
+      dbPublishedCount: 10,
+      embeddingMissingCount: 1,
+      orphanEmbeddingCount: 2,
+      esCount: null, // ES_URL 未設定
+    });
+  });
+
+  it("knowledgeIndexDrift: tenantId未指定(cross-tenant view)では null", async () => {
+    const db = makeDb([
+      { rows: [] },
+      { rows: [{ count: "0" }] },
+      { rows: [{ linked: "0", total: "0" }] },
+      { rows: [{ recorded: "0", auto_recorded: "0", total: "0" }] },
+      { rows: [{ count: "0" }] },
+    ]);
+
+    const result = await fetchMeasurementHealth(db, null, "30d");
+
+    expect(result.knowledgeIndexDrift).toBeNull();
   });
 
   it("outcome記録率・実ユーザー有効セッション数のクエリはsource='user'絞り込みが入る(e2eを含めない)", async () => {
