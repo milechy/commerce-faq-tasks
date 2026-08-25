@@ -513,7 +513,7 @@ handoff は出るが、店主はチャットを離れる。離れた先で「何
 | 7 | FAQのタグ | `tool:add_faq,update_faq` |
 | 8 | アバター画像「写真をアップロード」 | `direct` |
 | 9 | 音声クローン | `direct` |
-| 10 | 高品質画像の生成 | `handoff:avatar_premium` |
+| 10 | 高品質画像の生成 | `direct` |
 | 11 | アバター新規作成ウィザード | `handoff:avatar_wizard` |
 | 12 | 会話分析の推移グラフ・低評価セッション | `tool:get_analytics_trend` |
 | 13 | ABテスト結果・改善提案 | `tool:get_ab_test_results` |
@@ -521,4 +521,4 @@ handoff は出るが、店主はチャットを離れる。離れた先で「何
 | 15 | ご利用状況・お支払い | `tool:get_billing_summary` |
 | 16 | 集計期間90日 | `tool:get_analytics_summary,get_conversion_summary` |
 
-現在地（2026-08-25、W3-2完了時点）: `tool:` 12 / `handoff:` 2 / `direct` 2 / `pending` 0。S0(可視化)達成済み。W3-2(#9音声クローン)は既存の声の候補提示・採用カード(`avatarVoiceCandidates`)に `mode="clone"` を追加する形で実装し(新しいカード種別は増やさない)、`direct` に分類した。これで `docs/AVATAR_CHAT_MIGRATION.md` の層B(会話内カード)も完成。残るT3(#10,11 高品質生成/新規作成ウィザード)が未着手(W3-3〜W3-4)。
+現在地（2026-08-25、W3-3完了時点）: `tool:` 12 / `handoff:` 1 / `direct` 3 / `pending` 0。S0(可視化)達成済み。W3-3(#10高品質画像の生成)は既存の画像候補提示・採用カード(`avatarCandidates`)に `premium` フラグを追加する形で実装し(新しいカード種別は増やさない)、`direct` に分類した。通常生成より費用が高いため、生成前にチャット内で確認(生成する/やめる)を挟む(Asana制約U-17)。残るT3(#11新規作成ウィザード)のみ未着手(W3-4)。

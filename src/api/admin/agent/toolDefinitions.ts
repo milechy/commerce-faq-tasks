@@ -1551,7 +1551,9 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
         'feature="avatar_feature_toggle" は set_avatar_feature で対応できない場合にのみ使うこと。' +
         'アバターの名前・性格・話し方の編集は update_avatar_profile で直接実行できるため、まずそちらを使うこと。' +
         'feature="avatar_profile" は update_avatar_profile で対応できない場合にのみ使うこと。' +
-        '高品質なアバター画像を生成したいと聞かれたら feature="avatar_premium" を使うこと。',
+        '高品質なアバター画像の生成は adopt_avatar_preset 採用後にチャット内の「💎 高品質な画像を' +
+        '生成する」ボタンから直接行える(通常生成より費用が高いため、押すと生成前に確認が入る)。' +
+        'feature="avatar_premium" は、その画面自体を旧UIで見たいとユーザーが明示した場合にのみ使うこと。',
       parameters: {
         type: 'object',
         properties: {

@@ -2757,6 +2757,128 @@ describe("CopilotPreviewPage — アバター画像候補の生成・採用", ()
   });
 });
 
+// W3-3(docs/COPILOT_UI_PARITY.md §3.1 #10): 高品質な画像(Flux 2 Pro + Magnific、1枚)の
+// 生成。通常生成より費用が高いため、生成前に確認(生成する/やめる)を挟む(U-17)。
+// 採用は既存のavatarCandidates/PATCH /configs/:idをそのまま使う。
+describe("CopilotPreviewPage — アバターの高品質画像の生成(Premium)", () => {
+  function mockAdoptedThenPremiumEndpoints(opts: {
+    generate?: () => Promise<Response>;
+    patch?: () => Promise<Response>;
+  }) {
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+    let agentCalls = 0;
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
+      if (String(url).includes("/v1/admin/avatar/generate-premium")) {
+        return opts.generate ? opts.generate() : mockOk({ imageUrl: "https://img/premium-1.png" });
+      }
+      if (String(url).includes("/v1/admin/avatar/configs/")) {
+        return opts.patch ? opts.patch() : mockOk({ id: "cfg-1" });
+      }
+      if (String(url).includes("/v1/admin/agent/chat")) {
+        agentCalls += 1;
+        if (agentCalls === 1) return mockOk({ reply: "今週も順調です。", actions: [] });
+        return mockOk({
+          reply: "採用しました。",
+          actions: [
+            {
+              tool: "adopt_avatar_preset",
+              result: "アバター「Haruka」を採用しました。まだ公開はされていません。",
+              card: { kind: "avatar_adopted", configId: "cfg-1", name: "Haruka", imageUrl: null, description: "とても丁寧な性格です。" },
+            },
+          ],
+        });
+      }
+      return mockOk({});
+    });
+  }
+
+  async function sendAndFindPremiumButton() {
+    renderPage();
+    await waitFor(() => expect(screen.getByText("今週も順調です。")).toBeTruthy());
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.change(getComposer(), { target: { value: "採用してください" } });
+    fireEvent.click(screen.getByLabelText("送信"));
+    return screen.findByRole("button", { name: "💎 高品質な画像を生成する" });
+  }
+
+  it("ボタンを押しただけでは生成されず、費用の確認が出る", async () => {
+    mockAdoptedThenPremiumEndpoints({});
+    const premiumButton = await sendAndFindPremiumButton();
+
+    fireEvent.click(premiumButton);
+
+    expect(await screen.findByText(/通常の生成より高い費用がかかります/)).toBeTruthy();
+    expect(vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/generate-premium"))).toBe(false);
+  });
+
+  it("「やめる」を押すと確認が閉じ、通信しない", async () => {
+    mockAdoptedThenPremiumEndpoints({});
+    const premiumButton = await sendAndFindPremiumButton();
+    fireEvent.click(premiumButton);
+    await screen.findByText(/通常の生成より高い費用がかかります/);
+
+    fireEvent.click(screen.getByRole("button", { name: "やめる" }));
+
+    expect(screen.queryByText(/通常の生成より高い費用がかかります/)).toBeNull();
+    expect(vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/generate-premium"))).toBe(false);
+  });
+
+  it("「生成する」で確定するとPOST /generate-premiumが呼ばれ、1枚の候補が採用できる", async () => {
+    mockAdoptedThenPremiumEndpoints({});
+    const premiumButton = await sendAndFindPremiumButton();
+    fireEvent.click(premiumButton);
+    fireEvent.click(await screen.findByRole("button", { name: "生成する" }));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "これにする" })).toBeTruthy());
+    expect(screen.getByText("高品質な候補です")).toBeTruthy();
+
+    const generateCall = vi.mocked(authFetch).mock.calls.find(([url]) => String(url).includes("/generate-premium"));
+    expect(generateCall).toBeTruthy();
+    expect(JSON.parse(String((generateCall![1] as RequestInit).body))).toEqual(
+      expect.objectContaining({ prompt: expect.any(String) }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "これにする" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "これに決定" })).toBeTruthy());
+    const patchCall = vi.mocked(authFetch).mock.calls.find(([url]) => String(url).includes("/v1/admin/avatar/configs/cfg-1"));
+    expect(JSON.parse(String((patchCall![1] as RequestInit).body))).toEqual({ image_url: "https://img/premium-1.png" });
+  });
+
+  it("再度ボタンを押すと(前回生成済みでも)毎回確認が出る(U-17)", async () => {
+    mockAdoptedThenPremiumEndpoints({});
+    const premiumButton = await sendAndFindPremiumButton();
+    fireEvent.click(premiumButton);
+    fireEvent.click(await screen.findByRole("button", { name: "生成する" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "これにする" })).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "💎 高品質な画像を生成する" }));
+
+    expect(await screen.findByText(/通常の生成より高い費用がかかります/)).toBeTruthy();
+  });
+
+  it("プラン未達(plan_upgrade_required)はサーバのmessageをそのまま案内する(errorコードを出さない)", async () => {
+    mockAdoptedThenPremiumEndpoints({
+      generate: () =>
+        Promise.resolve({
+          ok: false,
+          status: 403,
+          json: () => Promise.resolve({ error: "plan_upgrade_required", message: "プレミアムアバター生成はGrowthプラン以上でご利用いただけます" }),
+        } as Response),
+    });
+    const premiumButton = await sendAndFindPremiumButton();
+    fireEvent.click(premiumButton);
+    fireEvent.click(await screen.findByRole("button", { name: "生成する" }));
+
+    await waitFor(() => expect(screen.getByText("高品質な画像を生成できませんでした")).toBeTruthy());
+    expect(screen.getByText("プレミアムアバター生成はGrowthプラン以上でご利用いただけます")).toBeTruthy();
+    expect(screen.queryByText("plan_upgrade_required")).toBeNull();
+  });
+});
+
 // W3-1(docs/COPILOT_UI_PARITY.md §3.1 #8): 自分の写真をアバター画像にする。
 // PDF取り込みと同じくエージェントツール経由にせず、AvatarAdoptedCard から直接
 // PATCH /v1/admin/avatar/configs/:id を叩く(fal/generateは呼ばない)。
