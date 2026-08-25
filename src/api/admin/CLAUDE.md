@@ -30,6 +30,7 @@
 3. **`confirmPolicy.ts` に登録**（`WRITE_TOOL_RISK_TIERS` の low/medium/high、または `NON_WRITE_TOOLS`）。漏らすと `confirmPolicy.test.ts` の網羅性テストが落ちる（意図的な設計）
 4. フロントの日本語ラベル（`admin-ui/.../copilot-preview/index.tsx` の `REAL_TOOL_LABEL`）を追加。書き込みなら `REAL_WRITE_TOOLS` にも
 5. `card` を返すなら**3層すべて**（下記）
+6. `docs/COPILOT_UI_PARITY.md` §12 の対応台帳に該当行があれば、`pending` を `tool:<name>` / `handoff:<key>` に更新する（`legacyUiParity.test.ts` が参照の実在は検査するが、更新忘れそのものは検出できない）
 
 ## 構造化カード（card）の3層同期
 `cardPayloadSync.test.ts` が機械的に検査している。**どれか1層でも漏れると、型は通るのに画面に何も描画されない。**

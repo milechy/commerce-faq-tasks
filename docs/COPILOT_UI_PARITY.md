@@ -487,3 +487,37 @@ handoff は出るが、店主はチャットを離れる。離れた先で「何
 ### 11.6 完了の定義
 
 上記 AC がすべて満たされ、かつ §5 の **S0 (可視化)** が機械判定で green になった時点で本件は完了とする。**S1 (完結率) は完了条件に含めない** — 波の完了後に観測窓を開けて測る。S1 が伸びない場合の対処は「ツールを増やす」ではなく「§3 の型の割当を見直す」(§5 失敗の定義)。
+
+---
+
+## 12. 反映状況台帳（機械可読、W0）
+
+§3.1 の16件と1:1対応する。**この表が S0（可視化）の唯一の判定台帳**であり、`src/api/admin/agent/legacyUiParity.test.ts` がこの表と `toolDefinitions.ts` を突き合わせて機械検査する。人手のチェックリストや別ファイルへの複製は作らない（§4.1・9.0）。
+
+「参照」列の値は以下のいずれかのみ:
+- `` `tool:<name>` `` — その機能がツール `<name>`（複数ある場合は `tool:a,b`）で実行可能。`<name>` は `toolDefinitions.ts` の `ADMIN_AGENT_TOOLS` に実在すること
+- `` `handoff:<key>` `` — その機能は `<key>` の `get_legacy_ui_link` 案内で旧UIへ委譲している。`<key>` は `LEGACY_UI_FEATURES` に実在すること
+- `` `pending` `` — まだどちらでもない（不可視）。S0 未達の状態を隠さず明示する
+
+**W1〜W3 の各PRは、その機能を実装したタイミングで該当行を `pending` から `tool:` または `handoff:` に更新すること。** 更新を忘れると実装後もこの表だけが古いままになり、`docs/LEGACY_UI_SUNSET.md` と同じ drift が再発する（`legacyUiParity.test.ts` は参照先の実在は検査するが、実装済みなのに `pending` のまま残っているケースまでは検出できない — レビューで見る）。
+
+| # | 機能 | 参照 |
+|---|---|---|
+| 1 | Widget許可ドメインの自己設定 | `pending` |
+| 2 | FAQの検索対象から除外 | `pending` |
+| 3 | FAQ入力例(faq_question_hint/faq_answer_hint) | `pending` |
+| 4 | アバター設定の削除 | `pending` |
+| 5 | FAQ一括非公開・一括削除 | `handoff:faq_bulk_ops` |
+| 6 | FAQ一覧のカテゴリ絞り込み | `pending` |
+| 7 | FAQのタグ | `pending` |
+| 8 | アバター画像「写真をアップロード」 | `pending` |
+| 9 | 音声クローン | `handoff:avatar_studio` |
+| 10 | 高品質画像の生成 | `handoff:avatar_premium` |
+| 11 | アバター新規作成ウィザード | `handoff:avatar_wizard` |
+| 12 | 会話分析の推移グラフ・低評価セッション | `handoff:analytics` |
+| 13 | ABテスト結果・改善提案 | `handoff:conversion` |
+| 14 | ナレッジ別の成約貢献度 | `handoff:knowledge_attribution` |
+| 15 | ご利用状況・お支払い | `handoff:billing` |
+| 16 | 集計期間90日 | `pending` |
+
+現在地（2026-08-25、W0時点）: `tool:` 0 / `handoff:` 8 / `pending` 8。S0 の完了は `pending` が 0 になった時点（`tool:` か `handoff:` のどちらかに必ず分類されている状態）。
