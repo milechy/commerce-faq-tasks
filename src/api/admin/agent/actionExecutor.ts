@@ -45,7 +45,7 @@ import { submitSaiTask, getSaiTask } from '../../../lib/sai/saiClient';
 import { recordSaiTask, resolveSaiTaskTenant } from '../../../lib/sai/saiTaskRegistry';
 import { trackUsage } from '../../../lib/billing/usageTracker';
 import { queryTenantPlan, planHasFeature, resolveShareForTenantPlan } from '../../../lib/billing/planFeatures';
-import { fetchAnalyticsSummary, fetchAnalyticsTrend, fetchConversionSummary, fetchLowScoreSessions } from '../analytics/summaryQueries';
+import { fetchAnalyticsSummary, fetchAnalyticsTrend, fetchConversionSummary, fetchKnowledgeAttribution, fetchLowScoreSessions } from '../analytics/summaryQueries';
 import { getRuleEffect } from '../analytics/ruleEffect';
 import { computeAbExperimentResults, fetchAbExperimentsOverview } from '../../conversion/abResultsQuery';
 import { fetchUnreadNotificationsByType } from '../../../lib/notifications';
@@ -567,6 +567,37 @@ export type AbTestResultsCardPayload = {
   }>;
 };
 
+// W2-6(docs/COPILOT_UI_PARITY.md §3.1 #14、T4 要約+可視化): FAQ・書籍の知識チャンクごとの
+// 成約(CV)貢献度。旧UI(KnowledgeAttributionTab.tsx)の再現。数値はすべて
+// fetchKnowledgeAttribution(summaryQueries.ts)のサーバ集計値をそのまま持たせる
+// (AnalyticsTrendCardPayloadと同じ権威分離)。上位(成約率が高い)5件のみを持たせ、
+// 旧UIのTop10棒グラフ全件を機械的に複製しない(要約+可視化の主役は「上位・下位が
+// どれか」に絞る)。worstPerformerは要改善の対象として別枠で持たせる。
+export type KnowledgeAttributionCardPayload = {
+  kind: 'knowledge_attribution';
+  period: string;
+  sourceType: 'all' | 'faq' | 'book';
+  totalChunksUsed: number;
+  avgConversionRate: number;
+  topItems: Array<{
+    chunkId: string;
+    source: 'faq' | 'book';
+    title: string;
+    principle?: string;
+    usageCount: number;
+    conversationCount: number;
+    conversionRate: number;
+    avgJudgeScore: number | null;
+    trend: 'up' | 'down' | 'stable' | 'insufficient_data';
+  }>;
+  worstPerformer: {
+    chunkId: string;
+    source: 'faq' | 'book';
+    title: string;
+    conversionRate: number;
+  } | null;
+};
+
 export type ActionCardPayload =
   | LegacyLinkCardPayload
   | AvatarPresetCardPayload
@@ -580,7 +611,8 @@ export type ActionCardPayload =
   | KnowledgeGapsListCardPayload
   | RuleEffectCardPayload
   | AnalyticsTrendCardPayload
-  | AbTestResultsCardPayload;
+  | AbTestResultsCardPayload
+  | KnowledgeAttributionCardPayload;
 
 // ツール結果は既定では素の文字列で、構造化データを添えるツールだけが
 // { text, card } 形を返す。card は text の置き換えではなく追加である
@@ -4267,6 +4299,73 @@ export async function executeToolCall(
       } catch (err) {
         logger.warn('[actionExecutor] get_ab_test_results failed', err);
         return truncate('A/Bテスト結果の取得に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // W2-6(docs/COPILOT_UI_PARITY.md §3.1 #14、T4 要約+可視化): FAQ・書籍の知識チャンク
+    // ごとの成約(CV)貢献度。旧UI(KnowledgeAttributionTab.tsx)の再現。プラン制限は無い
+    // (旧UIも未ゲート)。
+    case 'get_knowledge_attribution': {
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+
+      const period = args['period'] === '7d' || args['period'] === '90d' ? args['period'] : '30d';
+      const periodLabel = period === '7d' ? '直近7日間' : period === '90d' ? '直近90日間' : '直近30日間';
+      const sourceType =
+        args['source_type'] === 'faq' || args['source_type'] === 'book' ? args['source_type'] : 'all';
+
+      try {
+        const { items, summary } = await fetchKnowledgeAttribution({ db, tenantId, period }, sourceType, 50);
+        const topItems = items.slice(0, 5);
+
+        const lines = [`ナレッジ別の成約貢献度（${periodLabel}）`];
+        if (topItems.length === 0) {
+          lines.push('• 対象期間にRAGで参照されたナレッジはありません');
+        } else {
+          lines.push(`• 利用チャンク数: ${summary.total_chunks_used}件（平均成約率 ${(summary.avg_conversion_rate * 100).toFixed(1)}%）`);
+          lines.push('• 成約率が高い順:');
+          for (const it of topItems) {
+            const trendNote = it.trend === 'up' ? '↑' : it.trend === 'down' ? '↓' : it.trend === 'insufficient_data' ? '(判定不能)' : '→';
+            lines.push(`  [${it.source === 'book' ? '書籍' : 'FAQ'}] ${it.title}: 成約率${(it.conversion_rate * 100).toFixed(1)}%${trendNote}（${it.usage_count}回利用/${it.conversation_count}会話）`);
+          }
+          if (summary.worst_performer && summary.worst_performer.chunk_id !== topItems[0]?.chunk_id) {
+            lines.push(`• 要改善: [${summary.worst_performer.source === 'book' ? '書籍' : 'FAQ'}] ${summary.worst_performer.title}: 成約率${(summary.worst_performer.conversion_rate * 100).toFixed(1)}%`);
+          }
+        }
+
+        const card: KnowledgeAttributionCardPayload = {
+          kind: 'knowledge_attribution',
+          period,
+          sourceType,
+          totalChunksUsed: summary.total_chunks_used,
+          avgConversionRate: summary.avg_conversion_rate,
+          topItems: topItems.map((it) => ({
+            chunkId: it.chunk_id,
+            source: it.source,
+            title: it.title,
+            principle: it.principle,
+            usageCount: it.usage_count,
+            conversationCount: it.conversation_count,
+            conversionRate: it.conversion_rate,
+            avgJudgeScore: it.avg_judge_score,
+            trend: it.trend,
+          })),
+          worstPerformer: summary.worst_performer
+            ? {
+                chunkId: summary.worst_performer.chunk_id,
+                source: summary.worst_performer.source,
+                title: summary.worst_performer.title,
+                conversionRate: summary.worst_performer.conversion_rate,
+              }
+            : null,
+        };
+
+        return { text: truncateRead(lines.join('\n')), card };
+      } catch (err) {
+        logger.warn('[actionExecutor] get_knowledge_attribution failed', err);
+        return truncate('ナレッジ貢献度の取得に失敗しました');
       }
     }
 

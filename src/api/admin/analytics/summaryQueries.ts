@@ -6,6 +6,7 @@
 
 import type { Pool } from "pg";
 import { AUTO_OUTCOME_RECORDED_BY } from "../chat-history/chatHistoryRepository";
+import { decryptText } from "../../../lib/crypto/textEncrypt";
 
 type Db = Pick<Pool, "query">;
 
@@ -709,4 +710,215 @@ export async function fetchLowScoreSessions(
     message_count: row.message_count,
     feedback_summary: row.feedback_summary ?? "",
   }));
+}
+
+// -----------------------------------------------------------------------------
+// GET /v1/admin/analytics/knowledge-attribution (Phase68) の集計本体。
+// W2-6(docs/COPILOT_UI_PARITY.md §3.1 #14): チャット(get_knowledge_attribution)と
+// HTTPレイヤ(routes.ts)の両方から同じ数値を取得できるよう、認可・レスポンス整形から
+// 切り離してここに置く(fetchAnalyticsTrendと同じ狙い)。
+// -----------------------------------------------------------------------------
+
+export type KnowledgeAttributionItem = {
+  chunk_id: string;
+  source: "faq" | "book";
+  title: string;
+  principle?: string;
+  usage_count: number;
+  conversation_count: number;
+  conversion_count: number;
+  conversion_rate: number;
+  avg_judge_score: number | null;
+  trend: "up" | "down" | "stable" | "insufficient_data";
+};
+
+export type KnowledgeAttributionResult = {
+  items: KnowledgeAttributionItem[];
+  summary: {
+    total_chunks_used: number;
+    avg_conversion_rate: number;
+    top_performer: KnowledgeAttributionItem | null;
+    worst_performer: KnowledgeAttributionItem | null;
+  };
+};
+
+export async function fetchKnowledgeAttribution(
+  { db, tenantId, period }: SummaryQueryParams,
+  sourceType: "all" | "faq" | "book" = "all",
+  limit = 50,
+  sortBy: "conversion_rate" | "usage_count" | "judge_score" = "conversion_rate",
+): Promise<KnowledgeAttributionResult> {
+  const interval = periodToInterval(period);
+  const queryArgs: (string | number | null)[] = [tenantId, interval];
+  if (sourceType !== "all") queryArgs.push(sourceType);
+  const sourceFilterClause = sourceType === "all" ? "" : "AND (src->>'source') = $3";
+  // ORDER BY 列を allow-list から選択（SQLインジェクション防止。sortByは呼び出し元で検証済みの想定）
+  const orderColumn =
+    sortBy === "usage_count" ? "usage_count" : sortBy === "judge_score" ? "avg_judge_score" : "conversion_rate";
+
+  const sql = `
+    WITH current_period AS (
+      SELECT
+        (src->>'chunk_id') AS chunk_id,
+        (src->>'source') AS src_type,
+        (src->>'principle') AS principle,
+        cs.id AS session_uuid,
+        cs.session_id AS session_text_id,
+        ca.id IS NOT NULL AS converted,
+        ev.score AS judge_score
+      FROM chat_messages cm
+      JOIN chat_sessions cs ON cs.id = cm.session_id
+      LEFT JOIN conversion_attributions ca ON ca.session_id = cs.id
+      LEFT JOIN conversation_evaluations ev ON ev.session_id = cs.session_id AND ev.score > 0
+      CROSS JOIN LATERAL jsonb_array_elements(cm.rag_sources) AS src
+      WHERE cs.tenant_id = $1
+        AND cm.rag_sources IS NOT NULL
+        AND cm.role = 'assistant'
+        AND cm.created_at >= NOW() - $2::interval
+        ${sourceFilterClause}
+        ${userSourceClause("cs")}
+    ),
+    previous_period AS (
+      SELECT
+        (src->>'chunk_id') AS chunk_id,
+        cs.id AS session_uuid,
+        ca.id IS NOT NULL AS converted
+      FROM chat_messages cm
+      JOIN chat_sessions cs ON cs.id = cm.session_id
+      LEFT JOIN conversion_attributions ca ON ca.session_id = cs.id
+      CROSS JOIN LATERAL jsonb_array_elements(cm.rag_sources) AS src
+      WHERE cs.tenant_id = $1
+        AND cm.rag_sources IS NOT NULL
+        AND cm.role = 'assistant'
+        AND cm.created_at >= NOW() - ($2::interval * 2)
+        AND cm.created_at <  NOW() - $2::interval
+        ${sourceFilterClause}
+        ${userSourceClause("cs")}
+    ),
+    current_agg AS (
+      SELECT
+        chunk_id,
+        MAX(src_type) AS src_type,
+        MAX(principle) AS principle,
+        COUNT(*)::int AS usage_count,
+        COUNT(DISTINCT session_uuid)::int AS conversation_count,
+        COUNT(DISTINCT CASE WHEN converted THEN session_uuid END)::int AS conversion_count,
+        AVG(judge_score)::float AS avg_judge_score
+      FROM current_period
+      GROUP BY chunk_id
+    ),
+    previous_agg AS (
+      SELECT
+        chunk_id,
+        COUNT(DISTINCT session_uuid)::int AS prev_conversation_count,
+        CASE
+          WHEN COUNT(DISTINCT session_uuid) > 0
+          THEN COUNT(DISTINCT CASE WHEN converted THEN session_uuid END)::float
+               / COUNT(DISTINCT session_uuid)
+          ELSE 0
+        END AS prev_rate
+      FROM previous_period
+      GROUP BY chunk_id
+    ),
+    joined AS (
+      SELECT
+        c.chunk_id,
+        c.src_type,
+        c.principle,
+        c.usage_count,
+        c.conversation_count,
+        c.conversion_count,
+        CASE
+          WHEN c.conversation_count > 0
+          THEN (c.conversion_count::float / c.conversation_count)
+          ELSE 0
+        END AS conversion_rate,
+        c.avg_judge_score,
+        fe.text AS raw_text,
+        bu.title AS book_title,
+        COALESCE(p.prev_rate, 0) AS prev_rate,
+        COALESCE(p.prev_conversation_count, 0) AS prev_conversation_count
+      FROM current_agg c
+      LEFT JOIN faq_embeddings fe
+        ON fe.id::text = c.chunk_id AND (fe.tenant_id = $1 OR fe.tenant_id = 'global')
+      LEFT JOIN book_uploads bu
+        ON bu.id::text = fe.metadata->>'book_id'
+      LEFT JOIN previous_agg p ON p.chunk_id = c.chunk_id
+    )
+    SELECT * FROM joined
+    ORDER BY ${orderColumn} DESC NULLS LAST, usage_count DESC
+    LIMIT ${limit}
+  `;
+
+  const result = await db.query(sql, queryArgs);
+
+  type AttrRow = {
+    chunk_id: string;
+    src_type: "faq" | "book" | null;
+    principle: string | null;
+    usage_count: number;
+    conversation_count: number;
+    conversion_count: number;
+    conversion_rate: number;
+    avg_judge_score: number | null;
+    raw_text: string | null;
+    book_title: string | null;
+    prev_rate: number;
+    prev_conversation_count: number;
+  };
+
+  const items: KnowledgeAttributionItem[] = (result.rows as AttrRow[]).map((row) => {
+    const currentRate = row.conversion_rate ?? 0;
+    const prevRate = row.prev_rate ?? 0;
+    const delta = currentRate - prevRate;
+    // CLAUDE.md 禁止34: 前期間の母数が0のとき prev_rate は便宜上0扱いになっており、
+    // それを実際の「0%」と区別できないまま up/down を出すと架空のトレンドになる。
+    const trend: KnowledgeAttributionItem["trend"] =
+      row.prev_conversation_count === 0
+        ? "insufficient_data"
+        : Math.abs(delta) < 0.02 ? "stable" : delta > 0 ? "up" : "down";
+    const chunkTitle = row.raw_text
+      ? (() => { try { return decryptText(row.raw_text!).slice(0, 50); } catch { return row.raw_text!.slice(0, 50); } })()
+      : null;
+    const displayTitle =
+      row.src_type === "book" && row.book_title
+        ? `${row.book_title} — ${chunkTitle ?? ""}`
+        : chunkTitle ?? "(削除済み)";
+    return {
+      chunk_id: row.chunk_id,
+      source: (row.src_type ?? "faq") as "faq" | "book",
+      title: displayTitle,
+      principle: row.principle ?? undefined,
+      usage_count: row.usage_count,
+      conversation_count: row.conversation_count,
+      conversion_count: row.conversion_count,
+      conversion_rate: Number(currentRate.toFixed(4)),
+      avg_judge_score: row.avg_judge_score != null ? Number(row.avg_judge_score.toFixed(2)) : null,
+      trend,
+    };
+  });
+
+  const totalChunksUsed = items.length;
+  const avgConversionRate =
+    totalChunksUsed > 0
+      ? Number((items.reduce((s, i) => s + i.conversion_rate, 0) / totalChunksUsed).toFixed(4))
+      : 0;
+  const topPerformer = items.reduce<KnowledgeAttributionItem | null>(
+    (best, it) => (best == null || it.conversion_rate > best.conversion_rate ? it : best),
+    null,
+  );
+  const worstPerformer = items.reduce<KnowledgeAttributionItem | null>(
+    (worst, it) => (worst == null || it.conversion_rate < worst.conversion_rate ? it : worst),
+    null,
+  );
+
+  return {
+    items,
+    summary: {
+      total_chunks_used: totalChunksUsed,
+      avg_conversion_rate: avgConversionRate,
+      top_performer: topPerformer,
+      worst_performer: worstPerformer,
+    },
+  };
 }
