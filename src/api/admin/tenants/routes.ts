@@ -468,20 +468,41 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
     // super_admin の POST/PATCH と同じ一時ブロックを、テナント自己申告にも適用する。
     // ここを抜くと、#918 が塞いだ「free_ad テナントを増やさない」方針を
     // テナント側の導線が素通りする（CLAUDE.md 禁止14: UIだけの制限にしない）。
+    // DBに触れる前(接続確立前)に弾く。
     if (blockFreeAdTransition(nextPlan, res)) return;
 
+    // ★SELECT→計算→UPDATEをトランザクション化する★
+    // 同一テナントへの並行プラン変更(連打・複数タブ)で、両リクエストが同じ
+    // beforeFeatures を読んで別々のUPDATEを投げると、tenant_settings_history には
+    // 両方の遷移が記録されるのにDBの最終状態は後勝ちの1本だけ、という
+    // 監査ログとDB遷移の不整合が起きる。SELECT ... FOR UPDATE でテナント行を
+    // ロックし、2件目のリクエストは1件目のCOMMITを待ってから自分の
+    // previousPlan を読むようにする(結果、2件目が同一プランへの変更なら
+    // no-op分岐で安全に吸収される)。
+    //
+    // chat-history/deleteSessionRepository.ts・avatar/fishVoiceModel.ts と同じ
+    // 確立済みパターン(BEGIN → SET LOCAL lock_timeout → FOR UPDATE → ... → COMMIT、
+    // ロックタイムアウトは409)に揃える。
+    const client = await db.connect();
     try {
-      const beforeResult = await db.query<{ plan: TenantPlan | null; features: Record<string, unknown> | null }>(
-        `SELECT plan, features FROM tenants WHERE id = $1`,
+      await client.query("BEGIN");
+      await client.query("SET LOCAL lock_timeout = '3s'");
+
+      const beforeResult = await client.query<{ plan: TenantPlan | null; features: Record<string, unknown> | null }>(
+        `SELECT plan, features FROM tenants WHERE id = $1 FOR UPDATE`,
         [tenantId]
       );
       if (beforeResult.rowCount === 0) {
+        await client.query("ROLLBACK");
         return res.status(404).json({ error: "not_found", message: "テナントが見つかりません" });
       }
       const previousPlan = beforeResult.rows[0].plan;
 
-      // 同一プランへの変更は no-op（連打・再送を成功として返す。監査行も増やさない）
+      // 同一プランへの変更は no-op（連打・再送を成功として返す。監査行も増やさない）。
+      // ロックを取った後でこの判定をすることで、並行リクエストの2件目は
+      // 1件目のCOMMIT後の状態を見て正しくno-opと判定できる。
       if (previousPlan === nextPlan) {
+        await client.query("ROLLBACK"); // 書き込みは無いのでCOMMITと等価。ロック解放のみ。
         return res.json({ plan: nextPlan, previous_plan: previousPlan, changed: false });
       }
 
@@ -492,7 +513,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       const hasRevocation = Object.keys(revoked).length > 0;
 
       const result = hasRevocation
-        ? await db.query(
+        ? await client.query(
             `UPDATE tenants
                SET plan = $1,
                    features = COALESCE(features, '{}'::jsonb) || $3::jsonb,
@@ -501,14 +522,16 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
              RETURNING id, name, plan, features`,
             [nextPlan, tenantId, JSON.stringify(revoked)]
           )
-        : await db.query(
+        : await client.query(
             `UPDATE tenants SET plan = $1, updated_at = NOW() WHERE id = $2
              RETURNING id, name, plan, features`,
             [nextPlan, tenantId]
           );
-      if (result.rowCount === 0) {
-        return res.status(404).json({ error: "not_found", message: "テナントが見つかりません" });
-      }
+      // SELECT ... FOR UPDATE で対象行のロックをCOMMITまで保持し続けているため、
+      // 同一トランザクション内のこのUPDATEが0行になることはない
+      // (他トランザクションはこの行をロック解放まで削除/変更できない)。
+
+      await client.query("COMMIT");
 
       // プラン判定のキャッシュは2系統ある（機能ゲート用・請求焼き付け用）。両方消す。
       // 片方だけだと、機能は開いたのに請求だけ旧倍率、といったズレが最大60秒残る。
@@ -519,6 +542,11 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
 
       // 監査記録。super_admin の PATCH /v1/admin/tenants/:id と同じテーブル・同じ形式で
       // 残し、SettingsHistoryTab から一続きに追えるようにする（fire-and-forget）。
+      // ★意図的にトランザクションの外・元のプール経由(client ではなく db)で行う★
+      // トランザクション内に含めると、監査INSERTの成否がプラン変更のCOMMIT自体に
+      // 影響してしまい、「監査が落ちてもプラン変更は成功として返す」という
+      // 既存方針(下記テスト参照)と矛盾する。プラン変更は既にCOMMIT済みなので、
+      // 監査はその事実を後から記録するだけの副次的な処理として切り離す。
       const appMeta = su?.app_metadata as Record<string, unknown> | undefined;
       const changedBy: string = su?.email ?? (typeof appMeta?.email === "string" ? appMeta.email : "");
       void db.query(
@@ -534,8 +562,19 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
 
       return res.json({ ...result.rows[0], previous_plan: previousPlan, changed: true });
     } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
+      // ロックタイムアウト = 同一テナントへの別のプラン変更が進行中。
+      // avatar/fishVoiceModel.ts と同じ判定・同じ409応答に揃える。
+      if (err instanceof Error && /lock timeout|canceling statement/i.test(err.message)) {
+        return res.status(409).json({
+          error: "conflict",
+          message: "他のプラン変更処理と競合しました。少し待ってからもう一度お試しください",
+        });
+      }
       logger.warn("[PUT /v1/admin/my-tenant/plan]", err);
       return res.status(500).json({ error: "更新に失敗しました" });
+    } finally {
+      client.release();
     }
   });
 
