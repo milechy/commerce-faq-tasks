@@ -55,7 +55,9 @@ export const REQUIRED_COLUMNS: Record<string, readonly string[]> = {
   option_orders: ["chat_session_id", "description", "llm_estimate_amount", "status", "tenant_id", "type"],
   sai_task_rules: ["created_by", "evidence", "expected_behavior", "priority", "source", "tenant_id", "trigger_pattern"],
   sai_tasks: ["description", "order_id", "requested_by", "task_id", "tenant_id"],
-  stripe_usage_reports: ["idempotency_key", "period_yyyymm", "tenant_id", "total_cost_cents", "total_requests"],
+  // billed_quantity は migration_stripe_usage_reports_billed_quantity.sql で追加。
+  // 未適用のままだと INSERT が全滅し、月次請求が本番で一切送信できなくなる。
+  stripe_usage_reports: ["billed_quantity", "idempotency_key", "period_yyyymm", "tenant_id", "total_cost_cents", "total_requests"],
   stripe_webhook_events: ["claimed_at", "event_id", "event_type"],
   tenant_api_keys: ["expires_at", "is_active", "key_hash", "key_prefix", "tenant_id"],
   tenant_settings_history: ["changed_by", "field_name", "new_value", "old_value", "tenant_id"],
