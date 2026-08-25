@@ -72,6 +72,27 @@ describe("isOriginAllowed", () => {
       isOriginAllowed("https://x.example.com.evil.com", ["https://*.example.com"])
     ).toBe(false);
   });
+
+  // 2026-08-25: `https://*.com` のような単一ラベルのジェネリックTLD直下ワイルドカードが
+  // 「安全な形」として通過し、任意の .com オリジンにマッチしてしまっていた実装の穴。
+  it("does not match an arbitrary .com origin under a single-label wildcard", () => {
+    expect(isOriginAllowed("https://evil.com", ["https://*.com"])).toBe(false);
+    expect(isOriginAllowed("https://anything.net", ["https://*.net"])).toBe(false);
+    expect(isOriginAllowed("https://sub.jp", ["https://*.jp"])).toBe(false);
+  });
+
+  // 2ラベルでも、誰でも取得できるパブリックサフィックス(co.jp等)を直下に置くと
+  // 任意の企業ドメインにマッチしてしまう。KNOWN_PUBLIC_SUFFIXES で個別に塞ぐ。
+  it("does not match an arbitrary origin under a known public-suffix wildcard", () => {
+    expect(isOriginAllowed("https://rakuten.co.jp", ["https://*.co.jp"])).toBe(false);
+    expect(isOriginAllowed("https://example.ne.jp", ["https://*.ne.jp"])).toBe(false);
+  });
+
+  // 真の2ラベルドメイン(パブリックサフィックスではない)は引き続き許可される。
+  it("still matches a genuine two-label domain wildcard", () => {
+    expect(isOriginAllowed("https://sub.example.com", ["https://*.example.com"])).toBe(true);
+    expect(isOriginAllowed("https://sub.shop.co.jp", ["https://*.shop.co.jp"])).toBe(true);
+  });
 });
 
 describe("isValidOriginPattern", () => {
