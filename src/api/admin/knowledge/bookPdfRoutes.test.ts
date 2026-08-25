@@ -351,6 +351,54 @@ describe("DELETE /v1/admin/knowledge/book-pdf/:id", () => {
     );
     expect(bookDeleteCall).toBeTruthy();
   });
+
+  it("8b. ナレッジ配線是正P9: faq_embeddings削除と同時にESドキュメントも削除する(以前は残っていた)", async () => {
+    const db: any = {
+      query: jest.fn().mockImplementation((sql: string) => {
+        if (sql.includes("SELECT id, tenant_id, storage_path")) {
+          return Promise.resolve({
+            rows: [{ id: 1, tenant_id: "tenant-a", storage_path: "tenant-a/uuid.pdf.enc" }],
+            rowCount: 1,
+          });
+        }
+        if (sql.includes("chunk_index")) {
+          return Promise.resolve({ rows: [{ chunk_index: 0 }, { chunk_index: 1 }], rowCount: 2 });
+        }
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }),
+    };
+
+    const origEsUrl = process.env.ES_URL;
+    process.env.ES_URL = "http://es.test:9200";
+    const fetchCalls: Array<{ url: string; method: string }> = [];
+    const originalFetch = global.fetch;
+    global.fetch = jest.fn(async (url: unknown, init?: { method?: string }) => {
+      fetchCalls.push({ url: String(url), method: init?.method ?? "GET" });
+      return { ok: true, text: async () => "" } as unknown as Response;
+    }) as unknown as typeof fetch;
+
+    try {
+      const app = express();
+      const noopAuth = (req: any, _res: any, next: any) => {
+        req.user = { id: "u1", role: "client_admin", tenantId: "tenant-a", email: "" };
+        next();
+      };
+      registerBookPdfRoutes(app, db, noopAuth, (_r, _s, n) => n(), (_r, _s, n) => n());
+
+      const res = await request(app).delete("/v1/admin/knowledge/book-pdf/1");
+
+      expect(res.status).toBe(200);
+      const deleteCalls = fetchCalls.filter((c) => c.method === "DELETE");
+      expect(deleteCalls).toHaveLength(2);
+      expect(deleteCalls.map((c) => c.url).sort()).toEqual([
+        expect.stringContaining("book_1_chunk_0"),
+        expect.stringContaining("book_1_chunk_1"),
+      ].sort());
+    } finally {
+      global.fetch = originalFetch;
+      if (origEsUrl !== undefined) process.env.ES_URL = origEsUrl; else delete process.env.ES_URL;
+    }
+  });
 });
 
 // ─── 暗号化フォールバックテスト ─────────────────────────────────────────────
