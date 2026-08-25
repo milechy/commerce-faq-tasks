@@ -118,26 +118,85 @@ async function _handleStripeEvent(event: any, db: any, logger: pino.Logger): Pro
   }
 }
 
-async function _handlePaymentSucceeded(invoice: any, db: any, logger: pino.Logger): Promise<void> {
+/**
+ * PR-4(2026-08-25収益監査): invoice → tenant_id + 請求対象期間の解決。
+ *
+ * ★従来の実装が恒久 no-op だった理由★
+ * 旧実装は `usage_logs.stripe_subscription_id` で突合していたが、この列への
+ * 書き込みは usageTracker.ts の INSERT に一度も含まれておらず(リポジトリ全体で
+ * 書き込み箇所が0件)、常に NULL だった。そのため `WHERE stripe_subscription_id = $1`
+ * は常に0行しかヒットせず、billing_status は永久に 'reported' のまま滞留していた。
+ * テストは mockDb.query に渡された SQL 文字列の一致だけを見ており、実DBでの
+ * 行数を検証していなかったため、この no-op のまま緑が続いていた。
+ *
+ * ★是正: usage_logs に列を増やさず、既存の stripe_subscriptions から引く★
+ * stripe_subscriptions は tenant_id と stripe_subscription_id を既に持つ
+ * （stripeSync.ts の getSubscriptionItemId と同じテーブル）。invoice が持つ
+ * 請求対象期間(period_start/period_end、Unixタイムスタンプ秒)と組み合わせれば、
+ * usage_logs 側に新しい列を足さずに tenant_id + 期間で突合できる。
+ */
+async function _resolveTenantAndPeriod(
+  invoice: any,
+  db: any,
+  logger: pino.Logger,
+  eventType: string
+): Promise<{ tenantId: string; periodStart: string; periodEnd: string; subscriptionId: string } | null> {
   const subscriptionId =
     typeof invoice.subscription === 'string'
       ? invoice.subscription
       : invoice.subscription?.id;
 
   if (!subscriptionId) {
-    logger.warn({ invoiceId: invoice.id }, '[webhook] payment_succeeded: no subscription id');
-    return;
+    logger.warn({ invoiceId: invoice.id, eventType }, `[webhook] ${eventType}: no subscription id`);
+    return null;
   }
+
+  if (typeof invoice.period_start !== 'number' || typeof invoice.period_end !== 'number') {
+    logger.warn(
+      { subscriptionId, invoiceId: invoice.id, eventType },
+      `[webhook] ${eventType}: invoice has no period_start/period_end, cannot map to usage_logs`
+    );
+    return null;
+  }
+
+  const subResult = await db.query(
+    `SELECT tenant_id FROM stripe_subscriptions WHERE stripe_subscription_id = $1 LIMIT 1`,
+    [subscriptionId]
+  );
+  const tenantId = subResult.rows[0]?.tenant_id as string | undefined;
+  if (!tenantId) {
+    logger.warn(
+      { subscriptionId, invoiceId: invoice.id, eventType },
+      `[webhook] ${eventType}: no tenant found for subscription in stripe_subscriptions`
+    );
+    return null;
+  }
+
+  return {
+    tenantId,
+    subscriptionId,
+    periodStart: new Date(invoice.period_start * 1000).toISOString(),
+    periodEnd:   new Date(invoice.period_end * 1000).toISOString(),
+  };
+}
+
+async function _handlePaymentSucceeded(invoice: any, db: any, logger: pino.Logger): Promise<void> {
+  const resolved = await _resolveTenantAndPeriod(invoice, db, logger, 'payment_succeeded');
+  if (!resolved) return;
+  const { tenantId, periodStart, periodEnd, subscriptionId } = resolved;
 
   const result = await db.query(
     `UPDATE usage_logs
      SET billing_status = 'paid'
-     WHERE stripe_subscription_id = $1 AND billing_status = 'reported'`,
-    [subscriptionId]
+     WHERE tenant_id = $1
+       AND created_at >= $2
+       AND created_at <  $3
+       AND billing_status = 'reported'`,
+    [tenantId, periodStart, periodEnd]
   );
 
   logger.info(
-    { subscriptionId, updatedRows: result.rowCount, invoiceId: invoice.id },
+    { subscriptionId, tenantId, updatedRows: result.rowCount, invoiceId: invoice.id, periodStart, periodEnd },
     '[webhook] payment_succeeded: billing_status → paid'
   );
 }
@@ -152,6 +211,27 @@ async function _handlePaymentFailed(invoice: any, db: any, logger: pino.Logger):
     { invoiceId: invoice.id, subscriptionId, amountDue: invoice.amount_due },
     '[webhook] payment_failed'
   );
+
+  // PR-4: billing_status='failed' はDBのCHECK制約に既に定義されていたが、
+  // どこからも書き込まれていなかった(常に'reported'のまま滞留し、未回収の検知にも
+  // 使えなかった)。payment_succeededと同じ tenant_id + 請求対象期間の突合で記録する。
+  const resolved = await _resolveTenantAndPeriod(invoice, db, logger, 'payment_failed');
+  if (resolved) {
+    const { tenantId, periodStart, periodEnd } = resolved;
+    const result = await db.query(
+      `UPDATE usage_logs
+       SET billing_status = 'failed'
+       WHERE tenant_id = $1
+         AND created_at >= $2
+         AND created_at <  $3
+         AND billing_status = 'reported'`,
+      [tenantId, periodStart, periodEnd]
+    );
+    logger.warn(
+      { subscriptionId, tenantId, updatedRows: result.rowCount, invoiceId: invoice.id },
+      '[webhook] payment_failed: billing_status → failed'
+    );
+  }
 
   await _sendSlackAlert(
     {

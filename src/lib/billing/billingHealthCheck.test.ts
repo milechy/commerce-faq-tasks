@@ -19,8 +19,13 @@ const SCHEMA_ALL_PRESENT_ROWS = (_sql?: string, _params?: unknown[]) => ({
 describe('checkBillingHealth', () => {
   function makeDb(overrides: Record<string, (sql: string, params: unknown[]) => unknown>) {
     // 'information_schema.columns' の既定はスキーマ健全(欠落なし)。
-    // チェック3(schemaMissingColumns)を検証するテストだけ overrides で上書きする。
-    const merged = { 'information_schema.columns': SCHEMA_ALL_PRESENT_ROWS, ...overrides };
+    // 'reported' の既定は滞留なし(健全)。
+    // チェック3・4を検証するテストだけ overrides で上書きする。
+    const merged = {
+      'information_schema.columns': SCHEMA_ALL_PRESENT_ROWS,
+      "billing_status = 'reported'": () => ({ rows: [{ cnt: 0, oldest: null }] }),
+      ...overrides,
+    };
     return {
       query: jest.fn().mockImplementation((sql: string, params: unknown[] = []) => {
         for (const [pattern, handler] of Object.entries(merged)) {
@@ -211,6 +216,58 @@ describe('checkBillingHealth', () => {
       const violations = await checkBillingHealth(db as any, mockLogger);
       expect(violations).toHaveLength(1);
       expect(violations[0].id).toBe('billing_schema_missing_columns');
+    });
+  });
+
+  // PR-4(2026-08-25収益監査): invoice.payment_succeeded/payment_failed が
+  // billing_status を 'reported' → 'paid'/'failed' に遷移させることの不変条件監視。
+  describe('チェック4: 決済webhookが反映されないまま滞留している行', () => {
+    it('30日以上reportedのまま滞留していればWARNING', async () => {
+      const db = makeDb({
+        "billing_status = 'pending'": CLEAN_STUCK,
+        'plan_multiplier IS NULL': CLEAN_UNSTAMPED,
+        "billing_status = 'reported'": () => ({ rows: [{ cnt: 3, oldest: '2026-06-01T00:00:00Z' }] }),
+      });
+      const violations = await checkBillingHealth(db as any, mockLogger);
+      expect(violations).toHaveLength(1);
+      expect(violations[0]).toMatchObject({ id: 'billing_stale_reported_rows', level: 'WARNING' });
+      expect(violations[0].message).toContain('3件');
+      expect(violations[0].message).toContain('2026-06-01');
+    });
+
+    it('滞留が無ければ違反を出さない(デフォルトの健全な状態)', async () => {
+      const db = makeDb({
+        "billing_status = 'pending'": CLEAN_STUCK,
+        'plan_multiplier IS NULL': CLEAN_UNSTAMPED,
+      });
+      const violations = await checkBillingHealth(db as any, mockLogger);
+      expect(violations).toEqual([]);
+    });
+
+    it('billing_enabled=true のテナントが無くても評価される(対象0件で沈黙しない)', async () => {
+      // チェック1・2は billing_enabled=true が無いと沈黙するが、チェック4は
+      // webhook到達状況の事実を見るため沈黙してはいけない(チェック3と同じ理由)。
+      const db = makeDb({
+        "billing_status = 'pending'": CLEAN_STUCK,
+        'plan_multiplier IS NULL': () => ({ rows: [{ total: 0, unstamped: 0 }] }),
+        "billing_status = 'reported'": () => ({ rows: [{ cnt: 1, oldest: '2026-06-01T00:00:00Z' }] }),
+      });
+      const violations = await checkBillingHealth(db as any, mockLogger);
+      expect(violations).toHaveLength(1);
+      expect(violations[0].id).toBe('billing_stale_reported_rows');
+    });
+
+    it('両方の滞留(pending + reported)が同時に出る', async () => {
+      const db = makeDb({
+        "billing_status = 'pending'": () => ({ rows: [{ cnt: 2, oldest: '2026-05-01T00:00:00Z' }] }),
+        'plan_multiplier IS NULL': CLEAN_UNSTAMPED,
+        "billing_status = 'reported'": () => ({ rows: [{ cnt: 5, oldest: '2026-06-01T00:00:00Z' }] }),
+      });
+      const violations = await checkBillingHealth(db as any, mockLogger);
+      expect(violations.map((v) => v.id).sort()).toEqual([
+        'billing_stale_reported_rows',
+        'billing_stuck_pending_rows',
+      ]);
     });
   });
 });
