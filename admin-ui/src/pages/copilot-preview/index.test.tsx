@@ -197,6 +197,36 @@ describe("CopilotPreviewPage — ログアウト", () => {
   });
 });
 
+// GID 1217808308055510: 「PROTOTYPE」バッジがテナント本人の画面にも常時表示されていた不具合の
+// 回帰テスト。この画面はオプトイン/新規テナント既定表示でテナント本人にも出うるため、
+// super_adminのクライアントビュー(previewMode)中だけに限定されていることを検証する。
+describe("CopilotPreviewPage — PROTOTYPEバッジの表示条件", () => {
+  beforeEach(() => {
+    vi.mocked(authFetch).mockReset();
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      return mockOk({ reply: "了解しました。", actions: [] });
+    });
+  });
+
+  it("テナント本人の通常アクセス(previewMode=false)では出さない", async () => {
+    renderPage();
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+
+    expect(screen.queryByText(/PROTOTYPE/)).toBeNull();
+  });
+
+  it("super_adminのクライアントビュー(previewMode)中は出す", async () => {
+    renderPage(SUPER_ADMIN_IN_PREVIEW);
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+
+    expect(screen.getByText(/PROTOTYPE/)).toBeTruthy();
+  });
+});
+
 // GID: /copilot-preview のモバイル対応(左レールのドロワー化)の回帰テスト。
 // happy-dom ではレイアウトの実際の見た目(幅・position:fixed の描画結果等)は検証できないため、
 // ドロワーの開閉状態(className)・オーバーレイの有無・会話中ロックが維持されることを
