@@ -120,6 +120,70 @@ if [ "${CLEAN_REBUILD}" = "1" ]; then
     echo "  🔧 Removing node_modules on VPS for clean rebuild..."
     ssh "${VPS}" "rm -rf ${REMOTE_DIR}/node_modules"
 fi
+
+# Guard 4-D: 課金スキーマの必須列が本番DBに揃っているか(2026-08-25 収益監査で判明)。
+# 検出器(src/api/admin/analytics/schemaHealth.ts の fetchSchemaHealth)は
+# アプリ起動時・billingHealthMonitor(1時間毎)でも評価するが、いずれも
+# 「動いた後に気づく」経路であり、デプロイそのものは止めない。ここでは
+# 新しいコードを配る前に、そのコードが要求する列が実際に存在することを
+# 確認し、欠落していればデプロイを中断する(migration の自動適用はしない
+# — CLAUDE.md 禁止8。人間が確認して適用する)。
+#
+# ★列挙はここに直書きする(TSを実行できないbashのため)★
+# src/api/admin/analytics/schemaHealth.ts の REQUIRED_COLUMNS のうち billing
+# 関連テーブルの部分集合と同期させること。同じ部分集合は
+# src/lib/billing/billingSqlIntegration.test.ts の BILLING_TABLES にもあり、
+# そちらは CI(Gate 4)で実 Postgres に対して機械的に検証される。
+# 3箇所目を増やさない — 列を足すときはこの3箇所を同時に直す。
+DB_URL=$(ssh "${VPS}" "grep -m1 '^DATABASE_URL=' ${REMOTE_DIR}/.env 2>/dev/null | cut -d= -f2-" || echo "")
+if [ -z "${DB_URL}" ]; then
+    echo "  ⚠️  Guard 4-D: SKIPPED — VPS の .env に DATABASE_URL が見つかりません"
+else
+    SCHEMA_CHECK_SQL="
+WITH required(tbl, col) AS (VALUES
+  ('billing_adjustments','adjusted_by'), ('billing_adjustments','amount'),
+  ('billing_adjustments','reason'), ('billing_adjustments','tenant_id'),
+  ('lemonslice_monthly_charges','amount_jpy'), ('lemonslice_monthly_charges','period_yyyymm'),
+  ('lemonslice_monthly_charges','tenant_count'), ('lemonslice_monthly_charges','tenant_id'),
+  ('livekit_monthly_charges','amount_jpy'), ('livekit_monthly_charges','period_yyyymm'),
+  ('livekit_monthly_charges','tenant_count'), ('livekit_monthly_charges','tenant_id'),
+  ('platform_monthly_charges','amount_jpy'), ('platform_monthly_charges','period_yyyymm'),
+  ('platform_monthly_charges','tenant_count'), ('platform_monthly_charges','tenant_id'),
+  ('stripe_usage_reports','billed_quantity'), ('stripe_usage_reports','idempotency_key'),
+  ('stripe_usage_reports','period_yyyymm'), ('stripe_usage_reports','tenant_id'),
+  ('stripe_usage_reports','total_cost_cents'), ('stripe_usage_reports','total_requests'),
+  ('stripe_webhook_events','claimed_at'), ('stripe_webhook_events','event_id'),
+  ('stripe_webhook_events','event_type'),
+  ('usage_logs','anam_session_seconds'), ('usage_logs','avatar_credits'),
+  ('usage_logs','avatar_session_ms'), ('usage_logs','billable'),
+  ('usage_logs','cost_llm_cents'), ('usage_logs','cost_total_cents'),
+  ('usage_logs','feature_used'), ('usage_logs','input_tokens'),
+  ('usage_logs','model'), ('usage_logs','output_tokens'),
+  ('usage_logs','plan'), ('usage_logs','plan_multiplier'),
+  ('usage_logs','request_id'), ('usage_logs','tts_text_bytes')
+)
+SELECT r.tbl || '.' || r.col
+FROM required r
+LEFT JOIN information_schema.columns c
+  ON c.table_schema = 'public' AND c.table_name = r.tbl AND c.column_name = r.col
+WHERE c.column_name IS NULL
+ORDER BY 1;
+"
+    MISSING=$(ssh "${VPS}" "psql \"${DB_URL}\" -tA -c \"${SCHEMA_CHECK_SQL}\"" 2>&1 || echo "QUERY_FAILED")
+    if [ "${MISSING}" = "QUERY_FAILED" ]; then
+        echo "  ⚠️  Guard 4-D: SKIPPED — 本番DBへのスキーマ確認クエリが失敗しました(接続不可等)"
+    elif [ -n "${MISSING}" ]; then
+        echo "❌ Guard 4-D: 本番DBに課金スキーマの必須列が欠落しています:"
+        echo "${MISSING}" | sed 's/^/    /'
+        echo ""
+        echo "🛑 Aborting deploy. 新しいコードはこれらの列を前提にしています。"
+        echo "   該当する migration_*.sql を人間が確認のうえ本番へ適用してから再実行してください"
+        echo "   (migration の自動実行は禁止。一覧: SCRIPTS/ci-billing-schema.sh の FILES 配列)。"
+        exit 1
+    else
+        echo "  ✅ Guard 4-D: 課金スキーマの必須列は揃っています"
+    fi
+fi
 echo ""
 
 echo "[0/5] VPSファイル所有者正常化..."

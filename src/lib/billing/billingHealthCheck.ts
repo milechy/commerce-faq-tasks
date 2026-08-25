@@ -30,9 +30,21 @@
  * この2本が実際に異常を拾えるのは、billing_enabled=true のテナントが
  * 存在し、かつ請求送信が試みられて初めて。有効化前は「異常が無い」のではなく
  * 「まだ何も見ていない」。
+ *
+ * ■ チェック3: schemaMissingColumns（CRITICAL）
+ * 2026-08-25 の収益監査で判明: 課金スキーマの欠落を検知する schemaHealth.ts の
+ * fetchSchemaHealth は既に実装済みだったが、呼び出し元が管理画面のAPIルート
+ * 1箇所だけで、起動時にもこの定期監視にも配線されていなかった。
+ * migration_stripe_usage_reports_billed_quantity.sql が本番未適用のまま
+ * 何ヶ月も気づかれなかったのはこれが原因（検出器はあったが鳴らす場所が無かった）。
+ * チェック1・2と違い、これは billing_enabled のテナント有無に関係なく常時評価する
+ * （スキーマの欠落はテナントの利用状況とは独立した事実であり、対象0件で沈黙してよい
+ * 理由が無い）。
  */
+import type { Pool } from "pg";
 import type pino from "pino";
 import { sendSlackAlert, type AlertLevel } from "../alerts/slackNotifier";
+import { fetchSchemaHealth } from "../../api/admin/analytics/schemaHealth";
 import { getPeriodYyyyMm, periodToDateRange } from "./stripeSync";
 
 export interface BillingHealthViolation {
@@ -114,6 +126,31 @@ export async function checkBillingHealth(
           `月中にプラン変更があったテナントの請求が遡及して不正確になっています。`,
       });
     }
+  }
+
+  // ── チェック3: 課金スキーマの欠落列 ──────────────────────────────────
+  // billing_enabled のテナント有無とは独立に常時評価する（対象0件で沈黙する
+  // 理由が無い）。fetchSchemaHealth の判定ロジックは書き写さず呼び出すだけ
+  // （単一の出どころ。集計SQLを書き写すのと同じ理由で禁止）。
+  const schemaHealth = await fetchSchemaHealth(db as unknown as Pool);
+  if (schemaHealth.missing.length > 0) {
+    const detail = schemaHealth.missing
+      .map((m) =>
+        m.tableMissing
+          ? `${m.table}(テーブルごと欠落)`
+          : `${m.table}.${m.columns.join(",")}`
+      )
+      .join(" / ");
+    violations.push({
+      id: "billing_schema_missing_columns",
+      level: "CRITICAL",
+      message:
+        `本番DBに課金スキーマの必須列が欠落しています: ${detail}。` +
+        `migration が未適用の可能性があります。該当する migration_*.sql を ` +
+        `SCRIPTS/ci-billing-schema.sh の FILES 配列で確認し、人間が適用してください` +
+        `（migration の自動実行は禁止）。欠落したまま運用すると INSERT が無言で` +
+        `失敗し、利用記録・請求が静かに止まります。`,
+    });
   }
 
   return violations;

@@ -6,6 +6,7 @@ import { recordWidgetSeenOnce } from "./lib/onboardingWidgetSeen";
 import { alertEngine } from "./lib/alerts/alertEngine";
 import { billingHealthMonitor } from "./lib/billing/billingHealthCheck";
 import { billingReconciliationMonitor } from "./lib/billing/billingReconciliation";
+import { fetchSchemaHealth } from "./api/admin/analytics/schemaHealth";
 import { SalesLogWriter, setGlobalSalesLogWriter } from "./agent/orchestrator/sales/salesLogWriter";
 import { createSalesLogNotionSink } from "./integrations/notion/salesLogNotionSink";
 import { judgeSweepRunner } from "./agent/judge/judgeSweepRunner";
@@ -790,6 +791,28 @@ async function startServer() {
     } catch (err) {
       logger.warn({ err }, "[startup] SalesLogWriter (Notion) init failed (non-blocking)");
     }
+  }
+
+  // 課金スキーマの欠落を起動時に1回検証する（2026-08-25 収益監査で判明:
+  // 検出器(fetchSchemaHealth)は既に存在したが、呼び出し元が管理画面のAPIルート
+  // 1箇所だけで、billed_quantity 列が本番未適用のまま何ヶ月も気づかれなかった）。
+  // Slack(SLACK_WEBHOOK_URL)が未設定でも気づけるよう、ここでは logger.error に
+  // 直接出す（billingHealthMonitor の定期チェックはSlack送信のみのため代替にならない）。
+  // fail-fast にはしない — 起動できなくなる方が実害が大きい（記録が完全に止まる）。
+  if (db) {
+    fetchSchemaHealth(db).then((health) => {
+      if (health.missing.length > 0) {
+        logger.error(
+          { missing: health.missing },
+          "[startup] billing schema に欠落列があります。migration の適用状況を確認してください " +
+          "(migration の自動実行は禁止。SCRIPTS/ci-billing-schema.sh の FILES 配列を参照)"
+        );
+      } else {
+        logger.info("[startup] billing schema check: OK");
+      }
+    }).catch((err) => {
+      logger.warn({ err }, "[startup] billing schema check failed (non-blocking)");
+    });
   }
 
   // Phase37 Step6: Stripe 日次使用量送信（24時間ごと）

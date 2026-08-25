@@ -4,14 +4,26 @@ jest.mock('../alerts/slackNotifier', () => ({
 
 import { checkBillingHealth, billingHealthMonitor } from './billingHealthCheck';
 import { sendSlackAlert } from '../alerts/slackNotifier';
+import { REQUIRED_COLUMNS } from '../../api/admin/analytics/schemaHealth';
 
 const mockLogger = { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() } as any;
 
+// REQUIRED_COLUMNS を全て満たす行を機械的に生成する(手書きの列挙で
+// テストとレジストリがズレるのを防ぐ。REQUIRED_COLUMNS が唯一の出どころ)。
+const SCHEMA_ALL_PRESENT_ROWS = (_sql?: string, _params?: unknown[]) => ({
+  rows: Object.entries(REQUIRED_COLUMNS).flatMap(([table_name, cols]) =>
+    cols.map((column_name) => ({ table_name, column_name }))
+  ),
+});
+
 describe('checkBillingHealth', () => {
   function makeDb(overrides: Record<string, (sql: string, params: unknown[]) => unknown>) {
+    // 'information_schema.columns' の既定はスキーマ健全(欠落なし)。
+    // チェック3(schemaMissingColumns)を検証するテストだけ overrides で上書きする。
+    const merged = { 'information_schema.columns': SCHEMA_ALL_PRESENT_ROWS, ...overrides };
     return {
       query: jest.fn().mockImplementation((sql: string, params: unknown[] = []) => {
-        for (const [pattern, handler] of Object.entries(overrides)) {
+        for (const [pattern, handler] of Object.entries(merged)) {
           if (sql.includes(pattern)) return Promise.resolve(handler(sql, params));
         }
         throw new Error(`unexpected query: ${sql}`);
@@ -138,6 +150,68 @@ describe('checkBillingHealth', () => {
       'plan_multiplier IS NULL': CLEAN_UNSTAMPED,
     });
     await checkBillingHealth(db as any, mockLogger);
+  });
+
+  // ★本題(PR-6・2026-08-25収益監査)★ 検出器(fetchSchemaHealth)は既に
+  // 存在したが、鳴らす場所が無かった。ここで初めて billingHealthCheck から
+  // 呼ばれることを固定する。billing_enabled のテナント有無とは無関係に
+  // 常時評価する(チェック1・2と違い対象0件で沈黙してはいけない)。
+  describe('チェック3: 課金スキーマの欠落列', () => {
+    it('列が1つ欠落していれば CRITICAL', async () => {
+      const db = makeDb({
+        "billing_status = 'pending'": CLEAN_STUCK,
+        'plan_multiplier IS NULL': CLEAN_UNSTAMPED,
+        'information_schema.columns': () => ({
+          // usage_logs から plan_multiplier だけを欠落させる
+          rows: Object.entries(REQUIRED_COLUMNS).flatMap(([table_name, cols]) =>
+            cols
+              .filter((c) => !(table_name === 'usage_logs' && c === 'plan_multiplier'))
+              .map((column_name) => ({ table_name, column_name }))
+          ),
+        }),
+      });
+      const violations = await checkBillingHealth(db as any, mockLogger);
+      expect(violations).toHaveLength(1);
+      expect(violations[0]).toMatchObject({ id: 'billing_schema_missing_columns', level: 'CRITICAL' });
+      expect(violations[0].message).toContain('usage_logs.plan_multiplier');
+    });
+
+    it('テーブルごと欠落していれば tableMissing としてメッセージに含む', async () => {
+      const db = makeDb({
+        "billing_status = 'pending'": CLEAN_STUCK,
+        'plan_multiplier IS NULL': CLEAN_UNSTAMPED,
+        'information_schema.columns': () => ({
+          rows: Object.entries(REQUIRED_COLUMNS)
+            .filter(([table_name]) => table_name !== 'stripe_webhook_events')
+            .flatMap(([table_name, cols]) => cols.map((column_name) => ({ table_name, column_name }))),
+        }),
+      });
+      const violations = await checkBillingHealth(db as any, mockLogger);
+      expect(violations).toHaveLength(1);
+      expect(violations[0].message).toContain('stripe_webhook_events(テーブルごと欠落)');
+    });
+
+    it('欠落が無ければ違反を出さない(デフォルトの健全な状態)', async () => {
+      const db = makeDb({
+        "billing_status = 'pending'": CLEAN_STUCK,
+        'plan_multiplier IS NULL': CLEAN_UNSTAMPED,
+      });
+      const violations = await checkBillingHealth(db as any, mockLogger);
+      expect(violations).toEqual([]);
+    });
+
+    it('billing_enabled=true のテナントが無くても評価される(対象0件で沈黙しない)', async () => {
+      // チェック1・2は billing_enabled=true が無いと沈黙するが、チェック3は
+      // テナントの利用状況と無関係にスキーマの事実を見るため沈黙してはいけない。
+      const db = makeDb({
+        "billing_status = 'pending'": CLEAN_STUCK, // billing_enabled=true が0件でもcnt=0
+        'plan_multiplier IS NULL': () => ({ rows: [{ total: 0, unstamped: 0 }] }), // トラフィックゼロ
+        'information_schema.columns': () => ({ rows: [] }), // 全テーブル欠落
+      });
+      const violations = await checkBillingHealth(db as any, mockLogger);
+      expect(violations).toHaveLength(1);
+      expect(violations[0].id).toBe('billing_schema_missing_columns');
+    });
   });
 });
 
