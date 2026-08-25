@@ -65,7 +65,6 @@ const ITEM_A = {
   category: "pricing",
   tags: [],
   is_published: true,
-  is_global: false,
   created_at: "2026-07-01T00:00:00Z",
 };
 
@@ -77,7 +76,6 @@ const ITEM_B = {
   category: "store_info",
   tags: [],
   is_published: false,
-  is_global: false,
   created_at: "2026-07-02T00:00:00Z",
 };
 
@@ -247,7 +245,6 @@ const ITEM_GLOBAL = {
   category: "shipping",
   tags: [],
   is_published: true,
-  is_global: false,
   created_at: "2026-06-01T00:00:00Z",
 };
 
