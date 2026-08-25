@@ -10912,6 +10912,155 @@ describe('POST /v1/admin/agent/chat', () => {
   });
 
   // -------------------------------------------------------------------------
+  // create_avatar_config (W3-4, docs/COPILOT_UI_PARITY.md §3.1 #11)
+  // 見本からではなくゼロから作成する。旧UIウィザードの6ステップのうち「見た目」に
+  // 関わる意思決定(種別・性別/年代/服装 等)だけをカードへ引き継ぎ、構図・表情・背景は
+  // 既存のgenerateAvatarCandidatesと同じ既定(bust/smile/simple)に固定する。
+  // -------------------------------------------------------------------------
+  describe('create_avatar_config', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    it('confirmed無しでは作成されず、DBに触れずに確認を促す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-cac-1', 'create_avatar_config', {
+          name: 'ポチ', personality_prompt: '元気で人懐っこい', avatar_type: 'animal',
+        }))
+        .mockResolvedValueOnce(makeGroqResponse('確認をお願いします。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '作ってください', sessionId: 'sess-cac-01' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('確認が必要です');
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    it('confirmed=trueでis_default/is_activeともにfalseで作成され、見た目の意思決定がカードに引き継がれる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-cac-2', 'create_avatar_config', {
+          name: 'ポチ', personality_prompt: '元気で人懐っこい柴犬です。', avatar_type: 'animal',
+          animal_kind: 'dog', animal_vibe: 'cute', confirmed: true,
+        }))
+        .mockResolvedValueOnce(makeGroqResponse('作成しました。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ id: 'cfg-new-1', name: 'ポチ' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '柴犬っぽい元気な子で作って', sessionId: 'sess-cac-02' });
+
+      expect(res.status).toBe(200);
+      const action = res.body.actions[0];
+      expect(action.result).toContain('「ポチ」を作成しました');
+      expect(action.result).toContain('まだ公開はされていません');
+      expect(action.card).toEqual({
+        kind: 'avatar_adopted',
+        configId: 'cfg-new-1',
+        name: 'ポチ',
+        imageUrl: null,
+        description: '元気で人懐っこい柴犬です。',
+        avatarType: 'animal',
+        animalKind: 'dog',
+        animalVibe: 'cute',
+      });
+      const [sql, params] = mockQuery.mock.calls[0]!;
+      expect(sql as string).toContain('INSERT INTO avatar_configs');
+      expect(sql as string).toContain('false, false');
+      expect(params).toEqual(['tenant-abc', 'ポチ', '元気で人懐っこい柴犬です。']);
+    });
+
+    it('avatar_type=humanと無関係なanimal_kind等が同時に来ても、humanに関係ない値はカードに含めない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-cac-3', 'create_avatar_config', {
+          name: 'ハルカ', personality_prompt: '落ち着いた丁寧な話し方です。', avatar_type: 'human',
+          gender: 'female', age: '30s', animal_kind: 'dog', confirmed: true,
+        }))
+        .mockResolvedValueOnce(makeGroqResponse('作成しました。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ id: 'cfg-new-2', name: 'ハルカ' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '30代女性で落ち着いた感じにして', sessionId: 'sess-cac-03' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].card).toEqual({
+        kind: 'avatar_adopted',
+        configId: 'cfg-new-2',
+        name: 'ハルカ',
+        imageUrl: null,
+        description: '落ち着いた丁寧な話し方です。',
+        avatarType: 'human',
+        gender: 'female',
+        age: '30s',
+      });
+    });
+
+    it('name未指定では作成されず、DBに触れない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-cac-4', 'create_avatar_config', {
+          name: '', personality_prompt: '元気な性格', avatar_type: 'human', confirmed: true,
+        }))
+        .mockResolvedValueOnce(makeGroqResponse('名前を教えてください。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '作って', sessionId: 'sess-cac-04' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('name は1〜100文字');
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    it('avatar_typeが不正な値では作成されず、DBに触れない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-cac-5', 'create_avatar_config', {
+          name: 'ハルカ', personality_prompt: '元気な性格', avatar_type: 'alien', confirmed: true,
+        }))
+        .mockResolvedValueOnce(makeGroqResponse('種別を教えてください。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '作って', sessionId: 'sess-cac-05' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('avatar_type は human/anime/3d/animal/robot');
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    it('DBエラーでもクラッシュせず日本語1行のエラーメッセージを返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-cac-6', 'create_avatar_config', {
+          name: 'ハルカ', personality_prompt: '元気な性格', avatar_type: 'human', confirmed: true,
+        }))
+        .mockResolvedValueOnce(makeGroqResponse('失敗しました。'));
+
+      mockQuery.mockRejectedValueOnce(new Error('db down'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '作って', sessionId: 'sess-cac-06' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('アバターの作成に失敗しました');
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // get_category_personas / suggest_category_persona / save_category_persona
   // LemonSliceペルソナスワップ: 話題カテゴリの変化でアバターの見た目・話し方・声を切り替える
   // -------------------------------------------------------------------------
