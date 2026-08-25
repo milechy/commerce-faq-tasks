@@ -1033,20 +1033,60 @@ describe("migration_free_ad_plan.sql", () => {
 
 // --------------------------------------------------------------------------
 // PUT /v1/admin/my-tenant/plan — テナント自身によるプラン変更
+//
+// SELECT→計算→UPDATEをトランザクション化した(PR-C)。client.query() で
+// BEGIN/SET LOCAL lock_timeout/SELECT...FOR UPDATE/UPDATE/COMMIT/ROLLBACK を
+// 捌き、db.query() は監査INSERT(トランザクション外・fire-and-forget)専用。
+// avatar/fishVoiceModel.ts の makeTxDb と同じ確立済みパターン。
 // --------------------------------------------------------------------------
 
-describe("PUT /v1/admin/my-tenant/plan", () => {
-  const updatedRow = (plan: string) => ({
-    id: "tenant-a", name: "テストテナント", plan, features: { avatar: false, voice: false, rag: true },
+/**
+ * PUT /v1/admin/my-tenant/plan 用のトランザクション対応モックDB。
+ *
+ * beforeRow: null = テナントが存在しない(SELECT...FOR UPDATEが0行)。
+ * updateRow: 省略時は tenant-a のデフォルト行を自動生成。
+ * clientQueryOverride: BEGIN/SET LOCAL/SELECT/UPDATE/COMMIT/ROLLBACK 以外の
+ *   挙動(例外を投げる等)を差し込みたい場合に使う。
+ */
+function makePlanTxDb(opts: {
+  beforeRow: { plan: string; features?: unknown } | null;
+  updateRow?: { id: string; name: string; plan: string; features: unknown };
+  clientQueryOverride?: (sql: string, params: unknown[], callIndex: number) => { rows: any[]; rowCount?: number } | undefined;
+}) {
+  let callIndex = 0;
+  const clientQuery: jest.Mock = jest.fn(async (sql: string, params: unknown[] = []) => {
+    callIndex += 1;
+    if (opts.clientQueryOverride) {
+      const overridden = opts.clientQueryOverride(sql, params, callIndex);
+      if (overridden !== undefined) return overridden;
+    }
+    if (sql === "BEGIN" || sql === "SET LOCAL lock_timeout = '3s'" || sql === "COMMIT" || sql === "ROLLBACK") {
+      return { rows: [] };
+    }
+    if (sql.includes("SELECT plan, features FROM tenants")) {
+      return opts.beforeRow === null
+        ? { rows: [], rowCount: 0 }
+        : { rows: [{ plan: opts.beforeRow.plan, features: opts.beforeRow.features ?? {} }], rowCount: 1 };
+    }
+    if (sql.includes("UPDATE tenants SET plan")) {
+      const nextPlan = params[0] as string;
+      const row = opts.updateRow ?? {
+        id: "tenant-a", name: "テストテナント", plan: nextPlan,
+        features: { avatar: false, voice: false, rag: true },
+      };
+      return { rows: [row], rowCount: 1 };
+    }
+    throw new Error(`makePlanTxDb: unexpected client query: ${sql}`);
   });
+  const release = jest.fn();
+  const connect = jest.fn().mockResolvedValue({ query: clientQuery, release });
+  const dbQuery = jest.fn().mockResolvedValue({ rows: [], rowCount: 1 }); // 監査INSERT用
+  return { db: { connect, query: dbQuery }, clientQuery, dbQuery, release, connect };
+}
 
+describe("PUT /v1/admin/my-tenant/plan", () => {
   it("client_admin は自テナントのプランを変更でき、変更前後を返す", async () => {
-    const db = {
-      query: jest.fn()
-        .mockResolvedValueOnce({ rows: [{ plan: "starter" }], rowCount: 1 })   // before
-        .mockResolvedValueOnce({ rows: [updatedRow("growth")], rowCount: 1 })  // update
-        .mockResolvedValue({ rows: [], rowCount: 1 }),                          // audit
-    };
+    const { db } = makePlanTxDb({ beforeRow: { plan: "starter" } });
     const res = await request(makeApp(db, "client_admin"))
       .put("/v1/admin/my-tenant/plan")
       .set("Authorization", "Bearer dummy")
@@ -1061,8 +1101,8 @@ describe("PUT /v1/admin/my-tenant/plan", () => {
   // S5b(#918): free_ad への遷移は同意バナー基盤が整うまで全経路でブロック中。
   // テナント自己申告が super_admin 経路のガードを素通りしないことを固定する。
   // ブロック撤去時は blockFreeAdTransition の中身を変えれば全経路に効く。
-  it("free_ad への降格は S5b ブロック中のため 403（DBに触れない）", async () => {
-    const db = { query: jest.fn() };
+  it("free_ad への降格は S5b ブロック中のため 403（DB接続すら確立しない）", async () => {
+    const { db, connect } = makePlanTxDb({ beforeRow: { plan: "starter" } });
     const res = await request(makeApp(db, "client_admin"))
       .put("/v1/admin/my-tenant/plan")
       .set("Authorization", "Bearer dummy")
@@ -1070,23 +1110,18 @@ describe("PUT /v1/admin/my-tenant/plan", () => {
 
     expect(res.status).toBe(403);
     expect(res.body.error).toBe("free_ad_plan_not_yet_available");
-    expect(db.query).not.toHaveBeenCalled();
+    expect(connect).not.toHaveBeenCalled();
   });
 
   it("プラン変更は tenant_settings_history に field_name='plan' で記録される", async () => {
-    const db = {
-      query: jest.fn()
-        .mockResolvedValueOnce({ rows: [{ plan: "starter" }], rowCount: 1 })
-        .mockResolvedValueOnce({ rows: [updatedRow("enterprise")], rowCount: 1 })
-        .mockResolvedValue({ rows: [], rowCount: 1 }),
-    };
+    const { db, dbQuery } = makePlanTxDb({ beforeRow: { plan: "starter" } });
     await request(makeApp(db, "client_admin"))
       .put("/v1/admin/my-tenant/plan")
       .set("Authorization", "Bearer dummy")
       .send({ plan: "enterprise" });
     await new Promise((r) => setImmediate(r));
 
-    const auditCall = db.query.mock.calls.find(
+    const auditCall = dbQuery.mock.calls.find(
       ([sql]: [string]) => typeof sql === "string" && sql.includes("INSERT INTO tenant_settings_history")
     );
     expect(auditCall).toBeDefined();
@@ -1096,9 +1131,7 @@ describe("PUT /v1/admin/my-tenant/plan", () => {
   });
 
   it("同じプランへの変更は no-op で、監査行を増やさない", async () => {
-    const db = {
-      query: jest.fn().mockResolvedValueOnce({ rows: [{ plan: "growth" }], rowCount: 1 }),
-    };
+    const { db, dbQuery, clientQuery } = makePlanTxDb({ beforeRow: { plan: "growth" } });
     const res = await request(makeApp(db, "client_admin"))
       .put("/v1/admin/my-tenant/plan")
       .set("Authorization", "Bearer dummy")
@@ -1106,37 +1139,36 @@ describe("PUT /v1/admin/my-tenant/plan", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.changed).toBe(false);
-    expect(db.query).toHaveBeenCalledTimes(1); // UPDATE も INSERT も走らない
+    // UPDATE は走らない（BEGIN → SET LOCAL → SELECT FOR UPDATE → ROLLBACK のみ）
+    const sqls = clientQuery.mock.calls.map(([s]: [string]) => s);
+    expect(sqls).not.toContain(expect.stringContaining("UPDATE tenants"));
+    expect(sqls[sqls.length - 1]).toBe("ROLLBACK");
+    expect(dbQuery).not.toHaveBeenCalled(); // 監査INSERTも走らない
   });
 
   it("未知のプラン値は 400 で弾く", async () => {
-    const db = { query: jest.fn() };
+    const { db, connect } = makePlanTxDb({ beforeRow: { plan: "starter" } });
     const res = await request(makeApp(db, "client_admin"))
       .put("/v1/admin/my-tenant/plan")
       .set("Authorization", "Bearer dummy")
       .send({ plan: "platinum" });
 
     expect(res.status).toBe(400);
-    expect(db.query).not.toHaveBeenCalled();
+    expect(connect).not.toHaveBeenCalled();
   });
 
   // ★越境防止★ body に tenantId を足しても、更新対象は JWT の tenant_id のまま。
   it("body で他テナントを指定しても JWT のテナントしか更新されない", async () => {
-    const db = {
-      query: jest.fn()
-        .mockResolvedValueOnce({ rows: [{ plan: "starter" }], rowCount: 1 })
-        .mockResolvedValueOnce({ rows: [updatedRow("growth")], rowCount: 1 })
-        .mockResolvedValue({ rows: [], rowCount: 1 }),
-    };
+    const { db, clientQuery } = makePlanTxDb({ beforeRow: { plan: "starter" } });
     await request(makeApp(db, "client_admin", "tenant-a"))
       .put("/v1/admin/my-tenant/plan")
       .set("Authorization", "Bearer dummy")
       .send({ plan: "growth", tenantId: "victim-tenant", tenant_id: "victim-tenant", id: "victim-tenant" });
 
-    for (const [, params] of db.query.mock.calls) {
+    for (const [, params] of clientQuery.mock.calls) {
       expect(JSON.stringify(params ?? [])).not.toContain("victim-tenant");
     }
-    const updateCall = db.query.mock.calls.find(
+    const updateCall = clientQuery.mock.calls.find(
       ([sql]: [string]) => typeof sql === "string" && sql.includes("UPDATE tenants SET plan")
     );
     expect(updateCall![1]).toEqual(["growth", "tenant-a"]);
@@ -1158,25 +1190,25 @@ describe("PUT /v1/admin/my-tenant/plan", () => {
   }
 
   it("role が無いトークン(tenant_idのみ)は 403", async () => {
-    const db = { query: jest.fn() };
+    const { db, connect } = makePlanTxDb({ beforeRow: { plan: "starter" } });
     const res = await request(makeAppWithClaims(db, { tenant_id: "tenant-a" }))
       .put("/v1/admin/my-tenant/plan")
       .set("Authorization", "Bearer dummy")
       .send({ plan: "growth" });
 
     expect(res.status).toBe(403);
-    expect(db.query).not.toHaveBeenCalled();
+    expect(connect).not.toHaveBeenCalled();
   });
 
   it("tenant_id claim が無い場合は 403（super_admin でも自テナント扱いにしない）", async () => {
-    const db = { query: jest.fn() };
+    const { db, connect } = makePlanTxDb({ beforeRow: { plan: "starter" } });
     const res = await request(makeAppWithClaims(db, { role: "super_admin" }))
       .put("/v1/admin/my-tenant/plan")
       .set("Authorization", "Bearer dummy")
       .send({ plan: "growth" });
 
     expect(res.status).toBe(403);
-    expect(db.query).not.toHaveBeenCalled();
+    expect(connect).not.toHaveBeenCalled();
   });
 });
 
@@ -1189,22 +1221,11 @@ describe("PUT /v1/admin/my-tenant/plan", () => {
 // --------------------------------------------------------------------------
 
 describe("PUT /v1/admin/my-tenant/plan — 境界・異常系", () => {
-  const updatedRow = (plan: string) => ({
-    id: "tenant-a", name: "テストテナント", plan, features: { avatar: false, voice: false, rag: true },
-  });
-  /** before(SELECT) → UPDATE → 監査INSERT の順で応答するモック */
-  const okDb = (before: string, after: string) => ({
-    query: jest.fn()
-      .mockResolvedValueOnce({ rows: [{ plan: before }], rowCount: 1 })
-      .mockResolvedValueOnce({ rows: [updatedRow(after)], rowCount: 1 })
-      .mockResolvedValue({ rows: [], rowCount: 1 }),
-  });
-
   // ★最重要★ blockFreeAdTransition は「free_ad へ行く」ことだけを塞ぐ。
   // 判定を previousPlan 側に書き換えると free_ad テナントが有料へ上がれなくなり、
   // 課金できないまま閉じ込められる（収益が止まる方向の事故）。
   it("free_ad テナントは有料プランへアップグレードできる（降格ブロックに巻き込まれない）", async () => {
-    const db = okDb("free_ad", "growth");
+    const { db } = makePlanTxDb({ beforeRow: { plan: "free_ad" } });
     const res = await request(makeApp(db, "client_admin"))
       .put("/v1/admin/my-tenant/plan")
       .set("Authorization", "Bearer dummy")
@@ -1218,7 +1239,7 @@ describe("PUT /v1/admin/my-tenant/plan — 境界・異常系", () => {
   it.each(["starter", "growth", "enterprise"])(
     "free_ad から %s への昇格は 403 にならない",
     async (target) => {
-      const db = okDb("free_ad", target);
+      const { db } = makePlanTxDb({ beforeRow: { plan: "free_ad" } });
       const res = await request(makeApp(db, "client_admin"))
         .put("/v1/admin/my-tenant/plan")
         .set("Authorization", "Bearer dummy")
@@ -1236,7 +1257,8 @@ describe("PUT /v1/admin/my-tenant/plan — 境界・異常系", () => {
     tenantPlanCache.set("tenant-a", { plan: "starter", expiresAt: Date.now() + 60_000 });
     expect(tenantPlanCache.has("tenant-a")).toBe(true);
 
-    await request(makeApp(okDb("starter", "growth"), "client_admin"))
+    const { db } = makePlanTxDb({ beforeRow: { plan: "starter" } });
+    await request(makeApp(db, "client_admin"))
       .put("/v1/admin/my-tenant/plan")
       .set("Authorization", "Bearer dummy")
       .send({ plan: "growth" });
@@ -1249,7 +1271,8 @@ describe("PUT /v1/admin/my-tenant/plan — 境界・異常系", () => {
     tenantPlanCache.set("tenant-a", { plan: "starter", expiresAt: Date.now() + 60_000 });
     tenantPlanCache.set("other-tenant", { plan: "enterprise", expiresAt: Date.now() + 60_000 });
 
-    await request(makeApp(okDb("starter", "growth"), "client_admin", "tenant-a"))
+    const { db } = makePlanTxDb({ beforeRow: { plan: "starter" } });
+    await request(makeApp(db, "client_admin", "tenant-a"))
       .put("/v1/admin/my-tenant/plan")
       .set("Authorization", "Bearer dummy")
       .send({ plan: "growth" });
@@ -1259,65 +1282,99 @@ describe("PUT /v1/admin/my-tenant/plan — 境界・異常系", () => {
   });
 
   it("no-op（同一プラン）のときはキャッシュを触らない副作用も無い", async () => {
-    const db = { query: jest.fn().mockResolvedValueOnce({ rows: [{ plan: "growth" }], rowCount: 1 }) };
+    const { db, clientQuery } = makePlanTxDb({ beforeRow: { plan: "growth" } });
     const res = await request(makeApp(db, "client_admin"))
       .put("/v1/admin/my-tenant/plan")
       .set("Authorization", "Bearer dummy")
       .send({ plan: "growth" });
 
     expect(res.body.changed).toBe(false);
-    // UPDATE も監査INSERTも走らない（SELECT 1本だけ）
-    expect(db.query).toHaveBeenCalledTimes(1);
-    const sqls = db.query.mock.calls.map(([s]: [string]) => s).join(" ");
-    expect(sqls).not.toMatch(/UPDATE tenants/);
-    expect(sqls).not.toMatch(/tenant_settings_history/);
+    const sqls = clientQuery.mock.calls.map(([s]: [string]) => s);
+    expect(sqls).not.toContain(expect.stringContaining("UPDATE tenants"));
+    expect(sqls.join(" ")).not.toMatch(/tenant_settings_history/);
   });
 
   it("テナントが存在しない場合は 404（UPDATE を走らせない）", async () => {
-    const db = { query: jest.fn().mockResolvedValueOnce({ rows: [], rowCount: 0 }) };
+    const { db, clientQuery } = makePlanTxDb({ beforeRow: null });
     const res = await request(makeApp(db, "client_admin"))
       .put("/v1/admin/my-tenant/plan")
       .set("Authorization", "Bearer dummy")
       .send({ plan: "growth" });
 
     expect(res.status).toBe(404);
-    expect(db.query).toHaveBeenCalledTimes(1);
+    const sqls = clientQuery.mock.calls.map(([s]: [string]) => s);
+    expect(sqls).not.toContain(expect.stringContaining("UPDATE tenants"));
+    expect(sqls[sqls.length - 1]).toBe("ROLLBACK");
   });
 
-  // SELECT と UPDATE の間にテナントが消える競合。UPDATE が0行なら 404 にする。
-  it("SELECT 後に行が消えた場合(UPDATE 0行)は 404", async () => {
-    const db = {
-      query: jest.fn()
-        .mockResolvedValueOnce({ rows: [{ plan: "starter" }], rowCount: 1 })
-        .mockResolvedValueOnce({ rows: [], rowCount: 0 }),
-    };
+  // ★この不変条件がトランザクション化の目的そのもの★
+  // SELECT ... FOR UPDATE で行ロックを保持し続けるため、同一トランザクション内で
+  // UPDATE が0行になることはもう起こり得ない(他トランザクションはロック解放まで
+  // この行を削除/変更できない)。旧実装(非トランザクション)ではSELECTとUPDATEの
+  // 間に競合が入り込めたが、その隙間自体をこのPRで塞いだ。
+  it("SELECT(FOR UPDATE)でロックした行は、同一トランザクション内でUPDATEが0行にならない", async () => {
+    const { db, clientQuery } = makePlanTxDb({ beforeRow: { plan: "starter" } });
     const res = await request(makeApp(db, "client_admin"))
       .put("/v1/admin/my-tenant/plan")
       .set("Authorization", "Bearer dummy")
       .send({ plan: "growth" });
 
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(200);
+    const sqls = clientQuery.mock.calls.map(([s]: [string]) => s);
+    expect(sqls[sqls.length - 1]).toBe("COMMIT"); // ROLLBACKに落ちていない
   });
 
-  it("DBエラーは 200 で握り潰さず 500 を返す", async () => {
-    const db = { query: jest.fn().mockRejectedValue(new Error("connection terminated")) };
+  it("DBエラーは 200 で握り潰さず 500 を返し、ROLLBACKする", async () => {
+    const { db, clientQuery } = makePlanTxDb({
+      beforeRow: { plan: "starter" },
+      clientQueryOverride: (sql) => {
+        if (sql.includes("SELECT plan, features FROM tenants")) {
+          throw new Error("connection terminated");
+        }
+        return undefined;
+      },
+    });
     const res = await request(makeApp(db, "client_admin"))
       .put("/v1/admin/my-tenant/plan")
       .set("Authorization", "Bearer dummy")
       .send({ plan: "growth" });
 
     expect(res.status).toBe(500);
+    expect(clientQuery.mock.calls.map(([s]: [string]) => s)).toContain("ROLLBACK");
+  });
+
+  // ★ロックタイムアウトは500ではなく409で確定させる★
+  // avatar/fishVoiceModel.tsと同じ判定。同一テナントへの並行プラン変更が
+  // 競合しているだけで、サーバ側の異常ではないため。
+  it("ロックタイムアウト(同一テナントへの並行変更)は409を返す", async () => {
+    const { db, clientQuery } = makePlanTxDb({
+      beforeRow: { plan: "starter" },
+      clientQueryOverride: (sql) => {
+        if (sql.includes("SELECT plan, features FROM tenants")) {
+          const err = new Error('canceling statement due to lock timeout');
+          throw err;
+        }
+        return undefined;
+      },
+    });
+    const res = await request(makeApp(db, "client_admin"))
+      .put("/v1/admin/my-tenant/plan")
+      .set("Authorization", "Bearer dummy")
+      .send({ plan: "growth" });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe("conflict");
+    expect(clientQuery.mock.calls.map(([s]: [string]) => s)).toContain("ROLLBACK");
   });
 
   // ★監査は fire-and-forget★ await に変えると、履歴テーブルの不調で
   // プラン変更そのものが 500 になる。ユーザー操作を監査の都合で失敗させない。
+  // (トランザクション自体は既にCOMMIT済みであることが前提。監査はCOMMIT後の
+  // 副次処理として意図的に外に出している)
   it("監査INSERTが失敗してもプラン変更は成功として返る", async () => {
-    const db = {
-      query: jest.fn()
-        .mockResolvedValueOnce({ rows: [{ plan: "starter" }], rowCount: 1 })
-        .mockResolvedValueOnce({ rows: [updatedRow("growth")], rowCount: 1 })
-        .mockRejectedValue(new Error("tenant_settings_history is missing")),
-    };
+    const { db, dbQuery } = makePlanTxDb({ beforeRow: { plan: "starter" } });
+    dbQuery.mockRejectedValue(new Error("tenant_settings_history is missing"));
+
     const res = await request(makeApp(db, "client_admin"))
       .put("/v1/admin/my-tenant/plan")
       .set("Authorization", "Bearer dummy")
@@ -1329,13 +1386,13 @@ describe("PUT /v1/admin/my-tenant/plan — 境界・異常系", () => {
   });
 
   it("UPDATE は必ず updated_at を更新する（変更時刻が追えなくなるのを防ぐ）", async () => {
-    const db = okDb("starter", "growth");
+    const { db, clientQuery } = makePlanTxDb({ beforeRow: { plan: "starter" } });
     await request(makeApp(db, "client_admin"))
       .put("/v1/admin/my-tenant/plan")
       .set("Authorization", "Bearer dummy")
       .send({ plan: "growth" });
 
-    const updateCall = db.query.mock.calls.find(
+    const updateCall = clientQuery.mock.calls.find(
       ([sql]: [string]) => typeof sql === "string" && sql.includes("UPDATE tenants")
     );
     expect(updateCall![0]).toMatch(/updated_at\s*=\s*NOW\(\)/);
@@ -1351,22 +1408,22 @@ describe("PUT /v1/admin/my-tenant/plan — 境界・異常系", () => {
     ["大文字", { plan: "GROWTH" }],
     ["前後空白", { plan: " growth " }],
     ["空文字", { plan: "" }],
-  ])("不正な plan (%s) は 400 で、DBに一切触れない", async (_label, body) => {
-    const db = { query: jest.fn() };
+  ])("不正な plan (%s) は 400 で、DB接続すら確立しない", async (_label, body) => {
+    const { db, connect } = makePlanTxDb({ beforeRow: { plan: "starter" } });
     const res = await request(makeApp(db, "client_admin"))
       .put("/v1/admin/my-tenant/plan")
       .set("Authorization", "Bearer dummy")
       .send(body as object);
 
     expect(res.status).toBe(400);
-    expect(db.query).not.toHaveBeenCalled();
+    expect(connect).not.toHaveBeenCalled();
   });
 
   // ★free_ad ブロックは DB に触れる前に効くこと★
-  // 後段に置くと、ブロックされた要求でも SELECT が走り、
+  // 後段に置くと、ブロックされた要求でも接続確立が走り、
   // 「弾いたのにDB負荷はかかる」状態になる。
-  it("free_ad への降格は SELECT すら走らせずに 403", async () => {
-    const db = { query: jest.fn() };
+  it("free_ad への降格は接続すら確立せずに 403", async () => {
+    const { db, connect } = makePlanTxDb({ beforeRow: { plan: "starter" } });
     const res = await request(makeApp(db, "client_admin"))
       .put("/v1/admin/my-tenant/plan")
       .set("Authorization", "Bearer dummy")
@@ -1374,7 +1431,7 @@ describe("PUT /v1/admin/my-tenant/plan — 境界・異常系", () => {
 
     expect(res.status).toBe(403);
     expect(res.body.error).toBe("free_ad_plan_not_yet_available");
-    expect(db.query).not.toHaveBeenCalled();
+    expect(connect).not.toHaveBeenCalled();
   });
 
   it("監査の changed_by は JWT の email。無ければ空文字で落ちない", async () => {
@@ -1385,7 +1442,7 @@ describe("PUT /v1/admin/my-tenant/plan — 境界・異常系", () => {
       req.supabaseUser = { app_metadata: { tenant_id: "tenant-a", role: "client_admin" } };
       next();
     });
-    const db = okDb("starter", "growth");
+    const { db, dbQuery } = makePlanTxDb({ beforeRow: { plan: "starter" } });
     registerTenantAdminRoutes(app, db as any);
 
     const res = await request(app)
@@ -1395,7 +1452,7 @@ describe("PUT /v1/admin/my-tenant/plan — 境界・異常系", () => {
     await new Promise((r) => setImmediate(r));
 
     expect(res.status).toBe(200);
-    const auditCall = db.query.mock.calls.find(
+    const auditCall = dbQuery.mock.calls.find(
       ([sql]: [string]) => typeof sql === "string" && sql.includes("tenant_settings_history")
     );
     expect(auditCall![1][1]).toBe("");
@@ -1406,7 +1463,7 @@ describe("PUT /v1/admin/my-tenant/plan — 境界・異常系", () => {
   it.each(PAID.flatMap((f) => PAID.filter((t) => t !== f).map((t) => [f, t])))(
     "有料間の遷移 %s → %s は許可される",
     async (from, to) => {
-      const db = okDb(from, to);
+      const { db } = makePlanTxDb({ beforeRow: { plan: from as string } });
       const res = await request(makeApp(db, "client_admin"))
         .put("/v1/admin/my-tenant/plan")
         .set("Authorization", "Bearer dummy")
@@ -1426,42 +1483,78 @@ describe("PUT /v1/admin/my-tenant/plan — 境界・異常系", () => {
 // 倍率だけ 1.5→1.0 に下がる。UI は「使えなくなる機能: AIアバター」と明示している
 // ので、表示と実挙動が食い違う状態にもなる。
 // --------------------------------------------------------------------------
-describe("PUT /v1/admin/my-tenant/plan — 降格時の features 整合", () => {
-  const before = (plan: string, features: object) => ({
-    query: jest.fn()
-      .mockResolvedValueOnce({ rows: [{ plan, features }], rowCount: 1 })
-      .mockResolvedValueOnce({ rows: [{ id: "tenant-a", name: "t", plan: "starter", features: {} }], rowCount: 1 })
-      .mockResolvedValue({ rows: [], rowCount: 1 }),
+// --------------------------------------------------------------------------
+// ★モックDBでは検証できない不変条件をソース文字列で固定する★
+//
+// clientQuery は文字列マッチで応答を返すモックのため、SQL文に FOR UPDATE や
+// lock_timeout が実際に含まれているかどうかはモックの挙動に一切影響しない
+// (無くても全テストが緑のまま通る。実測済み)。「本当にロックが掛かるか」は
+// 実Postgresでしか検証できない(A-2のcomputeExpectedBillingと同じ限界)。
+// ここでは最低限、静的な文字列レベルの退行だけは検出できるようにする。
+// --------------------------------------------------------------------------
+describe("PUT /v1/admin/my-tenant/plan — トランザクションのSQL文自体の不変条件", () => {
+  function readRoutesSource(): string {
+    const fs = require("fs") as typeof import("fs");
+    const path = require("path") as typeof import("path");
+    return fs.readFileSync(path.join(__dirname, "routes.ts"), "utf-8");
+  }
+  function extractPutHandler(): string {
+    const src = readRoutesSource();
+    const start = src.indexOf('app.put("/v1/admin/my-tenant/plan"');
+    expect(start).toBeGreaterThan(-1);
+    const end = src.indexOf('app.post("/v1/admin/my-tenant/keys"', start);
+    expect(end).toBeGreaterThan(start);
+    return src.slice(start, end);
+  }
+
+  it("SELECT は FOR UPDATE で対象テナント行をロックする", () => {
+    expect(extractPutHandler()).toMatch(/SELECT plan, features FROM tenants WHERE id = \$1 FOR UPDATE/);
   });
 
-  const updateParams = (db: any) =>
-    db.query.mock.calls.find(([sql]: [string]) => typeof sql === "string" && sql.includes("UPDATE tenants"))![1];
+  it("ロック待ちに上限(lock_timeout)を設ける(無いと並行変更が無期限にブロックし得る)", () => {
+    expect(extractPutHandler()).toMatch(/SET LOCAL lock_timeout = '3s'/);
+  });
+
+  it("エラー発生時は必ず ROLLBACK を試みる", () => {
+    expect(extractPutHandler()).toMatch(/client\.query\("ROLLBACK"\)\.catch/);
+  });
+
+  it("client は必ず release される(finallyブロックで)", () => {
+    expect(extractPutHandler()).toMatch(/finally\s*\{\s*client\.release\(\);/);
+  });
+});
+
+describe("PUT /v1/admin/my-tenant/plan — 降格時の features 整合", () => {
+  const updateParams = (clientQuery: jest.Mock) =>
+    clientQuery.mock.calls.find(([sql]: [string]) => typeof sql === "string" && sql.includes("UPDATE tenants"))![1];
 
   it("growth → starter で features.avatar / voice を false にする", async () => {
-    const db = before("growth", { avatar: true, voice: true, rag: true });
+    const { db, clientQuery } = makePlanTxDb({ beforeRow: { plan: "growth", features: { avatar: true, voice: true, rag: true } } });
     await request(makeApp(db, "client_admin"))
       .put("/v1/admin/my-tenant/plan")
       .set("Authorization", "Bearer dummy")
       .send({ plan: "starter" });
 
-    const patch = JSON.parse(updateParams(db).find((p: unknown) => typeof p === "string" && p.startsWith("{")) as string);
+    const patch = JSON.parse(updateParams(clientQuery).find((p: unknown) => typeof p === "string" && p.startsWith("{")) as string);
     expect(patch.avatar).toBe(false);
     expect(patch.voice).toBe(false);
     // 差分だけを || でマージする。プランに紐づかない rag を差分に含めない
     // (含めると、無関係なフラグを取り違えて上書きしうる)。
     expect(patch).not.toHaveProperty("rag");
-    const sql = db.query.mock.calls.find(([q]: [string]) => q.includes("UPDATE tenants"))![0];
+    const sql = clientQuery.mock.calls.find(([q]: [string]) => q.includes("UPDATE tenants"))![0];
     expect(sql).toMatch(/features\s*=\s*COALESCE\(features, '\{\}'::jsonb\)\s*\|\|/);
   });
 
   it("enterprise → growth で enterprise 限定機能だけ落ちる", async () => {
-    const db = before("enterprise", { avatar: true, voice: true, rag: true, deep_research: true, pre_dispatch: true });
+    const { db, clientQuery } = makePlanTxDb({
+      beforeRow: { plan: "enterprise", features: { avatar: true, voice: true, rag: true, deep_research: true, pre_dispatch: true } },
+    });
     await request(makeApp(db, "client_admin"))
       .put("/v1/admin/my-tenant/plan")
       .set("Authorization", "Bearer dummy")
       .send({ plan: "growth" });
 
-    const patch = JSON.parse(updateParams(db).find((p: unknown) => typeof p === "string" && p.startsWith("{")) as string);
+    const patch = JSON.parse(updateParams(clientQuery).find((p: unknown) => typeof p === "string" && p.startsWith("{")) as string);
     expect(patch.deep_research).toBe(false);
     expect(patch.pre_dispatch).toBe(false);
     // growth で許される avatar は取り消し対象に入れない(維持される)
@@ -1470,13 +1563,14 @@ describe("PUT /v1/admin/my-tenant/plan — 降格時の features 整合", () => 
   });
 
   it("アップグレードでは features を勝手に有効化しない（権能の自動付与をしない）", async () => {
-    const db = before("starter", { avatar: false, voice: false, rag: true });
+    const { db, clientQuery } = makePlanTxDb({ beforeRow: { plan: "starter", features: { avatar: false, voice: false, rag: true } } });
     await request(makeApp(db, "client_admin"))
       .put("/v1/admin/my-tenant/plan")
       .set("Authorization", "Bearer dummy")
       .send({ plan: "enterprise" });
 
-    const merged = updateParams(db).find((p: unknown) => typeof p === "string" && (p as string).startsWith("{"));
+    const calls = clientQuery.mock.calls.find(([sql]: [string]) => sql.includes("UPDATE tenants"))![1];
+    const merged = calls.find((p: unknown) => typeof p === "string" && (p as string).startsWith("{"));
     if (merged) {
       const f = JSON.parse(merged as string);
       expect(f.avatar).not.toBe(true);
