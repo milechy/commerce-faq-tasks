@@ -44,13 +44,23 @@ export async function checkBillingHealth(
   const violations: BillingHealthViolation[] = [];
 
   // ── チェック1: 月をまたいで pending のまま残っている行 ──────────────────
+  //
+  // tenants.billing_enabled はデフォルト false（migration_billing.sql）。
+  // _reportTenantUsage は billing_enabled=false のテナントの usage_logs には
+  // 一切触れない(集計にも到達しない)ため、そうしたテナントの行は「意図的に
+  // 永久 pending」であり故障ではない。ここを除外しないと、billing_enabled=false
+  // のテナントが1つでもいるだけで毎時間 CRITICAL が鳴り、本物の異常を
+  // 見逃す「オオカミ少年」化を招く（無料期間中のテナントも同様の性質を持つが、
+  // 無料期間の履歴は追えないため対象外。Asana 1217808138968200 の範囲）。
   const { startDate: currentMonthStart } = periodToDateRange(getPeriodYyyyMm());
   const stuckResult = await db.query(
-    `SELECT COUNT(*)::integer AS cnt, MIN(created_at) AS oldest
-       FROM usage_logs
-      WHERE billing_status = 'pending'
-        AND billable = true
-        AND created_at < $1`,
+    `SELECT COUNT(*)::integer AS cnt, MIN(u.created_at) AS oldest
+       FROM usage_logs u
+       JOIN tenants t ON t.id = u.tenant_id
+      WHERE u.billing_status = 'pending'
+        AND u.billable = true
+        AND u.created_at < $1
+        AND t.billing_enabled = true`,
     [currentMonthStart]
   );
   const stuckCount = stuckResult.rows[0]?.cnt ?? 0;
