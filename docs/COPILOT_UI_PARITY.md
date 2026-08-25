@@ -99,7 +99,7 @@ handoff は出るが、店主はチャットを離れる。離れた先で「何
 | 9 | 音声クローン | T3 | `avatar_studio` | `StudioVoiceCloneSection.tsx` |
 | 10 | 高品質画像の生成 | T3 | `avatar_premium` | `AvatarWizard.tsx:318` |
 | 11 | アバター新規作成ウィザード | T3 | `avatar_wizard` | `pages/admin/avatar/wizard.tsx` |
-| 12 | 会話分析の推移グラフ・低評価セッション | T4 | `analytics` | `analytics/index.tsx:399,409` |
+| 12 | 会話分析の推移グラフ・低評価セッション | T4 | tool化(2026-08-25, `get_analytics_trend`)。旧`analytics` handoffキーは計測窓のため残置(グラフの内訳等は引き続き旧UI) | `analytics/index.tsx:399,409` |
 | 13 | ABテスト結果・改善提案 | T4 | `conversion` | `conversion/index.tsx:258,292` |
 | 14 | ナレッジ別の成約貢献度 | T4 | `knowledge_attribution` | `KnowledgeAttributionTab.tsx` |
 | 15 | ご利用状況・お支払い (閲覧一式) | T4 | `billing` | `billing/index.tsx` |
@@ -514,7 +514,7 @@ handoff は出るが、店主はチャットを離れる。離れた先で「何
 | 9 | 音声クローン | `handoff:avatar_studio` |
 | 10 | 高品質画像の生成 | `handoff:avatar_premium` |
 | 11 | アバター新規作成ウィザード | `handoff:avatar_wizard` |
-| 12 | 会話分析の推移グラフ・低評価セッション | `handoff:analytics` |
+| 12 | 会話分析の推移グラフ・低評価セッション | `tool:get_analytics_trend` |
 | 13 | ABテスト結果・改善提案 | `handoff:conversion` |
 | 14 | ナレッジ別の成約貢献度 | `handoff:knowledge_attribution` |
 | 15 | ご利用状況・お支払い | `handoff:billing` |

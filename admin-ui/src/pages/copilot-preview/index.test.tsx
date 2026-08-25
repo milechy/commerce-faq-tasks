@@ -1559,6 +1559,62 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     });
   });
 
+  // W2-4(docs/COPILOT_UI_PARITY.md §3.1 #12): 会話数の推移+低評価セッション
+  // (get_analytics_trend)カード。数値の計算自体はサーバ側(agentRoutes.test.ts)で
+  // 検証済みのため、ここでは描画のみを確認する。
+  describe("analytics_trend カード", () => {
+    it("合計会話数と低評価セッションの短縮IDが描画される", async () => {
+      mockAgent({
+        reply: "推移をお伝えします。",
+        actions: [
+          {
+            tool: "get_analytics_trend",
+            result: "会話数の推移（直近30日間）\n• 合計 10件",
+            card: {
+              kind: "analytics_trend",
+              period: "30d",
+              daily: [
+                { date: "2026-08-01", sessions: 2, avgScore: 70 },
+                { date: "2026-08-02", sessions: 8, avgScore: 65 },
+              ],
+              lowScoreSessions: [
+                { shortId: "abcd1234", score: 25, evaluatedAt: "2026-08-02T03:00:00.000Z", messageCount: 4 },
+              ],
+            },
+          },
+        ],
+      });
+
+      await send("会話数の推移をグラフで見せて");
+
+      expect(await screen.findByText("合計 10件")).toBeTruthy();
+      expect(screen.getByText(/\[abcd1234\]/)).toBeTruthy();
+      expect(screen.getByText(/スコア25/)).toBeTruthy();
+    });
+
+    it("低評価セッションが0件のときは「ありません」と描画される(空のリストを黙って出さない)", async () => {
+      mockAgent({
+        reply: "推移をお伝えします。",
+        actions: [
+          {
+            tool: "get_analytics_trend",
+            result: "会話数の推移（直近30日間）\n• 合計 10件",
+            card: {
+              kind: "analytics_trend",
+              period: "30d",
+              daily: [{ date: "2026-08-01", sessions: 10, avgScore: 80 }],
+              lowScoreSessions: [],
+            },
+          },
+        ],
+      });
+
+      await send("推移を見せて");
+
+      expect(await screen.findByText("低評価セッション（スコア40未満）はありません")).toBeTruthy();
+    });
+  });
+
   // REAL_TOOL_LABEL への登録を忘れると、画面に生の英語ツール名がそのまま出る
   // (パネル側のラベル表が9件で取り残されたのと同型の事故)。新ツール追加時の回帰。
   it("アバターの一覧・停止ツールは生の英語名ではなく日本語ラベルで表示される", async () => {

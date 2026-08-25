@@ -161,6 +161,20 @@ export type RuleEffectAgentActionCard = {
   }> | null;
 };
 
+// W2-4: 会話数の日次推移+低評価セッション。フィールド形状は
+// src/api/admin/agent/actionExecutor.ts の AnalyticsTrendCardPayload と1対1に保つ。
+export type AnalyticsTrendAgentActionCard = {
+  kind: "analytics_trend";
+  period: string;
+  daily: Array<{ date: string; sessions: number; avgScore: number | null }>;
+  lowScoreSessions: Array<{
+    shortId: string;
+    score: number;
+    evaluatedAt: string;
+    messageCount: number;
+  }>;
+};
+
 export type AgentActionCard =
   | LegacyLinkAgentActionCard
   | AvatarPresetAgentActionCard
@@ -172,7 +186,8 @@ export type AgentActionCard =
   | ChatSessionMessagesAgentActionCard
   | ConversationEvaluationAgentActionCard
   | KnowledgeGapsListAgentActionCard
-  | RuleEffectAgentActionCard;
+  | RuleEffectAgentActionCard
+  | AnalyticsTrendAgentActionCard;
 
 export type AgentAction = { tool: string; result: string; card?: AgentActionCard };
 

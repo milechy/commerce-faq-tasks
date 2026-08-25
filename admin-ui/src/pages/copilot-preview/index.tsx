@@ -30,7 +30,7 @@ import {
   AGENT_CHAT_HISTORY_MAX_ENTRIES,
   useAgentChatTransport,
 } from "../../lib/useAgentChatTransport";
-import type { AnsweredFrom, WeeklySummaryAgentActionCard, RuleEffectAgentActionCard } from "../../lib/useAgentChatTransport";
+import type { AnsweredFrom, WeeklySummaryAgentActionCard, RuleEffectAgentActionCard, AnalyticsTrendAgentActionCard } from "../../lib/useAgentChatTransport";
 // アバター画像候補のプロンプト組み立ては旧UIウィザードと同じ関数を使う(再実装しない)。
 // チャットは選択肢を集めないため、固定の標準的な選択で呼ぶ。
 import { buildAvatarPrompt } from "../../lib/buildAvatarPrompt";
@@ -208,7 +208,10 @@ type Card =
   // ルール効果(get_tuning_rule_effect)。フィールド形状は
   // RuleEffectAgentActionCard(useAgentChatTransport.ts)と同一に保つ必要があるため、
   // kind(UI向けにcamelCaseへ変える)以外はそこから再利用する(weeklySummaryと同じ作法)。
-  | ({ kind: "ruleEffect" } & Omit<RuleEffectAgentActionCard, "kind">);
+  | ({ kind: "ruleEffect" } & Omit<RuleEffectAgentActionCard, "kind">)
+  // W2-4: 会話数の日次推移+低評価セッション。フィールド形状は
+  // AnalyticsTrendAgentActionCard(useAgentChatTransport.ts)と同一に保つ(weeklySummaryと同じ作法)。
+  | ({ kind: "analyticsTrend" } & Omit<AnalyticsTrendAgentActionCard, "kind">);
 
 // 優先度3段階(lib/tuningPriority.ts)の店主向け表示ラベル。rule / rulesList カードで共有する。
 const TIER_LABEL: Record<"low" | "normal" | "high", string> = { low: "低", normal: "普通", high: "高" };
@@ -273,6 +276,7 @@ const REAL_TOOL_LABEL: Record<string, string> = {
   get_monitoring_summary: "モニタリングサマリーの取得",
   get_legacy_ui_link: "旧管理画面への案内",
   get_analytics_summary: "会話分析サマリーの取得",
+  get_analytics_trend: "会話数の推移・低評価セッションの取得",
   get_conversion_summary: "成約・効果分析サマリーの取得",
   get_tuning_rule_effect: "ルール効果の取得",
   get_avatar_status: "アバター稼働状況の取得",
@@ -789,6 +793,14 @@ export default function CopilotPreviewPage() {
           id: nextId(),
           role: "ai",
           card: { kind: "ruleEffect", ruleId, approvedAt, truncated, analyzedSessions, comparison, progress },
+        };
+      }
+      if (a.card?.kind === "analytics_trend") {
+        const { period, daily, lowScoreSessions } = a.card;
+        return {
+          id: nextId(),
+          role: "ai",
+          card: { kind: "analyticsTrend", period, daily, lowScoreSessions },
         };
       }
       // D6: 優先度を含め、正規表現では拾えなかった内容(複数行の対応方針)もそのまま運ぶ。
@@ -2634,6 +2646,8 @@ function CardView({
       return <WeeklySummaryCard card={card} />;
     case "ruleEffect":
       return <RuleEffectCard card={card} onSendReal={onSendReal} />;
+    case "analyticsTrend":
+      return <AnalyticsTrendCard card={card} onSendReal={onSendReal} />;
     case "knowledgeGapsList":
       return (
         <CardShell hd={<><span>📚</span>知識ギャップ一覧（{card.totalCount}件）</>}>
@@ -2867,6 +2881,96 @@ function RuleEffectCard({
         </div>
       )}
       {disableButton}
+    </CardShell>
+  );
+}
+
+// W2-4(docs/COPILOT_UI_PARITY.md §3.1 #12): 会話数の日次推移+低評価セッション。
+// 旧UI(analytics/index.tsx の TrendChartsSection/LowScoreSessionsTable)の再現。
+// 数値はすべてサーバ集計値(card)をそのまま描画し、LLMの生成文を経由しない
+// (RuleEffectCard/WeeklySummaryCardと同じ権威分離)。棒グラフはchart.jsを持ち込まず、
+// conversion/index.tsx の BarChart と同じ依存無しCSS実装に揃える(このカードのためだけに
+// チャットバンドルへchart.jsを追加しない)。
+function AnalyticsTrendCard({
+  card,
+  onSendReal,
+}: {
+  card: Extract<Card, { kind: "analyticsTrend" }>;
+  onSendReal?: (action: string) => void;
+}) {
+  const { daily, lowScoreSessions, period } = card;
+  const periodLabel = period === "7d" ? "直近7日間" : period === "90d" ? "直近90日間" : "直近30日間";
+  const totalSessions = daily.reduce((sum, d) => sum + d.sessions, 0);
+  const maxSessions = Math.max(...daily.map((d) => d.sessions), 1);
+
+  return (
+    <CardShell hd={<><span>📈</span>会話数の推移（{periodLabel}）</>} tone="agent">
+      <div style={{ fontSize: 15, fontWeight: 700, color: "var(--foreground)" }}>
+        合計 {totalSessions}件
+      </div>
+      {daily.length > 0 && (
+        <>
+          <div style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 64 }}>
+            {daily.map((d) => (
+              <div
+                key={d.date}
+                title={`${d.date}: ${d.sessions}件${d.avgScore != null ? ` / スコア${d.avgScore.toFixed(0)}` : ""}`}
+                style={{
+                  flex: "1 1 0",
+                  minWidth: 2,
+                  height: `${Math.max((d.sessions / maxSessions) * 100, d.sessions > 0 ? 4 : 1)}%`,
+                  background: "linear-gradient(180deg, #3b82f6, #8b5cf6)",
+                  borderRadius: 2,
+                }}
+              />
+            ))}
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "var(--muted-foreground)" }}>
+            <span>{daily[0]!.date.slice(5)}</span>
+            <span>{daily[daily.length - 1]!.date.slice(5)}</span>
+          </div>
+        </>
+      )}
+      {lowScoreSessions.length > 0 ? (
+        <div>
+          <div style={{ fontSize: 12.5, color: "var(--muted-foreground)", fontWeight: 600, marginBottom: 6 }}>
+            低評価セッション（スコア40未満、下位{lowScoreSessions.length}件）
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {lowScoreSessions.map((s) => (
+              <div
+                key={s.shortId}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  gap: 8,
+                  fontSize: 13.5,
+                  background: "var(--muted, rgba(120,120,140,0.08))",
+                  borderRadius: 8,
+                  padding: "8px 12px",
+                }}
+              >
+                <span style={{ color: "var(--foreground)" }}>
+                  [{s.shortId}] スコア{s.score.toFixed(0)}（{s.messageCount}件のやり取り）
+                </span>
+                {onSendReal && (
+                  <button
+                    onClick={() => onSendReal(`__real:会話 [${s.shortId}] の中身を見せて`)}
+                    style={{ flexShrink: 0, fontSize: 12, fontWeight: 700, padding: "6px 10px", borderRadius: 8, cursor: "pointer", border: "1px solid var(--border)", background: "transparent", color: AGENT, minHeight: 36 }}
+                  >
+                    見る
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div style={{ fontSize: 13.5, color: "var(--muted-foreground)" }}>
+          低評価セッション（スコア40未満）はありません
+        </div>
+      )}
     </CardShell>
   );
 }

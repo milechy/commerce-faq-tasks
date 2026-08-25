@@ -45,7 +45,7 @@ import { submitSaiTask, getSaiTask } from '../../../lib/sai/saiClient';
 import { recordSaiTask, resolveSaiTaskTenant } from '../../../lib/sai/saiTaskRegistry';
 import { trackUsage } from '../../../lib/billing/usageTracker';
 import { queryTenantPlan, planHasFeature, resolveShareForTenantPlan } from '../../../lib/billing/planFeatures';
-import { fetchAnalyticsSummary, fetchConversionSummary } from '../analytics/summaryQueries';
+import { fetchAnalyticsSummary, fetchAnalyticsTrend, fetchConversionSummary, fetchLowScoreSessions } from '../analytics/summaryQueries';
 import { getRuleEffect } from '../analytics/ruleEffect';
 import { isOnboardingIndustry, ONBOARDING_INDUSTRY_LABELS, INDUSTRY_FAQ_TEMPLATES } from './industryFaqTemplates';
 import { buildPlacementAttributes, validateWidgetPlacement } from './widgetPlacement';
@@ -509,6 +509,27 @@ export type RuleEffectCardPayload = {
   }> | null;
 };
 
+// W2-4(docs/COPILOT_UI_PARITY.md §3.1 #12、T4 要約+可視化): 会話数の日次推移と
+// 低評価セッションの一覧。旧UI(analytics/index.tsx の TrendChartsSection/QualityChartsRow・
+// LowScoreSessionsTable)の再現。数値はすべてfetchAnalyticsTrend/fetchLowScoreSessions
+// (summaryQueries.ts)のサーバ集計値をそのまま持たせ、LLMの生成文を経由しない
+// (WeeklySummaryCardPayloadと同じ権威分離)。knowledge_gaps/sentiment内訳は
+// get_analytics_summaryで既に文章として提示済みのため、ここでは持たせない
+// (グラフの主役=会話数推移とスコア推移の2本に絞る。旧UIの全指標を機械的に複製しない)。
+export type AnalyticsTrendCardPayload = {
+  kind: 'analytics_trend';
+  period: string;
+  daily: Array<{ date: string; sessions: number; avgScore: number | null }>;
+  // get_chat_sessions/get_escalationsと同じ8文字の短縮ID規約。そのまま
+  // get_chat_session_messagesに渡せる(resolveSessionByShortIdが前方一致で解決する)。
+  lowScoreSessions: Array<{
+    shortId: string;
+    score: number;
+    evaluatedAt: string;
+    messageCount: number;
+  }>;
+};
+
 export type ActionCardPayload =
   | LegacyLinkCardPayload
   | AvatarPresetCardPayload
@@ -520,7 +541,8 @@ export type ActionCardPayload =
   | ChatSessionMessagesCardPayload
   | ConversationEvaluationCardPayload
   | KnowledgeGapsListCardPayload
-  | RuleEffectCardPayload;
+  | RuleEffectCardPayload
+  | AnalyticsTrendCardPayload;
 
 // ツール結果は既定では素の文字列で、構造化データを添えるツールだけが
 // { text, card } 形を返す。card は text の置き換えではなく追加である
@@ -4117,6 +4139,77 @@ export async function executeToolCall(
       } catch (err) {
         logger.warn(`[actionExecutor] ${toolName} failed`, err);
         return truncate('分析サマリーの取得に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // W2-4(docs/COPILOT_UI_PARITY.md §3.1 #12、T4 要約+可視化): 会話数の日次推移と
+    // 低評価セッションの一覧。get_analytics_summaryが数値サマリーに留まる一方、
+    // こちらは旧UI(analytics/index.tsx の TrendChartsSection/QualityChartsRow・
+    // LowScoreSessionsTable)が担っていた「グラフの詳細」「個別の低評価セッション」を
+    // 埋める(以前はget_legacy_ui_link(analytics)でしか案内できなかった)。
+    case 'get_analytics_trend': {
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+      const plan = await queryTenantPlan(db, tenantId);
+      if (!planHasFeature(plan, 'analytics')) {
+        return truncate(planLimitNotice(tenantId, sessionId, 'analytics'));
+      }
+
+      const period = args['period'] === '7d' || args['period'] === '90d' ? args['period'] : '30d';
+      const periodLabel = period === '7d' ? '直近7日間' : period === '90d' ? '直近90日間' : '直近30日間';
+
+      try {
+        const [trend, lowScoreSessions] = await Promise.all([
+          fetchAnalyticsTrend({ db, tenantId, period }),
+          fetchLowScoreSessions({ db, tenantId, period }, 5),
+        ]);
+
+        // R1: 数値はfetchAnalyticsTrend/fetchLowScoreSessions(サーバ集計値)をそのまま
+        // 使う。前半/後半比較はここでの単純な算術であり、LLMに数値を生成させない。
+        const daysWithData = trend.daily.filter((d) => d.sessions > 0);
+        const totalSessions = trend.daily.reduce((sum, d) => sum + d.sessions, 0);
+        const half = Math.floor(trend.daily.length / 2);
+        const firstHalf = trend.daily.slice(0, half).reduce((sum, d) => sum + d.sessions, 0);
+        const secondHalf = trend.daily.slice(half).reduce((sum, d) => sum + d.sessions, 0);
+        const trendNote = firstHalf === 0 && secondHalf === 0
+          ? ''
+          : secondHalf > firstHalf
+            ? '（後半にかけて増加）'
+            : secondHalf < firstHalf
+              ? '（後半にかけて減少）'
+              : '（横ばい）';
+
+        const lines = [
+          `会話数の推移（${periodLabel}）`,
+          `• 合計 ${totalSessions}件${trendNote}（データのある日: ${daysWithData.length}/${trend.daily.length}日）`,
+        ];
+        if (lowScoreSessions.length > 0) {
+          lines.push(`• 低評価セッション（スコア40未満、下位${lowScoreSessions.length}件）:`);
+          for (const s of lowScoreSessions) {
+            lines.push(`  [${s.session_id.slice(0, 8)}] スコア${s.score.toFixed(0)}（${s.message_count}件のやり取り）`);
+          }
+        } else {
+          lines.push('• 低評価セッション（スコア40未満）: なし');
+        }
+
+        const card: AnalyticsTrendCardPayload = {
+          kind: 'analytics_trend',
+          period,
+          daily: trend.daily.map((d) => ({ date: d.date, sessions: d.sessions, avgScore: d.avg_score })),
+          lowScoreSessions: lowScoreSessions.map((s) => ({
+            shortId: s.session_id.slice(0, 8),
+            score: s.score,
+            evaluatedAt: s.evaluated_at,
+            messageCount: s.message_count,
+          })),
+        };
+
+        return { text: truncateRead(lines.join('\n')), card };
+      } catch (err) {
+        logger.warn('[actionExecutor] get_analytics_trend failed', err);
+        return truncate('会話分析の推移取得に失敗しました');
       }
     }
 
