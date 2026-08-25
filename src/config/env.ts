@@ -123,6 +123,9 @@ const envSchema = z.object({
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
   BILLING_PORTAL_RETURN_URL: z.string().optional(),
+  // PR-7(2026-08-25収益監査): テナントのStripeオンボーディング(POST /v1/admin/billing/onboard)で
+  // 作成する metered Subscription の price ID。Stripe Dashboard で作成した従量課金price。
+  STRIPE_METERED_PRICE_ID: z.string().optional(),
   MARGIN_RATE: numEnv,
 
   // ── Notifications / Webhooks ──────────────────────────────────────────

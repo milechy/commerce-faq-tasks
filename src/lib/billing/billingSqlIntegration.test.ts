@@ -41,6 +41,7 @@ const BILLING_TABLES = [
   "lemonslice_monthly_charges",
   "livekit_monthly_charges",
   "platform_monthly_charges",
+  "stripe_subscriptions",
   "stripe_usage_reports",
   "stripe_webhook_events",
   "usage_logs",

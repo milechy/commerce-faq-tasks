@@ -309,6 +309,8 @@ const ja = {
   "billing.view_invoice": "📄 請求書を見る",
   "billing.view_detail": "🔗 請求書・領収書",
   "billing.change_payment": "💳 支払い設定を変更",
+  "billing.register_payment": "💳 支払い方法を登録する",
+  "billing.register_payment_loading": "登録中...",
   "billing.status_pending": "未請求",
   "billing.status_invoiced": "請求済み",
   "billing.status_error": "エラー",
