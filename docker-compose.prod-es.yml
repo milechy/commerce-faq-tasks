@@ -1,6 +1,20 @@
 # VPS 本番 ES 専用 compose — 既存 es-commfaq を置き換える
 # 参照: docs/ES_PROD_DURABILITY.md §3.2 / §4
-# 使い方: cd /opt/rajiuce-infra/es && docker compose -f docker-compose.prod-es.yml up -d
+# 実体は /opt/rajiuce-infra/es に置かれている（/opt/rajiuce 配下ではないので
+# deploy-vps.sh の rsync では更新されない。本ファイルを直しただけでは本番に反映されない）。
+#
+# ★docker-compose v1 では `up -d` による再作成が失敗する★
+# VPS の docker-compose は 1.29.2 で、新しい Docker Engine と非互換のため
+# 再作成時に `KeyError: 'ContainerConfig'` で落ちる。しかもコンテナを
+# 停止・リネームした「後」に落ちるため、ES が停止したまま復旧しない
+# （2026-08-25 に実際に踏んで一時的に検索が停止した）。
+# 反映は当面 docker run で行うこと:
+#   docker rm -f es-commfaq
+#   docker run -d --name es-commfaq --restart unless-stopped \
+#     -e discovery.type=single-node -e xpack.security.enabled=false \
+#     -e ES_JAVA_OPTS="-Xms256m -Xmx256m" -m 1g -p 9200:9200 \
+#     -v es_esdata:/usr/share/elasticsearch/data es-commfaq-kuromoji:8.15.0
+# 恒久対応は compose v2 の導入（別タスク）。
 services:
   es-commfaq:
     build:
@@ -11,10 +25,22 @@ services:
     environment:
       - discovery.type=single-node
       - xpack.security.enabled=false
-      - ES_JAVA_OPTS=-Xms2g -Xmx2g
+      # 3.8GB のVPSにヒープ2GBは過大だった。JVMは -Xms を起動時に確定確保するため
+      # 非ヒープ込みで RSS 2.4GB に達し、ホストの available が 100MB を割って
+      # sshd が banner exchange を返せなくなり、デプロイが10分ハングした(2026-08-25)。
+      # OOM killer も繰り返し走っていた（8/24 に3回）。
+      #
+      # 実データは faq_global 174件 286.5KB + read_me 6.1KB の計292KBのみで、
+      # JVMヒープ実使用は125MB。256MBで2倍以上の余裕がある。
+      # ヒープ512MBでは -Xms の確定確保により cgroup 使用量が上限1GBの99.99%に達し、
+      # コンテナ単位のOOM killが目前だった（実測 anon 950MB）。256MBで63%に収まる。
+      - ES_JAVA_OPTS=-Xms256m -Xmx256m
     ports:
       - "9200:9200"
     restart: unless-stopped
+    # ホストを道連れにしないための歯止め。従来は未設定(=無制限)で、
+    # ES が肥大するとホスト全体がメモリ枯渇していた。
+    mem_limit: 1g
     volumes:
       - esdata:/usr/share/elasticsearch/data
 
