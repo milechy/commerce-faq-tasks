@@ -48,10 +48,14 @@ export interface PgVectorSearchParams {
 /**
  * FAQ の可視性判定 (Phase69-2 Round 4)。エイリアスは fe / fd に固定する。
  *
- * **この述語の実装はここ1箇所だけにする。** 同じ faq_embeddings を引く経路が
- * 複数あり(searchTool→pgvector.ts / searchAgent→pgvectorSearch.ts)、
- * 片方だけが is_published を見ている状態は「非公開にしたはずのFAQが
- * もう片方の経路では答えに出る」という信頼の事故になる(2026-08-24 発見)。
+ * **この述語の実装はここ1箇所だけにする。** 2026-08-24、同じ faq_embeddings を
+ * 引く経路が2つあり(旧 searchTool→pgvector.ts / searchAgent→pgvectorSearch.ts)、
+ * 片方だけが is_published を見ていない事故が見つかった。以来 pgvectorSearch.ts は
+ * この定数を import して共有している(2箇所目を作らない)。
+ *
+ * このファイルの `searchPgVector` 自体は2026-08-25(P3是正)時点で本番の呼び出し元が
+ * 無い — 旧 searchTool.ts の削除に伴い孤立した。ただし excludedIds.test.ts が
+ * 本関数のSQL除外挙動を直接検証する参照実装として使い続けているため残している。
  *
  * エイリアスを引数化しないのは、excludedIds.test.ts が本ファイルの SQL 文字列を
  * そのまま検査しているため。テンプレート化すると機械的ガードが空振りする。

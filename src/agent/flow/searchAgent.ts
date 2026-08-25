@@ -6,7 +6,7 @@ import { embedTextWithUsage } from "../llm/openaiEmbeddingClient";
 import { createLearnedMemoryRepository, type LearnedMemoryHit } from "../memory/learnedMemoryRepository";
 import { isLearnedMemoryReadEnabled, getLearnedMemoryWeight } from "../memory/featureFlag";
 import { rerankTool } from "../tools/rerankTool";
-import { searchTool } from "../tools/searchTool";
+import { hybridSearch } from "../../search/hybrid";
 import { synthesizeAnswer } from "../tools/synthesisTool";
 import type {
   AgentSearchParams,
@@ -100,13 +100,16 @@ export async function runSearchAgent(
     logger.error("[runSearchAgent] pgvector search failed", err);
   }
 
-  // 3) Hybrid Search (ES)
+  // 3) Hybrid Search (ES) — pgvector 側は上のブロックで既に取得済みのため、
+  //    ここでは pgvector に0件だったときのみ ES を呼ぶ(searchTool 経由だと
+  //    同じ embedding・同じテナントで pgvector を2回目検索しており、
+  //    embedTextWithUsage の呼び出しも重複していた。2026-08-25 是正。
+  //    ES を常時並列で呼ぶ「真のhybrid化」は本修正のスコープ外)。
   const tSearch0 = performance.now();
-  const baseSearchResult = await searchTool({
-    query: plan.searchQuery,
-    tenantId: effectiveTenantId,
-    excludedIds,
-  });
+  const baseSearchResult =
+    pgVectorItems.length === 0
+      ? await hybridSearch(plan.searchQuery, effectiveTenantId, undefined, excludedIds)
+      : { items: [], ms: 0, note: "es:skipped_pgvector_has_hits" };
   const tSearch1 = performance.now();
 
   // Aモード: pgvector → learned_memory → ES の順でマージ
