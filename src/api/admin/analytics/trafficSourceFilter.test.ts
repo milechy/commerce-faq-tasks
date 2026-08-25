@@ -88,6 +88,21 @@ describe("GET /v1/admin/analytics/trends — source='user'フィルタ", () => {
     expect(trendSql).toBeDefined();
     expect(trendSql).toContain(USER_SOURCE_SQL);
   });
+
+  // GID 1217825468673283: fetchAnalyticsSummary の sentiment_distribution
+  // (P0-3, PR #954)と同根の欠陥がfetchAnalyticsTrendのsentimentトレンド
+  // クエリ(sentTrendsResult, FROM chat_messages cm)にもあった。上のテストは
+  // generate_seriesクエリ(セッション数・Judgeスコア推移)しか見ておらず、
+  // このクエリの欠落を検出できていなかった。
+  it("sentimentトレンド(chat_messages)のクエリにsource='user'絞り込みが入っている", async () => {
+    const res = await request(makeApp()).get("/v1/admin/analytics/trends");
+    expect(res.status).toBe(200);
+
+    const allSql = mockQuery.mock.calls.map((c) => c[0] as string);
+    const sentTrendSql = allSql.find((sql) => /FROM chat_messages cm/.test(sql));
+    expect(sentTrendSql).toBeDefined();
+    expect(sentTrendSql).toContain(USER_SOURCE_SQL);
+  });
 });
 
 describe("GET /v1/admin/analytics/evaluations — source='user'フィルタ", () => {
