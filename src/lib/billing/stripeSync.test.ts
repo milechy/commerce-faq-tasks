@@ -12,7 +12,7 @@ jest.mock('stripe', () => {
   }));
 }, { virtual: true });
 
-import { lemonsliceShareJpy, monthlyShareJpy, getLemonsliceMonthlyFeeJpy, getLivekitMonthlyFeeJpy, getPlatformMonthlyFeeJpy, chargeOneOffJpy, anamSessionBillableUnits, reportUsageToStripe } from './stripeSync';
+import { lemonsliceShareJpy, monthlyShareJpy, getLemonsliceMonthlyFeeJpy, getLivekitMonthlyFeeJpy, getPlatformMonthlyFeeJpy, chargeOneOffJpy, anamSessionBillableUnits, reportUsageToStripe, stripeUsageReporter, getPeriodYyyyMm } from './stripeSync';
 // PLAN_MULTIPLIERS/planMultiplier の定義自体は planPricing.ts にある。stripeSync.ts の
 // re-export は本番コードのどこからも使われておらず(usageTracker.ts は直接 './planPricing'
 // から import している)、テストの都合だけで生き残っていた「後方互換」名目の二重管理
@@ -972,5 +972,121 @@ describe('C-2: 累積set方式（複数回の実行をまたいだ整合性）',
     const second = mockCreateUsageRecord.mock.calls[1][1].quantity;
 
     expect(second).toBeGreaterThanOrEqual(first);
+  });
+});
+
+// PR-3(2026-08-25収益監査): Stripe送信バッチが起動直後の tick を持たず、
+// デプロイ頻度が高いR2Cでは実質一度も走らない状態になり得ていた
+// (billingHealthMonitor/billingReconciliationMonitorは起動直後に評価するのに
+// 送金する唯一のジョブだけが持っていなかった)。
+describe('StripeUsageReporter（定期実行ラッパー・PR-3）', () => {
+  const mockLogger = { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() } as any;
+  const OLD_ENV = process.env;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.useFakeTimers();
+    process.env = { ...OLD_ENV, STRIPE_SECRET_KEY: 'sk_test_dummy' };
+    stripeUsageReporter._resetForTest();
+  });
+
+  afterEach(() => {
+    stripeUsageReporter.stop();
+    stripeUsageReporter._resetForTest();
+    jest.useRealTimers();
+    process.env = OLD_ENV;
+  });
+
+  /** テナント0件の最小DB(スケジューラ自体の挙動だけを見る。集計ロジックは上の別descriveで検証済み)。 */
+  function makeEmptyDb() {
+    return { query: jest.fn().mockResolvedValue({ rows: [], rowCount: 0 }) };
+  }
+
+  it('start() を2回呼んでもタイマーは1本だけ登録される(禁止30: 多重起動防止)', () => {
+    const db = makeEmptyDb();
+    stripeUsageReporter.start(db as any, mockLogger);
+    stripeUsageReporter.start(db as any, mockLogger);
+    expect(jest.getTimerCount()).toBe(1);
+  });
+
+  it('起動直後に1回実行される(24時間を待たない)', async () => {
+    const db = makeEmptyDb();
+    stripeUsageReporter.start(db as any, mockLogger);
+    await jest.advanceTimersByTimeAsync(0);
+    expect(db.query).toHaveBeenCalled();
+  });
+
+  it('前月分と当月分の2期間で reportUsageToStripe が呼ばれる(月末の取りこぼし対策)', async () => {
+    const db = makeEmptyDb();
+    stripeUsageReporter.start(db as any, mockLogger);
+    await jest.advanceTimersByTimeAsync(0);
+
+    const currentPeriod = getPeriodYyyyMm(new Date());
+    const now = new Date();
+    const previousPeriod = getPeriodYyyyMm(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1)));
+
+    const listTenantsCalls = db.query.mock.calls.filter(
+      ([sql]: [string]) => typeof sql === 'string' && sql.includes('SELECT DISTINCT tenant_id FROM stripe_subscriptions')
+    );
+    expect(listTenantsCalls).toHaveLength(2);
+    expect(currentPeriod).not.toBe(previousPeriod);
+  });
+
+  it('24時間ごとに再実行される', async () => {
+    const db = makeEmptyDb();
+    stripeUsageReporter.start(db as any, mockLogger);
+    await jest.advanceTimersByTimeAsync(0);
+    const callsAfterStart = db.query.mock.calls.length;
+
+    await jest.advanceTimersByTimeAsync(24 * 60 * 60 * 1000);
+    expect(db.query.mock.calls.length).toBeGreaterThan(callsAfterStart);
+  });
+
+  it('stop() 後はタイマーが残らない', () => {
+    const db = makeEmptyDb();
+    stripeUsageReporter.start(db as any, mockLogger);
+    stripeUsageReporter.stop();
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  it('DBクエリが例外を投げても評価ループごと落ちない(reportUsageToStripe自体の例外はrunが飲み込む)', async () => {
+    const db = { query: jest.fn().mockRejectedValue(new Error('connection terminated')) };
+    stripeUsageReporter.start(db as any, mockLogger);
+    await jest.advanceTimersByTimeAsync(0);
+    expect(mockLogger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ err: expect.any(Error) }),
+      '[stripeSync] reportUsageToStripe failed'
+    );
+  });
+
+  it('前のtickが完了する前に次の24hが来ても多重実行しない(isRunningガード)', async () => {
+    let releaseFirstQuery: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => { releaseFirstQuery = resolve; });
+    let queryCount = 0;
+    const db = {
+      query: jest.fn().mockImplementation(async () => {
+        queryCount++;
+        if (queryCount === 1) {
+          await gate; // 最初のクエリ(前月分のテナント一覧取得)を止めておく
+        }
+        return { rows: [], rowCount: 0 };
+      }),
+    };
+
+    stripeUsageReporter.start(db as any, mockLogger);
+    // 起動直後のtickが1つ目のクエリで止まっている状態までマイクロタスクを進める
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // 1つ目のtickがまだ完了していない状態で24時間分タイマーを進め、2回目のtickを発火させる
+    await jest.advanceTimersByTimeAsync(24 * 60 * 60 * 1000);
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      {},
+      '[stripeSync] previous run still in progress, skipping this tick'
+    );
+
+    // 1つ目のtickを完了させる(後片付け)
+    releaseFirstQuery!();
+    await jest.advanceTimersByTimeAsync(0);
   });
 });

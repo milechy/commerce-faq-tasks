@@ -118,4 +118,32 @@ describe("src/index.ts 配線の不変条件（ソース構造検査）", () => 
       expect(source).not.toMatch(/req\.query\.tenantId/);
     });
   });
+
+  // PR-3(2026-08-25収益監査): Stripe送信バッチが起動直後の tick を持たず、
+  // デプロイ頻度が高いR2Cでは実質一度も走らない状態になり得ていた
+  // (billingHealthMonitor/billingReconciliationMonitorは起動直後に評価するのに
+  // 送金する唯一のジョブだけが持っていなかった)。stripeUsageReporter.start()
+  // 経由の配線に戻さない(インライン setInterval を復活させない)ことを固定する。
+  describe("Stripe usage reporter の起動配線", () => {
+    it("stripeUsageReporter.start() 経由で登録されている", () => {
+      expect(source).toMatch(/stripeUsageReporter\.start\(\s*db\s*,\s*logger\s*\)/);
+    });
+
+    it("インラインの setInterval(直書きのStripe送信スケジューラ)が復活していない", () => {
+      // pipelineQueue の stuck-job監視等、index.ts に無関係な setInterval は他にも
+      // 存在するため全面禁止はしない。stripeUsageReporter.start() の呼び出し周辺
+      // (前後500文字)だけを見て、そこに reportUsageToStripe を直接包む
+      // setInterval が復活していないことを確認する。
+      const idx = firstIndexOf(/stripeUsageReporter\.start\(/);
+      const nearbyBlock = source.slice(Math.max(0, idx - 500), idx + 500);
+      expect(nearbyBlock).not.toMatch(/setInterval\(/);
+      expect(nearbyBlock).not.toMatch(/reportUsageToStripe/);
+    });
+
+    it("STRIPE_SECRET_KEY 未設定時に無言にならず警告ログを出す", () => {
+      const idx = firstIndexOf(/stripeUsageReporter\.start\(/);
+      const block = source.slice(Math.max(0, idx - 400), idx + 400);
+      expect(block).toMatch(/logger\.warn\(.*STRIPE_SECRET_KEY/s);
+    });
+  });
 });

@@ -56,7 +56,7 @@ import { createStripeWebhookHandler } from "./lib/billing/stripeWebhook";
 import { initUsageTracker } from "./lib/billing/usageTracker";
 import { initFlowLogger } from "./lib/analytics/flowLogger";
 import { resolveLearningConsentFromFeatures } from "./lib/hermesConsent";
-import { reportUsageToStripe } from "./lib/billing/stripeSync";
+import { stripeUsageReporter } from "./lib/billing/stripeSync";
 import { pipelineQueue } from "./lib/book-pipeline/pipelineQueue";
 import { supabaseAuthMiddleware } from "./admin/http/supabaseAuthMiddleware";
 import { superAdminMiddleware } from "./api/admin/tenants/superAdminMiddleware";
@@ -815,15 +815,16 @@ async function startServer() {
     });
   }
 
-  // Phase37 Step6: Stripe 日次使用量送信（24時間ごと）
+  // Phase37 Step6 → PR-3(2026-08-25収益監査): Stripe 日次使用量送信（24時間ごと）。
+  // 旧実装はインラインの setInterval のみで起動直後の tick が無く、24時間連続稼働
+  // して初めて1回目が走っていた(デプロイ頻度が高いR2Cでは実質一度も走らない状態に
+  // なり得た)。stripeUsageReporter.start() は起動直後の実行・多重起動防止・
+  // 前月分の併送を持つ(詳細: stripeSync.ts の StripeUsageReporter)。
   if (db && process.env.STRIPE_SECRET_KEY) {
-    const STRIPE_REPORT_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24h
-    setInterval(() => {
-      reportUsageToStripe(db, logger).catch((err) => {
-        logger.error({ err }, "[billingScheduler] reportUsageToStripe failed");
-      });
-    }, STRIPE_REPORT_INTERVAL_MS);
-    logger.info("[startup] Stripe usage reporter scheduled (24h interval)");
+    stripeUsageReporter.start(db, logger);
+    logger.info("[startup] Stripe usage reporter started (initial tick + 24h interval)");
+  } else if (db) {
+    logger.warn("[startup] STRIPE_SECRET_KEY is not set — Stripe usage reporter NOT started (billing will not be sent to Stripe)");
   }
 
   // 課金パイプラインの不変条件監視（staging が無いため、テストではなく本番の

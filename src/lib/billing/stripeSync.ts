@@ -298,6 +298,88 @@ export async function reportUsageToStripe(
   }
 }
 
+// ---------------------------------------------------------------------------
+// 定期実行ラッパー（PR-3・2026-08-25収益監査）。
+//
+// ★これまでの問題: 起動直後の tick が無かった★
+// billingHealthMonitor / billingReconciliationMonitor は setInterval 直後に
+// tick() を呼び「起動直後に1回評価」するが、Stripe送信バッチ(旧実装)は
+// setInterval だけで、プロセスが24時間連続で生き続けて初めて1回目が走っていた。
+// R2C はデプロイ頻度が高く（PM2再起動・デプロイが24時間以内に入るのが常態）、
+// 実運用では reportUsageToStripe が一度も走らないまま何日も経過し得る状態だった。
+//
+// ★もう1つの問題: 月末の取りこぼし★
+// getPeriodYyyyMm() は常に「当月」を返すため、月末の最終実行後に発生した利用は、
+// 月が変わった瞬間に「先月分」になり、以後どのtickも当月しか見ないため二度と
+// 送信されない。ここでは毎tickで「先月分」も併せて送る(冪等なので毎回送っても
+// 実害はない。billedQuantityが前回と同じなら idempotencyKey が一致してStripe API
+// 自体は呼ばれずスキップされる)。2ヶ月以上取りこぼした場合の検知は
+// billingHealthCheck.ts の stuckPendingRows(月をまたいだpending行)に委ねる
+// (このスケジューラ自身は無制限の遡り探索をしない)。
+// ---------------------------------------------------------------------------
+
+const REPORT_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24h
+
+class StripeUsageReporter {
+  private timer: NodeJS.Timeout | null = null;
+  // ★禁止30: 費用が発生する定期処理を多重起動しうる形で登録しない★
+  // setInterval の二重登録ガード(this.timer)に加えて、1回のtickが24h以内に
+  // 終わらなかった場合に次のtickと重ならないようにする(billingHealthMonitor /
+  // billingReconciliationMonitor にも無い、この処理特有のガード。
+  // reportUsageToStripe はテナント数分のStripe API呼び出し+リトライを含み、
+  // 実行時間が読みにくいため必要性が高い)。
+  private isRunning = false;
+
+  start(db: any, logger: pino.Logger): void {
+    if (this.timer) return; // 二重起動防止
+    const tick = () => {
+      void this.run(db, logger);
+    };
+    this.timer = setInterval(tick, REPORT_INTERVAL_MS);
+    tick(); // 起動直後に1回実行(次の24時間を待たない)
+  }
+
+  stop(): void {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+  }
+
+  /** テスト専用: 状態をリセットする(シングルトンのため isRunning がテスト間で残る)。 */
+  _resetForTest(): void {
+    this.isRunning = false;
+  }
+
+  private async run(db: any, logger: pino.Logger): Promise<void> {
+    if (this.isRunning) {
+      logger.warn({}, '[stripeSync] previous run still in progress, skipping this tick');
+      return;
+    }
+    this.isRunning = true;
+    try {
+      const now = new Date();
+      const currentPeriod = getPeriodYyyyMm(now);
+      // 月初のロールオーバーで year が変わっても Date.UTC は正しく繰り下がる
+      // (month=-1 は前年12月として正規化される)。
+      const previousMonthDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
+      const previousPeriod = getPeriodYyyyMm(previousMonthDate);
+
+      for (const periodYyyyMm of [previousPeriod, currentPeriod]) {
+        try {
+          await reportUsageToStripe(db, logger, { periodYyyyMm });
+        } catch (err) {
+          logger.error({ err, periodYyyyMm }, '[stripeSync] reportUsageToStripe failed');
+        }
+      }
+    } finally {
+      this.isRunning = false;
+    }
+  }
+}
+
+export const stripeUsageReporter = new StripeUsageReporter();
+
 export interface ExpectedBilling {
   totalRequests: number;
   totalCostCents: number;
