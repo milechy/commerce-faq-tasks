@@ -66,11 +66,9 @@ function makeApp(user: Record<string, unknown> | null) {
 
 const CLIENT_ADMIN = { app_metadata: { role: 'client_admin', tenant_id: 't1' } };
 
-const GAP_ROW = {
-  id: 123,
+const CLAIMED_GAP_ROW = {
   tenant_id: 't1',
   user_question: 'この商品は返品できますか',
-  recommendation_status: 'approved',
   detection_source: 'no_rag',
   frequency: 2,
 };
@@ -81,8 +79,10 @@ beforeEach(() => {
   installFetchSpy();
   process.env['ES_URL'] = 'http://es.test:9200';
   mockQuery.mockImplementation((sql: string) => {
-    if (/SELECT id, tenant_id, user_question, recommendation_status, detection_source, frequency\s+FROM knowledge_gaps/.test(sql)) {
-      return Promise.resolve({ rows: [GAP_ROW] });
+    // 2026-08-25是正(TOCTOU競合対策): approved→resolvedへの原子的なclaim UPDATE。
+    // 是正前のSELECTに代わって成功経路の入口になる。
+    if (/UPDATE knowledge_gaps\s+SET recommendation_status = 'resolved'/.test(sql)) {
+      return Promise.resolve({ rows: [CLAIMED_GAP_ROW] });
     }
     if (/INSERT INTO faq_docs/.test(sql)) {
       return Promise.resolve({ rows: [{ id: 999 }] });

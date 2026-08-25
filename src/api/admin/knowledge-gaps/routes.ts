@@ -166,27 +166,42 @@ export async function addKnowledgeFromGap(
 ): Promise<AddKnowledgeFromGapResult> {
   const pool = getPool();
 
-  const gapResult = await pool.query<{
-    id: number;
+  // 2026-08-25是正(壊れやすいポイント監査): 以前は「SELECTでapproved確認→INSERT→
+  // UPDATE resolved」の3ステップが1トランザクションでなく、承認済みギャップに対して
+  // ほぼ同時に2回呼ばれる(ダブルクリック・2タブ操作)と両方がSELECTでapprovedを
+  // 見てしまい、FAQが重複作成されるTOCTOU(check-then-act)競合があった。
+  // まずこのUPDATEで recommendation_status: 'approved' → 'resolved' への遷移を
+  // 原子的に「claim」し(Postgresの行ロックにより同時に1件しか成功しない)、
+  // 成功した1件だけがFAQ作成に進む。resolved_faq_id はFAQ作成後に別UPDATEで埋める
+  // (claimの時点ではまだ存在しないため)。
+  const tenantCondition = isSuperAdmin ? '' : ' AND tenant_id = $3';
+  const claimArgs: unknown[] = [gapId];
+  if (!isSuperAdmin) claimArgs.push(tenantId);
+  const claimResult = await pool.query<{
     tenant_id: string;
     user_question: string;
-    recommendation_status: string;
     detection_source: string | null;
     frequency: number | null;
   }>(
-    `SELECT id, tenant_id, user_question, recommendation_status, detection_source, frequency
-     FROM knowledge_gaps
-     WHERE id = $1`,
-    [gapId],
+    `UPDATE knowledge_gaps
+     SET recommendation_status = 'resolved'
+     WHERE id = $1 AND recommendation_status = 'approved'${tenantCondition}
+     RETURNING tenant_id, user_question, detection_source, frequency`,
+    claimArgs,
   );
 
-  if (gapResult.rows.length === 0) return { ok: false, reason: 'not_found' };
-  const gap = gapResult.rows[0]!;
-
-  // テナント検証: JWTのテナントとGapのテナントが一致すること（super_adminは免除）
-  if (!isSuperAdmin && gap.tenant_id !== tenantId) return { ok: false, reason: 'forbidden' };
-
-  if (gap.recommendation_status !== 'approved') return { ok: false, reason: 'not_approved' };
+  if (claimResult.rows.length === 0) {
+    // claimに失敗した理由を特定するため、失敗時のみ読み取り専用で状態を確認する
+    // (この分岐は書き込みを行わないため、ここでの競合は問題にならない)。
+    const probe = await pool.query<{ tenant_id: string; recommendation_status: string }>(
+      `SELECT tenant_id, recommendation_status FROM knowledge_gaps WHERE id = $1`,
+      [gapId],
+    );
+    if (probe.rows.length === 0) return { ok: false, reason: 'not_found' };
+    if (!isSuperAdmin && probe.rows[0]!.tenant_id !== tenantId) return { ok: false, reason: 'forbidden' };
+    return { ok: false, reason: 'not_approved' };
+  }
+  const gap = claimResult.rows[0]!;
 
   // faq_docs に INSERT
   const faqResult = await pool.query<{ id: number }>(
@@ -212,11 +227,11 @@ export async function addKnowledgeFromGap(
   // を引き継ぐ必要はない(既定 false で正しい)
   upsertToEsAsync(gap.tenant_id, faqDocId, gap.user_question, answerText, true);
 
-  // Gap のステータスを resolved に更新
+  // status と resolved_faq_id を確定させる(recommendation_statusは既にclaim時に
+  // 'resolved'へ遷移済み)。
   await pool.query(
     `UPDATE knowledge_gaps
      SET status = 'resolved',
-         recommendation_status = 'resolved',
          resolved_faq_id = $1
      WHERE id = $2`,
     [faqDocId, gapId],

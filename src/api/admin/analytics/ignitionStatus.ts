@@ -17,6 +17,7 @@
 // 「どこを変えれば切り替わるか」は configKey で明示する(運用者にはこれが必要な情報)。
 
 import type { Pool } from "pg";
+import { logger } from "../../../lib/logger";
 import {
   isLearnedMemoryWriteEnabled,
   isLearnedMemoryReadEnabled,
@@ -312,12 +313,24 @@ export async function computeSeriesGates(
      LIMIT $4`,
     [intersectionTenantIds, threshold, SERIES_GATE_LOOKBACK, CONVERTING_OUTCOME_SAMPLE_LIMIT],
   );
+  // hasConvertingOutcome は1件ごとにDB問い合わせを伴う(内部でgetNonConvertingOutcomesも
+  // 呼ぶ)。1件の例外(接続エラー等)で /measurement-health エンドポイント全体が
+  // 500になるのを避けるため、失敗した行は分母からも除外する(母数を偽らない。禁止34)。
   let convertingCount = 0;
+  let convertingEvaluated = 0;
   for (const row of candidatesResult.rows) {
-    if (await deps.hasConvertingOutcome(row.tenant_id, row.session_id)) convertingCount++;
+    try {
+      if (await deps.hasConvertingOutcome(row.tenant_id, row.session_id)) convertingCount++;
+      convertingEvaluated++;
+    } catch (err) {
+      logger.warn(
+        { err, tenantId: row.tenant_id, sessionId: row.session_id },
+        "[ignitionStatus] hasConvertingOutcome failed for one candidate; excluding from gate",
+      );
+    }
   }
-  const convertingOfTotal = candidatesResult.rows.length;
-  const capped = convertingOfTotal === CONVERTING_OUTCOME_SAMPLE_LIMIT;
+  const convertingOfTotal = convertingEvaluated;
+  const capped = candidatesResult.rows.length === CONVERTING_OUTCOME_SAMPLE_LIMIT;
 
   return [
     {
