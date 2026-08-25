@@ -840,7 +840,10 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
         // marginOverrideを省略しても同じ結果になるが、意図を明示するため残す）。
         // premiumGenerationRoutes.tsのように「金額を倍率として渡す」誤用ではない。
         trackUsage({
-          tenantId: tenantId ?? 'unknown',
+          // GID 1217808323836843: super_admin はJWTにtenant_idを持たずtenantIdが空文字
+          // になりうる。adoptVoiceForConfigが対象configから確定させた実tenant_idを使う
+          // （configの所有権チェックと同一トランザクションで既に解決済み）。
+          tenantId: outcome.tenantId,
           requestId: (req as any).requestId ?? `vc-${id}-${Date.now()}`,
           model: 'fish-audio-s2-pro',
           inputTokens: 0,
@@ -925,7 +928,10 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
         }
 
         trackUsage({
-          tenantId: tenantId ?? 'unknown',
+          // GID 1217808323836843: super_admin はJWTにtenant_idを持たずtenantIdが空文字
+          // になりうる。adoptVoiceForConfigが対象configから確定させた実tenant_idを使う
+          // （configの所有権チェックと同一トランザクションで既に解決済み）。
+          tenantId: outcome.tenantId,
           requestId: (req as any).requestId ?? `adv-${id}-${Date.now()}`,
           model: 'fish-audio-s2-pro',
           inputTokens: 0,

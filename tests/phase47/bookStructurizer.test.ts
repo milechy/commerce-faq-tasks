@@ -207,9 +207,11 @@ describe('structurizeBook', () => {
 
     expect(mockCallGemini).toHaveBeenCalledWith(
       expect.stringContaining('単一のテスト段落です。'),
+      expect.objectContaining({ tenantId: 'tenant-a', billable: false }),
     );
     expect(mockCallGemini).not.toHaveBeenCalledWith(
       expect.stringContaining('{{CHUNK_TEXT}}'),
+      expect.anything(),
     );
   });
 });

@@ -39,7 +39,10 @@ export async function searchKnowledgeForSuggestion(
   if (!pool) return { results: [] };
 
   try {
-    const embedding = await embedText(query);
+    // GID 1217808323836843: tenantId をスコープに持ちながら embedText に渡し忘れていた
+    // ため、この関数を経由する全呼び出し元（tuning/Judge/gap/AIアシスタント）の埋め込み
+    // コストが tenant_id='unknown' として計上され続けていた。実 tenantId を明示的に渡す。
+    const embedding = await embedText(query, { tenantId });
     const embeddingLiteral = `[${embedding.join(',')}]`;
 
     const result = await pool.query(

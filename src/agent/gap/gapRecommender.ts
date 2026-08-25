@@ -100,7 +100,9 @@ ${crossTenantSection ? `\n${crossTenantSection}\n` : ''}${researchSection}
 
   let raw: string;
   try {
-    raw = await callGeminiJudge(prompt);
+    // GID 1217808323836843: tenantId をスコープに持ちながら渡し忘れており、
+    // trackUsage が tenant_id='unknown' で計上され続けていた。
+    raw = await callGeminiJudge(prompt, { tenantId, billable: false });
   } catch (err) {
     logger.warn({ err, tenantId }, 'gapRecommender: Gemini call failed');
     return [];

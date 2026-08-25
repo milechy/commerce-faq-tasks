@@ -90,7 +90,7 @@ export interface AdoptVoiceForConfigParams {
 export type AdoptVoiceLogEventPrefix = "voice_clone" | "adopt_designed_voice";
 
 export type AdoptVoiceForConfigResult =
-  | { ok: true; voiceId: string }
+  | { ok: true; voiceId: string; tenantId: string }
   | { ok: false; status: 404 | 409 | 502; error: string };
 
 /**
@@ -119,7 +119,7 @@ export async function adoptVoiceForConfig(
     await client.query("BEGIN");
     await client.query("SET LOCAL lock_timeout = '3s'");
 
-    let checkQuery = "SELECT id FROM avatar_configs WHERE id = $1";
+    let checkQuery = "SELECT id, tenant_id FROM avatar_configs WHERE id = $1";
     const checkValues: unknown[] = [params.configId];
     if (!params.isSuperAdmin) {
       checkQuery += " AND tenant_id = $2";
@@ -131,6 +131,12 @@ export async function adoptVoiceForConfig(
       await client.query("ROLLBACK");
       return { ok: false, status: 404, error: "設定が見つからないかアクセス権限がありません" };
     }
+
+    // GID 1217808323836843: super_admin は JWT に tenant_id を持たず params.tenantId が
+    // 空文字になりうる。この時点で対象configの真のtenant_idが確定しているため、
+    // 計上（trackUsage）にはこちらを使い、tenant_id='unknown' 化を防ぐ。
+    const resolvedTenantId: string =
+      (existing.rows[0]?.tenant_id as string | undefined) || params.tenantId;
 
     let voiceId: string;
     try {
@@ -172,7 +178,7 @@ export async function adoptVoiceForConfig(
     await client.query(updateQuery, updateValues);
 
     await client.query("COMMIT");
-    return { ok: true, voiceId };
+    return { ok: true, voiceId, tenantId: resolvedTenantId };
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     // ロックタイムアウト = 同時に別の登録が進行中。二重にFishへ課金しないよう409で確定させる。

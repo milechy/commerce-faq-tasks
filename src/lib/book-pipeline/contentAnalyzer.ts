@@ -75,7 +75,8 @@ const FALLBACK: ContentAnalysis = {
  */
 export async function analyzeContentType(
   pages: { pageNumber: number; text: string }[],
-  title: string
+  title: string,
+  tenantId?: string
 ): Promise<ContentAnalysis> {
   // 最初の3ページの先頭200文字ずつ（最大600文字）
   const sampleText = pages
@@ -108,7 +109,10 @@ ${sampleText}
 - other: 分類不能`;
 
   try {
-    const response = await callGeminiJudge(prompt);
+    // GID 1217808323836843: tenantId 未指定時は呼び出し元（book_uploads の書籍）が
+    // 帰属不明のため trackUsage 側で billable=false・tenant_id='unknown' として記録される。
+    // pipeline.ts から実 tenantId を渡せる場合はそちらを優先する。
+    const response = await callGeminiJudge(prompt, tenantId ? { tenantId, billable: false } : undefined);
     const cleaned = response
       .replace(/```json\s*/g, "")
       .replace(/```\s*/g, "")

@@ -27,6 +27,8 @@ jest.mock("./contentAnalyzer", () => ({
   }),
   KNOWN_SCHEMAS: {},
 }));
+import { analyzeContentType } from "./contentAnalyzer";
+const mockAnalyzeContentType = analyzeContentType as jest.MockedFunction<typeof analyzeContentType>;
 
 // Groq クライアントをモック
 jest.mock("../../agent/llm/groqClient", () => ({
@@ -224,6 +226,15 @@ describe("runBookPipeline", () => {
     expect(statusUpdates).toContain("processing");
     expect(statusUpdates).toContain("chunked");
     expect(statusUpdates).toContain("embedded");
+
+    // GID 1217808323836843: book.tenant_id をスコープに持ちながら analyzeContentType に
+    // 渡し忘れており、callGeminiJudge → trackUsage が tenant_id='unknown' で計上され
+    // 続けていた。book_uploads から取得した実 tenant_id が伝わることを確認する。
+    expect(mockAnalyzeContentType).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      "tenant-a",
+    );
   });
 
   test("10: book_uploads が見つからない場合はエラーをスローする", async () => {
