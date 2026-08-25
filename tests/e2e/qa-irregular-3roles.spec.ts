@@ -160,19 +160,26 @@ test.describe('Irregular — Role B (client_admin RBAC/tenant boundary)', () => 
   });
 
   // Asana 1217080725079367: 旧実装は select 要素の全件カウントが0であることだけを
-  // 見ていたが、/admin/knowledge/books はリダイレクトスタブ(books.tsx、13行)のため
-  // role=anonymous(JWT修正前)だと画面自体が退化描画され select が無いだけでも
+  // 見ていたが、/admin/knowledge/books はリダイレクトスタブ(books.tsx、13行、Phase52e)
+  // のため role=anonymous(JWT修正前)だと画面自体が退化描画され select が無いだけでも
   // このテストは通っていた。つまり越境を一度も検証できていなかった。
   // 画面が実際に描画されたことを先に確認したうえで、描画された select の選択肢に
   // 自テナント(carnation)以外のテナントIDが含まれないことを検証する。
+  //
+  // GID 1217808307917235(2026-08-25): books.tsx(BooksPage)は書籍一覧が
+  // /admin/knowledge/global の「📚 アップロード済み書籍」に統合済みで不要と判断し削除。
+  // /admin/knowledge/books 自体は App.tsx 側の明示的な <Navigate to="/admin/knowledge" replace />
+  // に置き換わった(専用ルートを消すと直後の /admin/knowledge/:tenantId が "books" を
+  // tenantId として拾ってしまうため、この1本だけは残している)。最終着地(ナレッジ画面が
+  // 描画され、他テナントが選択肢に混入しないこと)は従来どおり検証する。
   test('B-IRR-3: 判明済みギャップ /admin/knowledge/books へ直URL到達しても他テナント選択UIは出ない', async ({ page }) => {
     const { res } = await gotoAdmin(page, '/admin/knowledge/books');
     // RequireAuth のため到達自体は許容され得る。実害＝クロステナント選択/データが出ないことを確認。
     test.info().annotations.push({ type: 'final-url', description: page.url() });
     test.info().annotations.push({ type: 'status', description: String(res?.status()) });
 
-    // books.tsx は /admin/knowledge へリダイレクトするだけのスタブ。画面が実際に
-    // 描画されたことをまず確認する(描画されていなければ select が0件でも無意味)。
+    // /admin/knowledge/books は /admin/knowledge へリダイレクトするだけ(App.tsx)。画面が
+    // 実際に描画されたことをまず確認する(描画されていなければ select が0件でも無意味)。
     await expect(page.getByText('AIの知識データ').first()).toBeVisible({ timeout: 10000 });
 
     const optionValues = await page.locator('select option').evaluateAll((opts) =>

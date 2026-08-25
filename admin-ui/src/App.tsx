@@ -30,7 +30,6 @@ import AvatarListPage from "./pages/admin/avatar/index";
 import AvatarStudioPage from "./pages/admin/avatar/studio";
 import AvatarWizardPage from "./pages/admin/avatar/wizard";
 import AvatarDefaultsPage from "./pages/admin/avatar-defaults/index";
-import BooksPage from "./pages/admin/knowledge/books";
 import KnowledgeAnalyticsPage from "./pages/admin/knowledge/analytics";
 import AnalyticsDashboardPage from "./pages/admin/analytics/index";
 import CvStatusPage from "./pages/admin/analytics/cv-status";
@@ -102,6 +101,101 @@ function ConfigErrorScreen() {
 if (typeof window !== "undefined") {
   (window as unknown as Record<string, string>).__r2cAdminBuildTag = "20260717-1";
 }
+
+export const ADMIN_ROUTES = (
+  <>
+
+        {/* ルートは管理ダッシュボードへリダイレクト */}
+        <Route path="/" element={<Navigate to="/admin" replace />} />
+
+        {/* 管理ダッシュボード */}
+        <Route path="/admin" element={<RequireAuth><AdminDashboard /></RequireAuth>} />
+
+        {/* ナレッジ管理 — テナント選択 */}
+        <Route path="/admin/knowledge" element={<RequireAuth><KnowledgeIndexPage /></RequireAuth>} />
+
+        {/* ナレッジ管理 — グローバル (super_admin 専用) */}
+        <Route path="/admin/knowledge/global" element={<SuperAdminRoute><TenantKnowledgePage /></SuperAdminRoute>} />
+
+        {/* ナレッジ管理 — テナント別 */}
+        <Route path="/admin/knowledge/:tenantId" element={<RequireAuth><TenantKnowledgePage /></RequireAuth>} />
+
+        {/* GID 1217808307917235: 書籍管理は Phase52e で /admin/knowledge (グローバル) の
+            「📚 アップロード済み書籍」(BookUploadsSection)に統合済み。専用の BooksPage は削除。
+            ただしこのパス自体を未定義のままにすると直上の /admin/knowledge/:tenantId が
+            "books" を tenantId として拾ってしまい、存在しないテナント "books" の空知識画面が
+            描画される事故になる(/admin/knowledge/global に専用ルートがあるのと同じ理由)ため、
+            明示的なリダイレクトとして残す。 */}
+        <Route path="/admin/knowledge/books" element={<Navigate to="/admin/knowledge" replace />} />
+
+        {/* KPI監視ダッシュボード */}
+        <Route path="/admin/monitoring" element={<RequireAuth><MonitoringPage /></RequireAuth>} />
+
+        {/* テナント管理 — super_admin 専用 */}
+        <Route path="/admin/tenants" element={<SuperAdminRoute><TenantsPage /></SuperAdminRoute>} />
+        <Route path="/admin/tenants/:id" element={<SuperAdminRoute><TenantDetailPage /></SuperAdminRoute>} />
+
+        {/* 請求・使用量 — super_admin 専用 */}
+        <Route path="/admin/billing" element={<AdminRoute><BillingPage /></AdminRoute>} />
+
+        {/* チャットテスト */}
+        <Route path="/admin/chat-test" element={<RequireAuth><ChatTestPage /></RequireAuth>} />
+
+        {/* 会話履歴 */}
+        <Route path="/admin/chat-history" element={<RequireAuth><ChatHistoryPage /></RequireAuth>} />
+        <Route path="/admin/chat-history/:sessionId" element={<RequireAuth><ChatHistorySessionPage /></RequireAuth>} />
+
+        {/* GID 1216275508391900: 有人チャットへのシームレスエスカレーション */}
+        <Route path="/admin/escalations" element={<RequireAuth><EscalationsPage /></RequireAuth>} />
+        <Route path="/admin/escalations/:sessionId" element={<RequireAuth><EscalationDetailPage /></RequireAuth>} />
+
+        {/* チューニングルール */}
+        <Route path="/admin/tuning" element={<RequireAuth><TuningPage /></RequireAuth>} />
+
+        {/* GID 1216275179995736: 未回答質問からのワンクリック改善導線 */}
+        <Route path="/admin/knowledge-gaps" element={<RequireAuth><KnowledgeGapsPage /></RequireAuth>} />
+
+        {/* フィードバック — Super Admin専用 */}
+        <Route path="/admin/feedback" element={<SuperAdminRoute><FeedbackPage /></SuperAdminRoute>} />
+
+        {/* アバターカスタマイズスタジオ */}
+        <Route path="/admin/avatar" element={<RequireAuth><AvatarListPage /></RequireAuth>} />
+        <Route path="/admin/avatar/wizard" element={<RequireAuth><AvatarWizardPage /></RequireAuth>} />
+        <Route path="/admin/avatar/studio" element={<RequireAuth><AvatarStudioPage /></RequireAuth>} />
+        <Route path="/admin/avatar/studio/:id" element={<RequireAuth><AvatarStudioPage /></RequireAuth>} />
+
+        {/* デフォルトアバター管理 — Super Admin専用 */}
+        <Route path="/admin/avatar-defaults" element={<SuperAdminRoute><AvatarDefaultsPage /></SuperAdminRoute>} />
+
+        {/* AI学習・貢献分析 — super_admin 専用（OpenClaw 横断分析） */}
+        <Route path="/admin/knowledge-analytics" element={<SuperAdminRoute><KnowledgeAnalyticsPage /></SuperAdminRoute>} />
+
+        {/* Phase45: AI評価 — 廃止: /admin/chat-history にリダイレクト */}
+        <Route path="/admin/evaluations" element={<Navigate to="/admin/chat-history" replace />} />
+        <Route path="/admin/evaluations/:id" element={<Navigate to="/admin/chat-history" replace />} />
+
+        {/* Phase50: 会話分析ダッシュボード */}
+        <Route path="/admin/analytics" element={<RequireAuth><AnalyticsDashboardPage /></RequireAuth>} />
+        {/* Phase65-3: CV発火状況 — super_admin 専用 */}
+        <Route path="/admin/analytics/cv-status" element={<SuperAdminRoute><CvStatusPage /></SuperAdminRoute>} />
+        {/* Phase72-C: フロー遷移分析 — super_admin 専用 */}
+        <Route path="/admin/analytics/flow" element={<SuperAdminRoute><FlowAnalyticsPage /></SuperAdminRoute>} />
+        <Route path="/admin/engagement" element={<RequireAuth><EngagementPage /></RequireAuth>} />
+
+        {/* Phase58: コンバージョン最適化ダッシュボード */}
+        <Route path="/admin/conversion" element={<RequireAuth><ConversionDashboardPage /></RequireAuth>} />
+
+        {/* Phase63: オプション代行管理 — Super Admin専用 */}
+        <Route path="/admin/options" element={<SuperAdminRoute><OptionManagementPage /></SuperAdminRoute>} />
+
+        {/* 旧 /faqs → /admin にリダイレクト */}
+        <Route path="/faqs" element={<Navigate to="/admin" replace />} />
+        <Route path="/faqs/*" element={<Navigate to="/admin" replace />} />
+
+        {/* それ以外のパスは管理ダッシュボードへ */}
+        <Route path="*" element={<Navigate to="/admin" replace />} />
+  </>
+);
 
 function AppInner() {
   const {
@@ -192,93 +286,7 @@ function AppInner() {
         {previewMode && <div style={{ height: PREVIEW_SPACER_HEIGHT }} />}
         {isAdmin && <MobileHeader />}
         {isAdmin && <MobileBottomBar />}
-        <Routes>
-
-        {/* ルートは管理ダッシュボードへリダイレクト */}
-        <Route path="/" element={<Navigate to="/admin" replace />} />
-
-        {/* 管理ダッシュボード */}
-        <Route path="/admin" element={<RequireAuth><AdminDashboard /></RequireAuth>} />
-
-        {/* ナレッジ管理 — テナント選択 */}
-        <Route path="/admin/knowledge" element={<RequireAuth><KnowledgeIndexPage /></RequireAuth>} />
-
-        {/* ナレッジ管理 — グローバル (super_admin 専用) */}
-        <Route path="/admin/knowledge/global" element={<SuperAdminRoute><TenantKnowledgePage /></SuperAdminRoute>} />
-
-        {/* ナレッジ管理 — テナント別 */}
-        <Route path="/admin/knowledge/:tenantId" element={<RequireAuth><TenantKnowledgePage /></RequireAuth>} />
-
-        {/* KPI監視ダッシュボード */}
-        <Route path="/admin/monitoring" element={<RequireAuth><MonitoringPage /></RequireAuth>} />
-
-        {/* テナント管理 — super_admin 専用 */}
-        <Route path="/admin/tenants" element={<SuperAdminRoute><TenantsPage /></SuperAdminRoute>} />
-        <Route path="/admin/tenants/:id" element={<SuperAdminRoute><TenantDetailPage /></SuperAdminRoute>} />
-
-        {/* 請求・使用量 — super_admin 専用 */}
-        <Route path="/admin/billing" element={<AdminRoute><BillingPage /></AdminRoute>} />
-
-        {/* チャットテスト */}
-        <Route path="/admin/chat-test" element={<RequireAuth><ChatTestPage /></RequireAuth>} />
-
-        {/* 会話履歴 */}
-        <Route path="/admin/chat-history" element={<RequireAuth><ChatHistoryPage /></RequireAuth>} />
-        <Route path="/admin/chat-history/:sessionId" element={<RequireAuth><ChatHistorySessionPage /></RequireAuth>} />
-
-        {/* GID 1216275508391900: 有人チャットへのシームレスエスカレーション */}
-        <Route path="/admin/escalations" element={<RequireAuth><EscalationsPage /></RequireAuth>} />
-        <Route path="/admin/escalations/:sessionId" element={<RequireAuth><EscalationDetailPage /></RequireAuth>} />
-
-        {/* チューニングルール */}
-        <Route path="/admin/tuning" element={<RequireAuth><TuningPage /></RequireAuth>} />
-
-        {/* GID 1216275179995736: 未回答質問からのワンクリック改善導線 */}
-        <Route path="/admin/knowledge-gaps" element={<RequireAuth><KnowledgeGapsPage /></RequireAuth>} />
-
-        {/* フィードバック — Super Admin専用 */}
-        <Route path="/admin/feedback" element={<SuperAdminRoute><FeedbackPage /></SuperAdminRoute>} />
-
-        {/* アバターカスタマイズスタジオ */}
-        <Route path="/admin/avatar" element={<RequireAuth><AvatarListPage /></RequireAuth>} />
-        <Route path="/admin/avatar/wizard" element={<RequireAuth><AvatarWizardPage /></RequireAuth>} />
-        <Route path="/admin/avatar/studio" element={<RequireAuth><AvatarStudioPage /></RequireAuth>} />
-        <Route path="/admin/avatar/studio/:id" element={<RequireAuth><AvatarStudioPage /></RequireAuth>} />
-
-        {/* デフォルトアバター管理 — Super Admin専用 */}
-        <Route path="/admin/avatar-defaults" element={<SuperAdminRoute><AvatarDefaultsPage /></SuperAdminRoute>} />
-
-        {/* 書籍管理 */}
-        <Route path="/admin/knowledge/books" element={<RequireAuth><BooksPage /></RequireAuth>} />
-
-        {/* AI学習・貢献分析 — super_admin 専用（OpenClaw 横断分析） */}
-        <Route path="/admin/knowledge-analytics" element={<SuperAdminRoute><KnowledgeAnalyticsPage /></SuperAdminRoute>} />
-
-        {/* Phase45: AI評価 — 廃止: /admin/chat-history にリダイレクト */}
-        <Route path="/admin/evaluations" element={<Navigate to="/admin/chat-history" replace />} />
-        <Route path="/admin/evaluations/:id" element={<Navigate to="/admin/chat-history" replace />} />
-
-        {/* Phase50: 会話分析ダッシュボード */}
-        <Route path="/admin/analytics" element={<RequireAuth><AnalyticsDashboardPage /></RequireAuth>} />
-        {/* Phase65-3: CV発火状況 — super_admin 専用 */}
-        <Route path="/admin/analytics/cv-status" element={<SuperAdminRoute><CvStatusPage /></SuperAdminRoute>} />
-        {/* Phase72-C: フロー遷移分析 — super_admin 専用 */}
-        <Route path="/admin/analytics/flow" element={<SuperAdminRoute><FlowAnalyticsPage /></SuperAdminRoute>} />
-        <Route path="/admin/engagement" element={<RequireAuth><EngagementPage /></RequireAuth>} />
-
-        {/* Phase58: コンバージョン最適化ダッシュボード */}
-        <Route path="/admin/conversion" element={<RequireAuth><ConversionDashboardPage /></RequireAuth>} />
-
-        {/* Phase63: オプション代行管理 — Super Admin専用 */}
-        <Route path="/admin/options" element={<SuperAdminRoute><OptionManagementPage /></SuperAdminRoute>} />
-
-        {/* 旧 /faqs → /admin にリダイレクト */}
-        <Route path="/faqs" element={<Navigate to="/admin" replace />} />
-        <Route path="/faqs/*" element={<Navigate to="/admin" replace />} />
-
-        {/* それ以外のパスは管理ダッシュボードへ */}
-        <Route path="*" element={<Navigate to="/admin" replace />} />
-      </Routes>
+        <Routes>{ADMIN_ROUTES}</Routes>
       {/* R2C AIアシスタント（✨）に一本化 — 旧サポートAI(AdminAIChat「?」)のFABは撤去 */}
       {/* super_admin/client_admin 共通、chat-testページを除く */}
       {showAIChat && (
