@@ -119,7 +119,9 @@ export async function runBookPipeline(
     // 5.5. コンテンツ種類判定（best-effort: 失敗してもパイプラインを止めない）
     let contentSchema: import("./contentAnalyzer").SchemaField[] | undefined;
     try {
-      const analysis = await analyzeContentType(pages, book.title ?? "");
+      // GID 1217808323836843: book.tenant_id をスコープに持ちながら渡し忘れており、
+      // trackUsage が tenant_id='unknown' で計上され続けていた。
+      const analysis = await analyzeContentType(pages, book.title ?? "", book.tenant_id);
       logger.info(
         "[pipeline] content analysis: type=%s confidence=%s",
         analysis.content_type,

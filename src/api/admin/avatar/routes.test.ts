@@ -396,7 +396,7 @@ function successTxQueries(opts: { checkRow: { id: string }; updateRowCount?: num
   return async (sql: string) => {
     call += 1;
     if (sql === "BEGIN" || sql === "SET LOCAL lock_timeout = '3s'" || sql === "COMMIT") return { rows: [] };
-    if (sql.startsWith("SELECT id FROM avatar_configs")) return { rows: [opts.checkRow] };
+    if (sql.startsWith("SELECT id, tenant_id FROM avatar_configs")) return { rows: [opts.checkRow] };
     if (sql.startsWith("UPDATE avatar_configs SET voice_id")) {
       return { rows: [], rowCount: opts.updateRowCount ?? 1 };
     }
@@ -563,7 +563,7 @@ describe("POST /v1/admin/avatar/configs/:id/voice-clone", () => {
   it("テナント越境: 他テナント configId → 404、Fish Audio に到達しない・ROLLBACKする", async () => {
     const { db, clientQuery } = makeTxDb(async (sql) => {
       if (sql === "BEGIN" || sql === "SET LOCAL lock_timeout = '3s'" || sql === "ROLLBACK") return { rows: [] };
-      if (sql.startsWith("SELECT id FROM avatar_configs")) return { rows: [] }; // 所有チェック 0件
+      if (sql.startsWith("SELECT id, tenant_id FROM avatar_configs")) return { rows: [] }; // 所有チェック 0件
       throw new Error(`unexpected query: ${sql}`);
     });
 
@@ -644,7 +644,7 @@ describe("POST /v1/admin/avatar/configs/:id/voice-clone", () => {
 
     const { db, clientQuery } = makeTxDb(async (sql) => {
       if (sql === "BEGIN" || sql === "SET LOCAL lock_timeout = '3s'" || sql === "ROLLBACK") return { rows: [] };
-      if (sql.startsWith("SELECT id FROM avatar_configs")) return { rows: [{ id: "config-1" }] };
+      if (sql.startsWith("SELECT id, tenant_id FROM avatar_configs")) return { rows: [{ id: "config-1" }] };
       throw new Error(`unexpected query: ${sql}`);
     });
 
@@ -686,7 +686,7 @@ describe("POST /v1/admin/avatar/configs/:id/voice-clone", () => {
   it("イレギュラー: 同時に別リクエストが同じconfigをロック中(lock timeout)は409で確定し、Fishを呼ばない", async () => {
     const { db, clientQuery } = makeTxDb(async (sql) => {
       if (sql === "BEGIN" || sql === "SET LOCAL lock_timeout = '3s'") return { rows: [] };
-      if (sql.startsWith("SELECT id FROM avatar_configs")) {
+      if (sql.startsWith("SELECT id, tenant_id FROM avatar_configs")) {
         // pg が lock_timeout 超過時に投げるエラーを再現
         const err = new Error('canceling statement due to lock timeout');
         throw err;
@@ -766,7 +766,7 @@ describe("POST /v1/admin/avatar/configs/:id/adopt-designed-voice", () => {
   it("テナント越境: 他テナント configId → 404、Fish Audioに到達しない", async () => {
     const { db } = makeTxDb(async (sql) => {
       if (sql === "BEGIN" || sql === "SET LOCAL lock_timeout = '3s'" || sql === "ROLLBACK") return { rows: [] };
-      if (sql.startsWith("SELECT id FROM avatar_configs")) return { rows: [] };
+      if (sql.startsWith("SELECT id, tenant_id FROM avatar_configs")) return { rows: [] };
       throw new Error(`unexpected query: ${sql}`);
     });
 
@@ -824,7 +824,7 @@ describe("POST /v1/admin/avatar/configs/:id/adopt-designed-voice", () => {
     } as any);
     const { db, clientQuery } = makeTxDb(async (sql) => {
       if (sql === "BEGIN" || sql === "SET LOCAL lock_timeout = '3s'" || sql === "ROLLBACK") return { rows: [] };
-      if (sql.startsWith("SELECT id FROM avatar_configs")) return { rows: [{ id: "config-1" }] };
+      if (sql.startsWith("SELECT id, tenant_id FROM avatar_configs")) return { rows: [{ id: "config-1" }] };
       throw new Error(`unexpected query: ${sql}`);
     });
 
@@ -855,7 +855,7 @@ describe("POST /v1/admin/avatar/configs/:id/adopt-designed-voice", () => {
   it("イレギュラー: 同時に別リクエストが同じconfigをロック中(lock timeout)は409で確定し、Fishを呼ばない", async () => {
     const { db } = makeTxDb(async (sql) => {
       if (sql === "BEGIN" || sql === "SET LOCAL lock_timeout = '3s'") return { rows: [] };
-      if (sql.startsWith("SELECT id FROM avatar_configs")) {
+      if (sql.startsWith("SELECT id, tenant_id FROM avatar_configs")) {
         throw new Error('canceling statement due to lock timeout');
       }
       if (sql === "ROLLBACK") return { rows: [] };

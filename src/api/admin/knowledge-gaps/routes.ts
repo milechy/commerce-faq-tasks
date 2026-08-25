@@ -529,7 +529,9 @@ ${relatedText}
 
 回答のみを出力してください。前置きや説明は不要です。`;
 
-        const suggestedAnswer = await callGeminiJudge(prompt);
+        // GID 1217808323836843: gap.tenant_id をスコープに持ちながら渡し忘れており、
+        // trackUsage が tenant_id='unknown' で計上され続けていた。
+        const suggestedAnswer = await callGeminiJudge(prompt, { tenantId: gap.tenant_id, billable: false });
 
         return res.json({
           suggested_answer: suggestedAnswer.trim().slice(0, 500),

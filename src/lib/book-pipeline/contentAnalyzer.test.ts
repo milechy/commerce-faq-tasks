@@ -130,4 +130,39 @@ describe("analyzeContentType", () => {
     const result = await analyzeContentType([], "空のPDF");
     expect(result.content_type).toBe("general_report");
   });
+
+  // GID 1217808323836843: tenantId が呼び出し元から渡されない場合、trackUsage が
+  // tenant_id='unknown' で計上され続けていた（/admin/billing 未解決利用の一因）。
+  test("9: tenantId を渡すと callGeminiJudge に実 tenantId が伝わる（billing unknown 化を防ぐ）", async () => {
+    mockCallGemini.mockResolvedValue(
+      JSON.stringify({
+        content_type: "psychology_book",
+        content_type_label: "心理学書籍",
+        confidence: 0.9,
+        reasoning: "テスト",
+      })
+    );
+
+    await analyzeContentType(SAMPLE_PAGES, "営業心理学入門", "carnation");
+
+    expect(mockCallGemini).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ tenantId: "carnation", billable: false }),
+    );
+  });
+
+  test("10: tenantId 省略時は usageContext を渡さない（呼び出し元が未確定の場合の既存挙動を維持）", async () => {
+    mockCallGemini.mockResolvedValue(
+      JSON.stringify({
+        content_type: "general_report",
+        content_type_label: "一般レポート",
+        confidence: 0.5,
+        reasoning: "テスト",
+      })
+    );
+
+    await analyzeContentType(SAMPLE_PAGES, "テスト");
+
+    expect(mockCallGemini).toHaveBeenCalledWith(expect.any(String), undefined);
+  });
 });

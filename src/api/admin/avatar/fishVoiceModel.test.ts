@@ -238,14 +238,14 @@ describe("adoptVoiceForConfig", () => {
   it("正常系: SELECT FOR UPDATE → Fish呼び出し → UPDATE → COMMITの順に実行し、コネクションを解放する", async () => {
     mockFetch.mockResolvedValueOnce({ ok: true, status: 201, json: async () => ({ _id: "fish-voice-1" }) });
     const { db, clientQuery, release } = makeTxDb(async (sql) => {
-      if (sql.startsWith("SELECT id FROM avatar_configs")) return { rows: [{ id: "config-1" }] };
+      if (sql.startsWith("SELECT id, tenant_id FROM avatar_configs")) return { rows: [{ id: "config-1", tenant_id: "tenant-a" }] };
       if (sql.startsWith("UPDATE avatar_configs")) return { rows: [], rowCount: 1 };
       return { rows: [] };
     });
 
     const result = await adoptVoiceForConfig({ ...baseParams, db });
 
-    expect(result).toEqual({ ok: true, voiceId: "fish-voice-1" });
+    expect(result).toEqual({ ok: true, voiceId: "fish-voice-1", tenantId: "tenant-a" });
     expect(clientQuery.mock.calls.map((c) => c[0])).toEqual([
       "BEGIN",
       "SET LOCAL lock_timeout = '3s'",
@@ -256,13 +256,36 @@ describe("adoptVoiceForConfig", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  // GID 1217808323836843: super_admin はJWTにtenant_idを持たずparams.tenantIdが
+  // 空文字になりうる。この場合でも対象configの実tenant_idを返し、trackUsageが
+  // tenant_id='unknown'で計上されないようにする。
+  it("super_admin かつ params.tenantId が空文字でも、config行から解決した実tenantIdを返す", async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 201, json: async () => ({ _id: "fish-voice-su" }) });
+    const { db } = makeTxDb(async (sql) => {
+      if (sql.startsWith("SELECT id, tenant_id FROM avatar_configs")) {
+        return { rows: [{ id: "config-1", tenant_id: "tenant-b" }] };
+      }
+      if (sql.startsWith("UPDATE avatar_configs")) return { rows: [], rowCount: 1 };
+      return { rows: [] };
+    });
+
+    const result = await adoptVoiceForConfig({
+      ...baseParams,
+      tenantId: "",
+      isSuperAdmin: true,
+      db,
+    });
+
+    expect(result).toEqual({ ok: true, voiceId: "fish-voice-su", tenantId: "tenant-b" });
+  });
+
   // GID: レビュー指摘 — Fish側の生成成功後にUPDATEが失敗すると、課金済みの永続モデルが
   // どこにも記録されず孤児化する。UPDATE試行前にvoiceIdをログすることを固定する。
   it("Fish呼び出し成功後、UPDATE実行前にvoiceIdをログする(UPDATE失敗時の孤児追跡用)", async () => {
     mockFetch.mockResolvedValueOnce({ ok: true, status: 201, json: async () => ({ _id: "fish-voice-2" }) });
     const infoSpy = jest.spyOn(logger, "info").mockImplementation(() => {});
     const { db } = makeTxDb(async (sql) => {
-      if (sql.startsWith("SELECT id FROM avatar_configs")) return { rows: [{ id: "config-1" }] };
+      if (sql.startsWith("SELECT id, tenant_id FROM avatar_configs")) return { rows: [{ id: "config-1", tenant_id: "tenant-a" }] };
       if (sql.startsWith("UPDATE avatar_configs")) return { rows: [], rowCount: 1 };
       return { rows: [] };
     });
@@ -282,7 +305,7 @@ describe("adoptVoiceForConfig", () => {
   it("UPDATEが例外を投げた場合、Fish側は既に成功しているが呼び出し元に例外を伝播しコネクションは解放する", async () => {
     mockFetch.mockResolvedValueOnce({ ok: true, status: 201, json: async () => ({ _id: "fish-voice-3" }) });
     const { db, release } = makeTxDb(async (sql) => {
-      if (sql.startsWith("SELECT id FROM avatar_configs")) return { rows: [{ id: "config-1" }] };
+      if (sql.startsWith("SELECT id, tenant_id FROM avatar_configs")) return { rows: [{ id: "config-1", tenant_id: "tenant-a" }] };
       if (sql.startsWith("UPDATE avatar_configs")) throw new Error("connection terminated unexpectedly");
       if (sql === "ROLLBACK") return { rows: [] };
       return { rows: [] };
@@ -297,7 +320,7 @@ describe("adoptVoiceForConfig", () => {
   it("Fish呼び出し失敗時もコネクションを解放する(接続リーク防止)", async () => {
     mockFetch.mockResolvedValueOnce({ ok: false, status: 500, text: async () => "error" });
     const { db, release } = makeTxDb(async (sql) => {
-      if (sql.startsWith("SELECT id FROM avatar_configs")) return { rows: [{ id: "config-1" }] };
+      if (sql.startsWith("SELECT id, tenant_id FROM avatar_configs")) return { rows: [{ id: "config-1", tenant_id: "tenant-a" }] };
       return { rows: [] };
     });
 
@@ -309,7 +332,7 @@ describe("adoptVoiceForConfig", () => {
 
   it("設定が見つからない場合、404を返しFishを一切呼ばない", async () => {
     const { db } = makeTxDb(async (sql) => {
-      if (sql.startsWith("SELECT id FROM avatar_configs")) return { rows: [] };
+      if (sql.startsWith("SELECT id, tenant_id FROM avatar_configs")) return { rows: [] };
       return { rows: [] };
     });
 
@@ -321,7 +344,7 @@ describe("adoptVoiceForConfig", () => {
 
   it("ロックタイムアウトは409を返し、logEventPrefixごとに正しい汎用メッセージにフォールバックする(adopt-designed-voice側)", async () => {
     const { db } = makeTxDb(async (sql) => {
-      if (sql.startsWith("SELECT id FROM avatar_configs")) throw new Error("canceling statement due to lock timeout");
+      if (sql.startsWith("SELECT id, tenant_id FROM avatar_configs")) throw new Error("canceling statement due to lock timeout");
       return { rows: [] };
     });
 
@@ -343,7 +366,7 @@ describe("adoptVoiceForConfig", () => {
   // ROLLBACK失敗のエラーが優先されてしまい、呼び出し元が500として扱ってしまう。
   it("二重障害: ROLLBACK自体が失敗しても、元のロックタイムアウト起因の409判定を優先する", async () => {
     const { db, release } = makeTxDb(async (sql) => {
-      if (sql.startsWith("SELECT id FROM avatar_configs")) throw new Error("canceling statement due to lock timeout");
+      if (sql.startsWith("SELECT id, tenant_id FROM avatar_configs")) throw new Error("canceling statement due to lock timeout");
       if (sql === "ROLLBACK") throw new Error("connection terminated unexpectedly");
       return { rows: [] };
     });
@@ -361,7 +384,7 @@ describe("adoptVoiceForConfig", () => {
 
   it("ロックタイムアウトでも予期しないDBエラー(接続断等)でもない場合は、呼び出し元に例外を投げる(既存の500ハンドリングに委ねる)", async () => {
     const { db, release } = makeTxDb(async (sql) => {
-      if (sql.startsWith("SELECT id FROM avatar_configs")) throw new Error("relation \"avatar_configs\" does not exist");
+      if (sql.startsWith("SELECT id, tenant_id FROM avatar_configs")) throw new Error("relation \"avatar_configs\" does not exist");
       if (sql === "ROLLBACK") return { rows: [] };
       return { rows: [] };
     });

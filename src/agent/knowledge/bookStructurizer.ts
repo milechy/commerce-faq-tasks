@@ -134,7 +134,9 @@ export async function structurizeBook(
 
     let raw: string;
     try {
-      raw = await callGeminiJudge(prompt);
+      // GID 1217808323836843: tenantId をスコープに持ちながら渡し忘れており、
+      // trackUsage が tenant_id='unknown' で計上され続けていた。
+      raw = await callGeminiJudge(prompt, { tenantId, billable: false });
       consecutiveFailures = 0;
     } catch (err) {
       logger.warn({ err, chunkIndex: chunk.chunkIndex }, 'bookStructurizer: Gemini call failed');
@@ -196,7 +198,9 @@ export async function structurizeBook(
 
       let vector: number[];
       try {
-        vector = await embedText(searchText);
+        // GID 1217808323836843: tenantId をスコープに持ちながら渡し忘れており、
+        // trackUsage が tenant_id='unknown' で計上され続けていた。
+        vector = await embedText(searchText, { tenantId });
       } catch (err) {
         logger.warn({ err, principle: principle.principle }, 'bookStructurizer: embedText failed');
         result.failedCount++;

@@ -128,11 +128,36 @@ async function _resolvePlanForBilling(tenantId: string): Promise<TenantPlan | nu
   return plan;
 }
 
+// GID 1217808323836843: tenant_id が未解決のまま計上されると、/admin/billing の
+// テナント別利用状況に「unknown」として溜まり続け、従量課金として請求できない
+// 利用が静かに積み上がる。呼び出し元の実装ミス（tenantId をスコープに持ちながら
+// 渡し忘れる等）を早期に気づけるよう warn を1回出す。
+// ここで例外を投げると計上の失敗が本番機能を止めかねないため、あくまで警告に留める。
+const UNRESOLVED_TENANT_IDS: ReadonlySet<string> = new Set(['unknown', '']);
+
+function isUnresolvedTenantId(tenantId: string | undefined | null): boolean {
+  return tenantId == null || UNRESOLVED_TENANT_IDS.has(tenantId);
+}
+
+function warnIfTenantUnresolved(params: TrackUsageParams): void {
+  if (!isUnresolvedTenantId(params.tenantId)) return;
+  _logger?.warn(
+    {
+      requestId: params.requestId,
+      featureUsed: params.featureUsed,
+      model: params.model,
+      tenantId: params.tenantId ?? null,
+    },
+    '[usageTracker] trackUsage: tenantId unresolved — recorded as unknown tenant (billing gap; caller should pass a real tenantId)'
+  );
+}
+
 /**
  * 使用量をDBに非同期で記録する（fire-and-forget）。
  * setImmediate で遅延実行するため API レスポンス速度に影響しない。
  */
 export function trackUsage(params: TrackUsageParams): void {
+  warnIfTenantUnresolved(params);
   setImmediate(() => {
     void _insertUsageLog(params);
   });
