@@ -560,9 +560,12 @@ describe('集計SQL: 絞り込み条件(壊れると請求額が変わる)', () 
 
   // フォールバック倍率は「現在のテナントのプラン」から作り、$4 で束縛する。
   // 定数に置き換えると、未焼き付け行が誤った単価で請求される。
-  it('フォールバック倍率は planMultiplier(plan) を $4 として渡す', () => {
+  // 集計式は computeExpectedBilling() に切り出してある(_reportTenantUsage と
+  // billingReconciliation.ts の両方が同じ式を使うため。呼び出し引数名は
+  // currentPlan だが、実体は同じ planMultiplier() 呼び出し)。
+  it('フォールバック倍率は planMultiplier(currentPlan) を $4 として渡す', () => {
     const src = readSource();
-    expect(src).toMatch(/const fallbackMultiplier = planMultiplier\(plan\);/);
+    expect(src).toMatch(/const fallbackMultiplier = planMultiplier\(currentPlan\);/);
     expect(src).toMatch(/\[tenantId, startDate, endDate, fallbackMultiplier\]/);
   });
 

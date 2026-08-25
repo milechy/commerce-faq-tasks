@@ -298,6 +298,96 @@ export async function reportUsageToStripe(
   }
 }
 
+export interface ExpectedBilling {
+  totalRequests: number;
+  totalCostCents: number;
+  billableUnits: number;
+  unstampedRows: number;
+  /** 行ごとの倍率で重み付けした加重合計を最後に1回だけ切り上げた値。Stripeへ送る絶対値。 */
+  billedQuantity: number;
+  /** plan_multiplier が NULL の行に適用したフォールバック倍率(現在の tenants.plan 由来)。 */
+  fallbackMultiplier: number;
+}
+
+/**
+ * 指定期間の期待請求量を、usage_logs から都度まるごと再計算する。
+ *
+ * _reportTenantUsage(実際の送信経路)と billingReconciliation.ts(月次突合ジョブ)の
+ * 両方がこの関数を呼ぶ。集計式を2箇所に書き写すと、どちらか一方だけを直したときに
+ * サイレントにドリフトし、「突合ジョブは常に一致と報告するが実は両方とも同じ
+ * バグを踏んでいるだけ」という、突合の意味が無くなる事故になる。
+ *
+ * ★C-2: 月の累積を毎回丸ごと再計算し、絶対値として送る(増分方式をやめる)★
+ *
+ * 旧設計は「pending 行だけを対象に集計→成功したら reported に倒す」という
+ * 増分方式のように書かれていたが、Stripe へは action:'set'(絶対値の置き換え)
+ * で送っていた。この不一致は「同月2回目以降は idempotencyKey 一致で丸ごと
+ * スキップする」ガードに隠れて表面化していなかった(Asana 1217808138968200)。
+ * もしそのガードだけを外すと、2回目の実行が「新たにpendingになった差分」を
+ * 絶対値としてStripeへ送り、月初からの分を上書きして消してしまう
+ * (過少請求。例: 1日目 100件送信→2日目 pending の新規50件だけを『合計』として送ると
+ * 累積100件が消えて50件になる)。
+ *
+ * 正しい直し方は「請求状態を進行管理しない」こと: billing_status を集計の
+ * フィルタから外し、その月に発生した billable 行を毎回すべて数え、
+ * 常に「月初からの累積」を絶対値として送る。これにより:
+ *   - 集計と reported 更新の間のレース(Asana課題)も消える(集計対象が
+ *     状態遷移に依存しないため、順序を問わない)
+ *   - リトライが安全になる(同じ絶対値を再送するだけ)
+ *   - 遅れて届いた行も次回実行で自動的に拾われる
+ *   - 冪等キーの連番化が不要になる(呼び出し元で billedQuantity を鍵に含める)
+ *
+ * @param currentPlan 呼び出し時点の tenants.plan（plan_multiplier が NULL の行への
+ *   フォールバック倍率算出にのみ使う。焼き付け済みの行の倍率には影響しない）。
+ */
+export async function computeExpectedBilling(
+  db: any,
+  tenantId: string,
+  startDate: string,
+  endDate: string,
+  currentPlan: string | null
+): Promise<ExpectedBilling> {
+  const fallbackMultiplier = planMultiplier(currentPlan);
+  const aggResult = await db.query(
+    `SELECT
+       COUNT(*)::integer           AS total_requests,
+       COALESCE(SUM(cost_total_cents), 0)::integer AS total_cost_cents,
+       COALESCE(SUM(
+         CASE WHEN feature_used = 'anam_session'
+              THEN CEIL(COALESCE(anam_session_seconds, 0) / 60.0)
+              ELSE 1
+         END
+       ), 0)::integer AS billable_units,
+       COALESCE(SUM(
+         (CASE WHEN feature_used = 'anam_session'
+               THEN CEIL(COALESCE(anam_session_seconds, 0) / 60.0)
+               ELSE 1
+          END) * COALESCE(plan_multiplier, $4::numeric)
+       ), 0)::numeric AS billed_units_weighted,
+       COUNT(*) FILTER (WHERE plan_multiplier IS NULL)::integer AS unstamped_rows
+     FROM usage_logs
+     WHERE tenant_id = $1
+       AND created_at >= $2
+       AND created_at <  $3
+       AND billable = true`,
+    [tenantId, startDate, endDate, fallbackMultiplier]
+  );
+
+  const totalRequests: number = aggResult.rows[0].total_requests;
+  const totalCostCents: number = aggResult.rows[0].total_cost_cents;
+  // anam_session行は秒→分換算（anamSessionBillableUnits と同じ切り上げ規則をSQL側でも適用）、
+  // それ以外は従来通り1行=1単位。テキストのみのテナントは billableUnits === totalRequests。
+  const billableUnits: number = aggResult.rows[0].billable_units;
+  const unstampedRows: number = aggResult.rows[0].unstamped_rows;
+
+  // 行ごとの倍率で重み付けした合計を最後に1回だけ切り上げる
+  // （行ごとに切り上げると小数倍率のテナントで請求が膨らむ）。
+  // pg は numeric を文字列で返すため Number() を通す。
+  const billedQuantity = Math.ceil(Number(aggResult.rows[0].billed_units_weighted));
+
+  return { totalRequests, totalCostCents, billableUnits, unstampedRows, billedQuantity, fallbackMultiplier };
+}
+
 async function _reportTenantUsage(
   db: any,
   stripe: any,
@@ -345,66 +435,14 @@ async function _reportTenantUsage(
   // GID 1216944003337186: billable=false（管理系LLM機能・chargeOneOffJpyで別途請求済みの
   // sai_agent等）は原価がusage_logsに記録されていてもStripe請求数量の集計対象から除外する。
   // ★C-2: 月の累積を毎回丸ごと再計算し、絶対値として送る(増分方式をやめる)★
-  //
-  // 旧設計は「pending 行だけを対象に集計→成功したら reported に倒す」という
-  // 増分方式のように書かれていたが、Stripe へは action:'set'(絶対値の置き換え)
-  // で送っていた。この不一致は「同月2回目以降は idempotencyKey 一致で丸ごと
-  // スキップする」ガードに隠れて表面化していなかった(Asana 1217808138968200)。
-  // もしそのガードだけを外すと、2回目の実行が「新たにpendingになった差分」を
-  // 絶対値としてStripeへ送り、月初からの分を上書きして消してしまう
-  // (過少請求。例: 1日目 100件送信→2日目 pending の新規50件だけを『合計』として送ると
-  // 累積100件が消えて50件になる)。
-  //
-  // 正しい直し方は「請求状態を進行管理しない」こと: billing_status を集計の
-  // フィルタから外し、その月に発生した billable 行を毎回すべて数え、
-  // 常に「月初からの累積」を絶対値として送る。これにより:
-  //   - 集計と reported 更新の間のレース(Asana課題)も消える(集計対象が
-  //     状態遷移に依存しないため、順序を問わない)
-  //   - リトライが安全になる(同じ絶対値を再送するだけ)
-  //   - 遅れて届いた行も次回実行で自動的に拾われる
-  //   - 冪等キーの連番化が不要になる(下記、金額そのものをキーに含める)
-  const fallbackMultiplier = planMultiplier(plan);
-  const aggResult = await db.query(
-    `SELECT
-       COUNT(*)::integer           AS total_requests,
-       COALESCE(SUM(cost_total_cents), 0)::integer AS total_cost_cents,
-       COALESCE(SUM(
-         CASE WHEN feature_used = 'anam_session'
-              THEN CEIL(COALESCE(anam_session_seconds, 0) / 60.0)
-              ELSE 1
-         END
-       ), 0)::integer AS billable_units,
-       COALESCE(SUM(
-         (CASE WHEN feature_used = 'anam_session'
-               THEN CEIL(COALESCE(anam_session_seconds, 0) / 60.0)
-               ELSE 1
-          END) * COALESCE(plan_multiplier, $4::numeric)
-       ), 0)::numeric AS billed_units_weighted,
-       COUNT(*) FILTER (WHERE plan_multiplier IS NULL)::integer AS unstamped_rows
-     FROM usage_logs
-     WHERE tenant_id = $1
-       AND created_at >= $2
-       AND created_at <  $3
-       AND billable = true`,
-    [tenantId, startDate, endDate, fallbackMultiplier]
-  );
-
-  const totalRequests: number = aggResult.rows[0].total_requests;
-  const totalCostCents: number = aggResult.rows[0].total_cost_cents;
-  // anam_session行は秒→分換算（anamSessionBillableUnits と同じ切り上げ規則をSQL側でも適用）、
-  // それ以外は従来通り1行=1単位。テキストのみのテナントは billableUnits === totalRequests。
-  const billableUnits: number = aggResult.rows[0].billable_units;
-  const unstampedRows: number = aggResult.rows[0].unstamped_rows;
+  // 詳細は computeExpectedBilling() のコメント参照。
+  const { totalRequests, totalCostCents, billableUnits, unstampedRows, billedQuantity, fallbackMultiplier } =
+    await computeExpectedBilling(db, tenantId, startDate, endDate, plan);
 
   if (totalRequests === 0) {
     logger.debug({ tenantId, periodYyyyMm }, '[stripeSync] no pending usage');
     return;
   }
-
-  // 行ごとの倍率で重み付けした合計を最後に1回だけ切り上げる
-  // （行ごとに切り上げると小数倍率のテナントで請求が膨らむ）。
-  // pg は numeric を文字列で返すため Number() を通す。
-  const billedQuantity = Math.ceil(Number(aggResult.rows[0].billed_units_weighted));
 
   if (unstampedRows > 0) {
     // migration 適用直後は既存行が NULL のまま残るため、当面は正常に出る。
