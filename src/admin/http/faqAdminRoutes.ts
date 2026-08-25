@@ -322,6 +322,7 @@ export function registerFaqAdminRoutes(app: Express) {
           category,
           tags,
           is_published,
+          is_excluded_from_search,
           created_at,
           updated_at
         `,
@@ -342,7 +343,10 @@ export function registerFaqAdminRoutes(app: Express) {
 
       const row = result.rows[0];
 
-      upsertFaqToEs(row.tenant_id, row.id, row.question, row.answer, row.is_published);
+      // is_excluded_from_search を引き継がずに5引数で呼ぶと、質問/回答を編集する
+      // だけの通常の更新でも ES 側の検索除外フラグが黙って false に巻き戻る
+      // (2026-08-25 是正。actionExecutor.ts:1091 で先に見つかった同一バグの残存側)。
+      upsertFaqToEs(row.tenant_id, row.id, row.question, row.answer, row.is_published, row.is_excluded_from_search ?? false);
 
       try {
         const embeddingText = `${row.question}\n${row.answer}`;
