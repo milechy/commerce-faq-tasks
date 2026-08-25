@@ -253,7 +253,7 @@ const en: Record<TranslationKey, string> = {
   "tenant_detail.embed_key_unavailable": "The API key cannot be displayed (for security, the plaintext is only shown at issuance). Issue a new key to get the embed code.",
   "tenant_detail.embed_issue_button": "🔑 Issue a new key to get the embed code",
   "tenant_detail.embed_reissuing": "⏳ Issuing...",
-  "tenant_detail.embed_reissue_confirm": "Reissuing will stop the currently active widget. It won't recover until you install the new code. Continue?",
+  "tenant_detail.embed_reissue_confirm": "This will issue a new key. Your current key stays active, so the running widget won't stop. You can deactivate the old key later from the key list once you no longer need it. Continue?",
   "tenant_detail.embed_issued_warning": "⚠️ This key is shown only now. It cannot be shown again once you leave this screen — copy it now.",
   "tenant_detail.embed_issue_error": "❌ Failed to issue the API key. Please try again",
   "tenant_detail.allowed_origins_label": "Allowed Domains (one URL per line where Widget is installed)",

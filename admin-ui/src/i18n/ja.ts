@@ -258,7 +258,7 @@ const ja = {
   "tenant_detail.embed_key_unavailable": "APIキーは表示できません（セキュリティのため、平文は発行時にのみ表示されます）。新しいキーを発行して埋め込みコードを取得してください。",
   "tenant_detail.embed_issue_button": "🔑 新しいキーを発行して埋め込みコードを取得",
   "tenant_detail.embed_reissuing": "⏳ 発行中...",
-  "tenant_detail.embed_reissue_confirm": "再発行すると現在稼働中のウィジェットが停止します。新しいコードを設置するまで復旧しません。続けますか？",
+  "tenant_detail.embed_reissue_confirm": "新しいキーを発行します。今使っているキーはそのまま有効なので、稼働中のウィジェットは止まりません。古いキーが不要になったら、あとでキー一覧から個別に無効化できます。続けますか？",
   "tenant_detail.embed_issued_warning": "⚠️ このキーは今だけ表示されています。この画面を離れると二度と表示できません。今すぐコピーしてください。",
   "tenant_detail.embed_issue_error": "❌ APIキーの発行に失敗しました。もう一度お試しください",
   "tenant_detail.allowed_origins_label": "許可ドメイン（Widgetを設置するURLを1行に1つ）",

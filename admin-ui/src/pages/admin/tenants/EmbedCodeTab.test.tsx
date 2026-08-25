@@ -189,12 +189,16 @@ describe("EmbedCodeTab", () => {
     expect(screen.getByTestId("issue-modal")).toBeTruthy();
   });
 
-  it("既に有効なキーがある状態で発行ボタンを押すと、稼働中ウィジェット停止の警告確認が出る。確認を拒否するとモーダルを開かない", () => {
+  // POST /v1/admin/tenants/:id/keys は addTenantApiKey() による無停止ローテーション
+  // (PR #824/#836)。既存キーは失効しないため、確認文言は「稼働中ウィジェットが止まる」
+  // という誤った警告ではなく、「新キー追加・旧キーは有効なまま」という実態を伝える。
+  it("既に有効なキーがある状態で発行ボタンを押すと、既存キーは有効なままである旨の確認が出る。確認を拒否するとモーダルを開かない", () => {
     const confirmSpy = vi.fn().mockReturnValue(false);
     window.confirm = confirmSpy;
     render(<EmbedCodeTab tenant={makeTenant()} apiKeys={[ACTIVE_KEY]} />);
     fireEvent.click(screen.getByRole("button", { name: /新しいキーを発行して埋め込みコードを取得/ }));
-    expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining("再発行すると現在稼働中のウィジェットが停止します"));
+    expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining("今使っているキーはそのまま有効"));
+    expect(confirmSpy).not.toHaveBeenCalledWith(expect.stringContaining("停止します"));
     expect(screen.queryByTestId("issue-modal")).toBeNull();
   });
 
