@@ -24,7 +24,7 @@ CLIは新セッション開始時に以下を確認・報告する（省略禁�
 # RAJIUCE CLAUDE.md
 
 ## Core Principles
-1. **Security First** — Book content never leaves DB. RAG excerpts ≤200 chars. API keys SHA-256 hashed. tenantId from JWT only.
+1. **Security First** — Book content never leaves DB. Book-sourced RAG excerpts ≤200 chars(著作権保護。src/agent/config/ragLimits.ts の BOOK_EXCERPT_MAX_CHARS）。FAQ/learned_memory由来は別枠(FAQ_EXCERPT_MAX_CHARS)。API keys SHA-256 hashed. tenantId from JWT only.
 2. **Mobile First** — Touch targets ≥44px. Font ≥16px. Test 390px viewport first.
 3. **Partner Friendly** — No jargon. Every error = kind message. Every action = success feedback.
 

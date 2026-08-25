@@ -102,9 +102,9 @@ describe("buildFaqContext(synthesisTool.ts) — Q/Aの分離", () => {
     expect(userMessage).toContain("参考情報: 元の抜粋");
   });
 
-  it("回帰: 抜粋の文字数上限(RAG_EXCERPT_MAX_CHARS)がQ/Aそれぞれに従来どおり効く", async () => {
-    const longQuestion = "あ".repeat(300);
-    const longAnswer = "い".repeat(300);
+  it("回帰: 抜粋の文字数上限がQ/Aそれぞれに効く(P18でFAQ_EXCERPT_MAX_CHARS=500に変更。ragLimits.ts参照)", async () => {
+    const longQuestion = "あ".repeat(600);
+    const longAnswer = "い".repeat(600);
     mockPool({ faqDocsRows: [{ id: 101, question: longQuestion, answer: longAnswer }] });
 
     const userMessage = await userPromptOf({
@@ -113,21 +113,22 @@ describe("buildFaqContext(synthesisTool.ts) — Q/Aの分離", () => {
       tenantId: "tenant-1",
     });
 
-    // RAG_EXCERPT_MAX_CHARS=200。省略記号込みでそれ以下に収まっていること。
     const qLine = userMessage.split("\n").find((l) => l.startsWith("Q: "))!;
     const aLine = userMessage.split("\n").find((l) => l.startsWith("A: "))!;
-    expect(qLine.length).toBeLessThanOrEqual(200 + "Q: ".length);
-    expect(aLine.length).toBeLessThanOrEqual(200 + "A: ".length);
+    expect(qLine.length).toBeLessThanOrEqual(500 + "Q: ".length);
+    expect(aLine.length).toBeLessThanOrEqual(500 + "A: ".length);
     expect(qLine).not.toBe(`Q: ${longQuestion}`);
   });
 
-  it("上位3件(RAG_MAX_EXCERPTS)を超えるヒットがあっても、faq_docsクエリは上位3件のfaq_idだけを対象にする", async () => {
+  it("上位5件(P18でFAQ_MAX_EXCERPTS=3→5に変更)を超えるヒットがあっても、faq_docsクエリは上位5件のfaq_idだけを対象にする", async () => {
     let captured: unknown[] = [];
     mockPool({
       faqDocsRows: [
         { id: 1, question: "Q1", answer: "A1" },
         { id: 2, question: "Q2", answer: "A2" },
         { id: 3, question: "Q3", answer: "A3" },
+        { id: 4, question: "Q4", answer: "A4" },
+        { id: 5, question: "Q5", answer: "A5" },
       ],
       captureFaqDocsParams: (params) => {
         captured = params;
@@ -142,12 +143,14 @@ describe("buildFaqContext(synthesisTool.ts) — Q/Aの分離", () => {
         { id: "faq-3", text: "e3", score: 0.7, source: "es", metadata: { faq_id: 3 } },
         { id: "faq-4", text: "e4", score: 0.6, source: "es", metadata: { faq_id: 4 } },
         { id: "faq-5", text: "e5", score: 0.5, source: "es", metadata: { faq_id: 5 } },
+        { id: "faq-6", text: "e6", score: 0.4, source: "es", metadata: { faq_id: 6 } },
+        { id: "faq-7", text: "e7", score: 0.3, source: "es", metadata: { faq_id: 7 } },
       ],
       tenantId: "tenant-1",
     });
 
     expect(captured[0]).toBe("tenant-1");
-    expect(captured[1]).toEqual([1, 2, 3]);
+    expect(captured[1]).toEqual([1, 2, 3, 4, 5]);
   });
 
   it("faq_docsへの問い合わせはfaq_id込みのヒットが1件もなければ発生しない", async () => {

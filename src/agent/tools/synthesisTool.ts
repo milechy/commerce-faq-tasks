@@ -16,7 +16,12 @@ import type { SimilarPattern } from '../../api/events/similarUserMatcher';
 
 import { getPool } from '../../lib/db';
 import { buildSentimentHint } from '../../lib/sentiment/hint';
-import { RAG_EXCERPT_MAX_CHARS, RAG_MAX_EXCERPTS } from '../config/ragLimits';
+import {
+  BOOK_EXCERPT_MAX_CHARS,
+  BOOK_MAX_EXCERPTS,
+  FAQ_EXCERPT_MAX_CHARS,
+  FAQ_MAX_EXCERPTS,
+} from '../config/ragLimits';
 
 // GID 1216978855735482 → GID 1216978677398163(P3): sessionIdのハッシュによる
 // 疑似sticky(hashToUnitInterval)ではなく、chat_sessions.prompt_variant_id に
@@ -338,9 +343,8 @@ export async function synthesizeAnswer(input: SynthesisInput): Promise<Synthesis
     const systemPrompt = systemPromptParts.join('\n\n');
 
     // FAQ コンテキスト（ヒットがある場合）
-    // 書籍著作権保護: 1件あたり RAG_EXCERPT_MAX_CHARS 文字までに切り詰める
-    // (src/agent/config/ragLimits.ts)。テキストをそのままLLMへ渡すと、
-    // 書籍由来チャンク(metadata.source='book')の全文がプロンプトに乗ってしまう。
+    // 出所別の予算(書籍=著作権保護で200字/3件、FAQ・learned_memory=別枠)で
+    // 切り詰める(src/agent/config/ragLimits.ts、ナレッジ配線是正P18)。
     // Q/A の組み立ては buildFaqContext() 参照(ナレッジ配線是正P16)。
     const faqContext = await buildFaqContext(items, tenantId);
 
@@ -408,25 +412,44 @@ function fallbackSynthesize(input: SynthesisInput): SynthesisOutput {
 }
 
 /**
- * ナレッジ配線是正P16: LLMに渡す参考FAQを組み立てる。
+ * metadata.source が書籍(OCR含む)由来かどうか。searchAgent.ts の provenance判定
+ * (`rawSource.startsWith("book")`)と同じ基準を使う(第2の判定基準を作らない)。
+ */
+function isBookSource(it: RerankItem): boolean {
+  const src = it.metadata?.source;
+  return typeof src === 'string' && src.startsWith('book');
+}
+
+/**
+ * ナレッジ配線是正P16/P18: LLMに渡す参考FAQを組み立てる。
  *
  * 検索ヒット(items)は faq_embeddings.text(question と answer を連結して
- * 埋め込んだもの)であり、質問文と回答文が分離されていない。是正前はこの
+ * 埋め込んだもの)であり、質問文と回答文が分離されていない。P16以前はこの
  * 同一テキストを Q/A 両方にそのまま入れており、質問と回答の区別が失われ、
  * 限られたコンテキストを二重に消費していた。
  *
  * metadata.faq_id を持つヒットだけ faq_docs から question/answer を個別に
- * 引き直す(1クエリでまとめて取得。上位 RAG_MAX_EXCERPTS 件のみが対象なので
- * 回答経路に乗る追加クエリは最大1回)。faq_id を持たない book/OCR/
+ * 引き直す(1クエリでまとめて取得。書籍以外の上位 FAQ_MAX_EXCERPTS 件のみが
+ * 対象なので、回答経路に乗る追加クエリは最大1回)。faq_id を持たない book/OCR/
  * learned_memory 由来のヒットは、存在しない質問文を捏造しないよう
  * Q/A 形式にせず「参考情報」の1ブロックとして渡す。
+ *
+ * P18: 「1件200字・最大3件」は書籍由来チャンクの著作権保護のための制約であり、
+ * テナント自身のFAQ・learned_memoryにこれを課す根拠は無い。出所別に別枠
+ * (ragLimits.ts の BOOK_ 系 / FAQ_ 系)を持つ。ランク(スコア)順は崩さず、
+ * 各バケツの上限まで元の順位順に採用する。
  */
 async function buildFaqContext(items: RerankItem[], tenantId: string | undefined): Promise<string> {
-  const top = items.slice(0, RAG_MAX_EXCERPTS);
+  if (!items.length) return '';
+
+  const bookSlots = new Set(items.filter(isBookSource).slice(0, BOOK_MAX_EXCERPTS));
+  const faqSlots = new Set(items.filter((it) => !isBookSource(it)).slice(0, FAQ_MAX_EXCERPTS));
+  const top = items.filter((it) => bookSlots.has(it) || faqSlots.has(it));
   if (!top.length) return '';
 
   const faqIdByIndex = new Map<number, number>();
   top.forEach((it, i) => {
+    if (isBookSource(it)) return; // 書籍チャンクは faq_id を持たない設計(意図的)
     const raw = it.metadata?.faq_id;
     const faqId =
       typeof raw === 'number'
@@ -454,14 +477,15 @@ async function buildFaqContext(items: RerankItem[], tenantId: string | undefined
 
   return top
     .map((it, i) => {
+      const maxChars = isBookSource(it) ? BOOK_EXCERPT_MAX_CHARS : FAQ_EXCERPT_MAX_CHARS;
       const faqId = faqIdByIndex.get(i);
       const doc = faqId !== undefined ? faqDocsById.get(faqId) : undefined;
       if (doc) {
-        const q = truncate(sanitizeText(doc.question), RAG_EXCERPT_MAX_CHARS);
-        const a = truncate(sanitizeText(doc.answer), RAG_EXCERPT_MAX_CHARS);
+        const q = truncate(sanitizeText(doc.question), maxChars);
+        const a = truncate(sanitizeText(doc.answer), maxChars);
         return `FAQ${i + 1}:\nQ: ${q}\nA: ${a}`;
       }
-      const excerpt = truncate(sanitizeText(it.text), RAG_EXCERPT_MAX_CHARS);
+      const excerpt = truncate(sanitizeText(it.text), maxChars);
       return `FAQ${i + 1}:\n参考情報: ${excerpt}`;
     })
     .join('\n\n');
