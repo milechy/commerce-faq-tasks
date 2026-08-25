@@ -214,3 +214,81 @@ describe('GET /v1/admin/analytics/cv-status', () => {
     expect(mockQuery).not.toHaveBeenCalled();
   });
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// P0-3 (GID 1217808492463681): CV集計の二重基準の解消
+//
+// 修正前は summary の CV クエリだけが自前の `session_id IS NULL OR EXISTS(...)`
+// 述語を持ち、cv-status/crossTenantContext.ts が使う userSourceExists() と
+// 異なっていた。本番実測で summary側 cv_count_30d=279 / cv-status側 0 という
+// 正反対の値が出ていた。ここでは両クエリが同じ述語(EXISTSのみ、NULLの
+// 逃げ道が無い)を使うことをSQL文字列レベルで固定する。
+// ───────────────────────────────────────────────────────────────────────────
+describe('summary の CV クエリと sentiment クエリの述語統一', () => {
+  beforeEach(() => mockQuery.mockClear());
+
+  it('CVクエリに session_id IS NULL の逃げ道が無い(全て通す穴を再発させない)', async () => {
+    mockSummaryQueries({ cvRows: [] });
+    const app = makeApp();
+    await request(app)
+      .get('/v1/admin/analytics/summary?period=30d')
+      .set('x-role', 'client_admin')
+      .set('x-tenant-id', 'tenant-1');
+
+    // CV集計クエリは calls[8](0-indexed: plan gate, sessions, prev, judge,
+    // kg, avg msg, avatar, sentiment, CV の9番目)
+    const cvSql: string = mockQuery.mock.calls[8][0];
+    expect(cvSql).not.toContain('session_id IS NULL');
+    expect(cvSql).toContain('EXISTS');
+    expect(cvSql).toContain("metadata->>'source' = 'user'");
+  });
+
+  it('CVクエリと cv-status のEXISTS述語が同一である(summaryとcv-statusで値が食い違わない)', async () => {
+    mockSummaryQueries({ cvRows: [] });
+    const app = makeApp();
+    await request(app)
+      .get('/v1/admin/analytics/summary?period=30d')
+      .set('x-role', 'client_admin')
+      .set('x-tenant-id', 'tenant-1');
+    const summaryCvSql: string = mockQuery.mock.calls[8][0];
+
+    mockQuery.mockClear();
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await request(app).get('/v1/admin/analytics/cv-status').set('x-role', 'super_admin');
+    const cvStatusSql: string = mockQuery.mock.calls[0][0];
+
+    // 両者から余白差を除いたEXISTS句だけを取り出して比較する
+    const existsClauseOf = (sql: string) => {
+      const m = /EXISTS\s*\([\s\S]*?metadata->>'source' = 'user'[\s\S]*?\)\s*\)/.exec(sql);
+      return (m ? m[0] : '').replace(/\s+/g, ' ').trim();
+    };
+    expect(existsClauseOf(summaryCvSql)).toBe(existsClauseOf(cvStatusSql));
+  });
+
+  it('sentimentクエリにも実ユーザー判定のEXISTSが付く(母数がtotal_sessionsとズレない)', async () => {
+    mockSummaryQueries({ cvRows: [] });
+    const app = makeApp();
+    await request(app)
+      .get('/v1/admin/analytics/summary?period=30d')
+      .set('x-role', 'client_admin')
+      .set('x-tenant-id', 'tenant-1');
+
+    // sentimentクエリは calls[7](0-indexed: 8番目)
+    const sentimentSql: string = mockQuery.mock.calls[7][0];
+    expect(sentimentSql).toContain('EXISTS');
+    expect(sentimentSql).toContain("metadata->>'source' = 'user'");
+  });
+
+  it('sentimentクエリはchat_messages.session_idをchat_sessions.id(UUID)と突き合わせる', async () => {
+    mockSummaryQueries({ cvRows: [] });
+    const app = makeApp();
+    await request(app)
+      .get('/v1/admin/analytics/summary?period=30d')
+      .set('x-role', 'client_admin')
+      .set('x-tenant-id', 'tenant-1');
+    const sentimentSql: string = mockQuery.mock.calls[7][0];
+    // userSourceExists の第3引数 "id" によって cs.id = ... になっていること
+    // (chat_messages.session_id は chat_sessions.session_id(TEXT)ではなくid(UUID)参照)
+    expect(sentimentSql).toMatch(/cs\.id\s*=\s*chat_messages\.session_id/);
+  });
+});

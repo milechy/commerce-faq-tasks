@@ -67,8 +67,14 @@ describe("GET /v1/admin/analytics/summary — source='user'フィルタ", () => 
     const cvQuery = allSql.find((sql) => /FROM conversion_attributions/.test(sql));
     expect(cvQuery).toBeDefined();
     expect(cvQuery).toContain(USER_SOURCE_SQL);
-    // session_id が無いイベントは誤って除外しない(既存の紐付けできないデータの後方互換)
-    expect(cvQuery).toContain("session_id IS NULL");
+    // P0-3 (GID 1217808492463681, 2026-08-25): このテストは元々
+    // `session_id IS NULL` の混入を「既存データの後方互換」として正当化し、
+    // バグを仕様として固定していた。実際にはこの分岐が279件・¥507,210,000の
+    // e2eトラフィックを無条件で通し、cv-status(同じテーブルをuserSourceExists
+    // のみで集計)と正反対の値を summary が返していた
+    // (本番実測: summary側 cv_count_30d=279 / cv-status側 0)。
+    // D2(確定した設計判断): session_id が無い行は数えない。
+    expect(cvQuery).not.toContain("session_id IS NULL");
   });
 });
 

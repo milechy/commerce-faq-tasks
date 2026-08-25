@@ -253,6 +253,12 @@ export async function fetchAnalyticsSummary({
   );
 
   // Sentiment distribution
+  //
+  // GID 1217808492463681 (P0-3): 修正前はこのクエリだけ user フィルタが
+  // 無く、テナントの全 chat_messages(e2e/chat-test含む)を数えていた。
+  // 同じレスポンス内で total_sessions=13 なのに sentiment_distribution.total
+  // =753 という58倍の食い違いが本番で実測されている。他クエリと同じ
+  // userSourceExists() で揃える。
   const sentParams: (string | number)[] = [`${interval}`];
   const sentTenantClause = tenantId ? "AND tenant_id = $2" : "";
   if (tenantId) sentParams.push(tenantId);
@@ -262,6 +268,7 @@ export async function fetchAnalyticsSummary({
      WHERE sentiment IS NOT NULL
        AND created_at >= NOW() - $1::interval
      ${sentTenantClause}
+     ${userSourceExists("chat_messages.session_id", "chat_messages.tenant_id", "id")}
      GROUP BY sentiment->>'label'`,
     sentParams,
   );
@@ -282,6 +289,16 @@ export async function fetchAnalyticsSummary({
   const sentNeutral = sentMap.get("neutral") ?? 0;
 
   // Phase65-3: CV aggregation (30d fixed)
+  //
+  // GID 1217808492463681 (P0-3・確定した設計判断 D2): `session_id IS NULL OR`
+  // の分岐を削除した。この分岐が「session_idが無い旧経路のイベントを誤って
+  // 除外しないため」というコメントの意図に反し、実際にはe2eトラフィックの
+  // conversion_attributions行(session_idがある行も含め、全てここを通過し得る
+  // ものではなく、そもそもこの分岐自体がsession_id IS NULLの行を無条件で
+  // 通していた)を全て通過させ、cv-status(/v1/admin/analytics/cv-status、
+  // userSourceExists使用)と正反対の値を返していた
+  // (本番実測: summary側 cv_count_30d=279 / cv-status側 cv_count_30d=0)。
+  // cv-status・crossTenantContext.ts と同じ userSourceExists() に統一する。
   const cvQueryParams: (string | number)[] = [];
   const cvTenantClause = tenantId ? "AND tenant_id = $1" : "";
   if (tenantId) cvQueryParams.push(tenantId);
@@ -293,18 +310,7 @@ export async function fetchAnalyticsSummary({
      FROM conversion_attributions
      WHERE created_at > NOW() - INTERVAL '30 days'
      ${cvTenantClause}
-     -- GID 1216970103691946: session_idが無いイベント(セッション紐付けができない
-     -- 旧経路)は誤って除外しないよう温存し、session_idがある場合のみ実ユーザー
-     -- 判定する
-     AND (
-       session_id IS NULL
-       OR EXISTS (
-         SELECT 1 FROM chat_sessions cs
-         WHERE cs.id = conversion_attributions.session_id
-           AND cs.tenant_id = conversion_attributions.tenant_id
-           AND cs.metadata->>'source' = 'user'
-       )
-     )
+     ${userSourceExists("conversion_attributions.session_id", "conversion_attributions.tenant_id", "id")}
      GROUP BY conversion_type`,
     cvQueryParams,
   );
