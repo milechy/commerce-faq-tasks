@@ -268,6 +268,39 @@ ssh root@65.108.159.161 "pm2 logs rajiuce-api --err --lines 30 --nostream"
 - `dist/src/index.js` が古い（`pnpm build` 漏れ）
 - DB 接続失敗（PostgreSQL / Elasticsearch がダウン）
 
+### 3.6 admin.r2c.biz で Cloudflare 計測ビーコンの CORS エラー（コンソールに毎回出る）
+
+**症状:**
+
+```
+Access to script at 'https://static.cloudflareinsights.com/beacon.min.js/v...'
+from origin 'https://admin.r2c.biz' has been blocked by CORS policy
+net::ERR_FAILED
+```
+
+super_admin UI 監査（2026-08-25, Asana GID 1217808323863421）で本番24ルート全てで再現。
+
+**発生源（コード側ではない）:**
+
+`admin-ui/index.html` にはビーコンの `<script>` タグは存在しない（grep で確認済み、コミット時点でゼロ件）。`curl` で本番 HTML を取得すると、Cloudflare が `admin.r2c.biz` ゾーンの **Web Analytics（Automatic Setup）** によってレスポンス HTML に以下を自動注入していることが分かる（admin-ui は現状 VPS `serve` 配信で Cloudflare Pages ではないが、DNS がオレンジクラウドで Cloudflare 経由のため、この注入は Pages とは無関係にゾーン単位で発生する）:
+
+```html
+<script type="module"
+  src="https://static.cloudflareinsights.com/beacon.min.js/v<hash>"
+  integrity="sha512-..." crossorigin="anonymous"
+  data-cf-beacon='{"version":"2024.11.0","token":"a27e3efcd94f4444bd1c2d911a3e2fb7","r":1}'>
+</script>
+```
+
+**切り分け結果（2026-08-25 調査時点）:**
+
+- 注入タグ自体は正しい: `integrity` の SHA-512 は実際に配信されている `beacon.min.js` の内容と完全一致（`openssl dgst -sha512` で検証済み）。
+- `curl` で同一 URL を `Origin: https://admin.r2c.biz` 付きで直接取得すると、5 回連続で `200 OK` / `access-control-allow-origin: *` が返る。CORS ヘッダ自体は壊れていない。
+- 一方、実際の Chrome（Playwright 監査環境、および Claude 連携ブラウザの CDP 自動操作）から同一 URL に読みにいくと、一貫して **`HTTP 503`** が返る（`net::ERR_FAILED`/CORS ブロック表示は、CORS モードの fetch がエラーレスポンスを非2xxとして扱い汎用エラーに丸めているだけで、実体は 503）。
+- `navigator.webdriver` は `false` だが、CDP 経由の自動操作ブラウザからのみ 503 が再現し、単純な `curl` では一切再現しない。Cloudflare コミュニティにも「テストツール経由で `beacon.min.js` がエラーになる」という同種の報告がある。
+
+**結論とやること:** コード側に直せる箇所は無い（タグ構成・CORS ヘッダとも正しい）。原因は Cloudflare 側（Web Analytics の配信元 `static.cloudflareinsights.com` が、このトークン宛てのリクエストを自動化ブラウザに対して 503 で弾いている可能性、または当該トークン自体がエラー状態になっている可能性）。人による確認が必要なため Asana タスクにコメントで依頼済み。
+
 ---
 
 ## 4. セキュリティ注意事項
@@ -424,3 +457,4 @@ nginx -t && systemctl reload nginx
 | 2026-03-24 | Phase38完了: chat_sessions / chat_messages / tuning_rules / tenants.system_prompt のマイグレーション一覧に追加 |
 | 2026-04-05 | Phase44完了: book_uploads マイグレーション + faq_embeddings インデックス + Supabase book-pdfs バケット手順追加 |
 | 2026-03-30 | Phase49完了: Nginx + Let's Encrypt SSL (api.r2c.biz / admin.r2c.biz) |
+| 2026-08-25 | Cloudflare計測ビーコンCORSエラー調査(Asana GID 1217808323863421): コード側原因なし。発生源はCloudflare Web Analytics自動注入、原因はCloudflare側の503応答(自動化ブラウザのみ再現)。詳細は3.6 |
