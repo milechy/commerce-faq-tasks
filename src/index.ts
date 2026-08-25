@@ -4,6 +4,7 @@ import "./config/env";
 import { pool as db } from "./lib/db";
 import { recordWidgetSeenOnce } from "./lib/onboardingWidgetSeen";
 import { alertEngine } from "./lib/alerts/alertEngine";
+import { billingHealthMonitor } from "./lib/billing/billingHealthCheck";
 import { SalesLogWriter, setGlobalSalesLogWriter } from "./agent/orchestrator/sales/salesLogWriter";
 import { createSalesLogNotionSink } from "./integrations/notion/salesLogNotionSink";
 import { judgeSweepRunner } from "./agent/judge/judgeSweepRunner";
@@ -793,6 +794,14 @@ async function startServer() {
       });
     }, STRIPE_REPORT_INTERVAL_MS);
     logger.info("[startup] Stripe usage reporter scheduled (24h interval)");
+  }
+
+  // 課金パイプラインの不変条件監視（staging が無いため、テストではなく本番の
+  // 定期チェックで守る。SLACK_WEBHOOK_URL 未設定でも sendSlackAlert が
+  // サイレントスキップするため起動自体は妨げない）。
+  if (db) {
+    billingHealthMonitor.start(db, logger);
+    logger.info("[startup] Billing health monitor started (1h interval)");
   }
 
   // Phase70K: pipelineQueue self-heal — PM2再起動で stuck した job を自動復旧

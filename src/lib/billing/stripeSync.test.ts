@@ -3,14 +3,16 @@
 
 const mockInvoiceItemsCreate = jest.fn();
 const mockSubscriptionsRetrieve = jest.fn();
+const mockCreateUsageRecord = jest.fn();
 jest.mock('stripe', () => {
   return jest.fn().mockImplementation(() => ({
     invoiceItems: { create: (...args: unknown[]) => mockInvoiceItemsCreate(...args) },
     subscriptions: { retrieve: (...args: unknown[]) => mockSubscriptionsRetrieve(...args) },
+    subscriptionItems: { createUsageRecord: (...args: unknown[]) => mockCreateUsageRecord(...args) },
   }));
 }, { virtual: true });
 
-import { PLAN_MULTIPLIERS, planMultiplier, lemonsliceShareJpy, monthlyShareJpy, getLemonsliceMonthlyFeeJpy, getLivekitMonthlyFeeJpy, getPlatformMonthlyFeeJpy, chargeOneOffJpy, anamSessionBillableUnits } from './stripeSync';
+import { PLAN_MULTIPLIERS, planMultiplier, lemonsliceShareJpy, monthlyShareJpy, getLemonsliceMonthlyFeeJpy, getLivekitMonthlyFeeJpy, getPlatformMonthlyFeeJpy, chargeOneOffJpy, anamSessionBillableUnits, reportUsageToStripe } from './stripeSync';
 
 describe('planMultiplier', () => {
   it('プラン別の倍率を返す（Free(広告表示) 0 / Starter 1.0 / Growth 1.5 / Enterprise 2.5）', () => {
@@ -620,4 +622,194 @@ describe('planMultiplier の異常入力', () => {
       expect(Number.isFinite(v)).toBe(true);
     },
   );
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// reportUsageToStripe / _reportTenantUsage の統合テスト。
+//
+// これまで stripeSync.test.ts は集計SQLの正規表現照合と、集計規則の再現実装
+// (billedQuantity ヘルパ)しか持っておらず、reportUsageToStripe 自体は
+// 一度も実行されていなかった(内部の分岐・INSERT/UPDATEの順序・エラー伝播は
+// ノーカバーだった)。ここでは実際に呼び出し、モックDBへの実クエリで検証する。
+// ─────────────────────────────────────────────────────────────────────────────
+describe('reportUsageToStripe（実行される統合テスト）', () => {
+  const OLD_ENV = process.env;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    process.env = { ...OLD_ENV, STRIPE_SECRET_KEY: 'sk_test_dummy' };
+  });
+  afterAll(() => {
+    process.env = OLD_ENV;
+  });
+
+  const mockLogger = { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() } as any;
+
+  /** SQL断片ごとにハンドラを振り分ける汎用モックDB */
+  function makeDb(overrides: Record<string, (sql: string, params: unknown[]) => unknown> = {}) {
+    const query = jest.fn().mockImplementation((sql: string, params: unknown[] = []) => {
+      for (const [pattern, handler] of Object.entries(overrides)) {
+        if (sql.includes(pattern)) return Promise.resolve(handler(sql, params));
+      }
+      // 未定義パターンは空応答(固定費按分など、この束で興味の無いクエリ用)
+      return Promise.resolve({ rows: [], rowCount: 0 });
+    });
+    return { query };
+  }
+
+  const ACTIVE_TENANTS = { rows: [{ tenant_id: 't1' }], rowCount: 1 };
+  const TENANT_ROW = { rows: [{ billing_enabled: true, billing_free_from: null, billing_free_until: null, plan: 'growth' }], rowCount: 1 };
+  const AGG_ROW = (totalRequests: number, billableUnits: number, weighted: string, unstamped = 0) => ({
+    rows: [{ total_requests: totalRequests, total_cost_cents: 500, billable_units: billableUnits, billed_units_weighted: weighted, unstamped_rows: unstamped }],
+  });
+  const SUB_ROW = { rows: [{ stripe_subscription_id: 'sub_1' }], rowCount: 1 };
+
+  beforeEach(() => {
+    mockSubscriptionsRetrieve.mockResolvedValue({
+      items: { data: [{ id: 'si_1' }] },
+      customer: 'cus_1',
+    });
+    mockCreateUsageRecord.mockResolvedValue({ id: 'mbur_1' });
+  });
+
+  it('正常系: 集計→INSERT(billed_quantity込み)→Stripe送信→sent更新→usage_logs更新の順で実行する', async () => {
+    const calls: string[] = [];
+    const db = makeDb({
+      'SELECT DISTINCT tenant_id FROM stripe_subscriptions': () => { calls.push('list_tenants'); return ACTIVE_TENANTS; },
+      'SELECT billing_enabled': () => { calls.push('tenant_row'); return TENANT_ROW; },
+      'billed_units_weighted': () => { calls.push('aggregate'); return AGG_ROW(150, 150, '225.00'); },
+      'SELECT status FROM stripe_usage_reports': () => { calls.push('idempotency_check'); return { rows: [] }; },
+      'SELECT stripe_subscription_id': () => { calls.push('sub_lookup'); return SUB_ROW; },
+      'INSERT INTO stripe_usage_reports': (sql, params) => {
+        calls.push('insert_report');
+        // 列リストにも VALUES にも billed_quantity が無いと、6番目の
+        // パラメータ(225)が渡っていても DB には書かれない。ここは
+        // params だけでなく SQL 文字列側も検証する。
+        expect(sql).toMatch(/\(tenant_id,\s*period_yyyymm,\s*idempotency_key,\s*total_requests,\s*total_cost_cents,\s*billed_quantity\)/);
+        expect(sql).toMatch(/VALUES\s*\(\$1,\s*\$2,\s*\$3,\s*\$4,\s*\$5,\s*\$6\)/);
+        expect(params).toEqual(['t1', expect.any(String), expect.any(String), 150, 500, 225]);
+        return { rows: [] };
+      },
+      'UPDATE stripe_usage_reports': () => { calls.push('mark_sent'); return { rows: [] }; },
+      'UPDATE usage_logs': () => { calls.push('mark_reported'); return { rows: [] }; },
+    });
+
+    await reportUsageToStripe(db as any, mockLogger, { periodYyyyMm: '202603' });
+
+    expect(mockCreateUsageRecord).toHaveBeenCalledWith(
+      'si_1',
+      expect.objectContaining({ quantity: 225, action: 'set' }),
+      expect.objectContaining({ idempotencyKey: 'billing:t1:202603' })
+    );
+    // 送信前にINSERTしてある(送信が例外を投げても「送ろうとした値」が残る)
+    expect(calls.indexOf('insert_report')).toBeLessThan(calls.indexOf('mark_sent'));
+    expect(calls).toEqual([
+      'list_tenants', 'tenant_row', 'aggregate', 'idempotency_check',
+      'sub_lookup', 'insert_report', 'mark_sent', 'mark_reported',
+    ]);
+  });
+
+  it('既に sent 済みなら再送しない(冪等)', async () => {
+    const db = makeDb({
+      'SELECT DISTINCT tenant_id FROM stripe_subscriptions': () => ACTIVE_TENANTS,
+      'SELECT billing_enabled': () => TENANT_ROW,
+      'billed_units_weighted': () => AGG_ROW(150, 150, '225.00'),
+      'SELECT status FROM stripe_usage_reports': () => ({ rows: [{ status: 'sent' }] }),
+    });
+    await reportUsageToStripe(db as any, mockLogger, { periodYyyyMm: '202603' });
+    expect(mockCreateUsageRecord).not.toHaveBeenCalled();
+  });
+
+  it('利用0件のテナントはStripeに触れない', async () => {
+    const db = makeDb({
+      'SELECT DISTINCT tenant_id FROM stripe_subscriptions': () => ACTIVE_TENANTS,
+      'SELECT billing_enabled': () => TENANT_ROW,
+      'billed_units_weighted': () => AGG_ROW(0, 0, '0'),
+    });
+    await reportUsageToStripe(db as any, mockLogger, { periodYyyyMm: '202603' });
+    expect(mockCreateUsageRecord).not.toHaveBeenCalled();
+  });
+
+  it('billing_enabled=false のテナントは集計すら行わない', async () => {
+    const db = makeDb({
+      'SELECT DISTINCT tenant_id FROM stripe_subscriptions': () => ACTIVE_TENANTS,
+      'SELECT billing_enabled': () => ({ rows: [{ billing_enabled: false, billing_free_from: null, billing_free_until: null, plan: 'growth' }], rowCount: 1 }),
+      'billed_units_weighted': () => { throw new Error('集計SQLに到達してはいけない'); },
+    });
+    await expect(reportUsageToStripe(db as any, mockLogger, { periodYyyyMm: '202603' })).resolves.toBeUndefined();
+    expect(mockCreateUsageRecord).not.toHaveBeenCalled();
+  });
+
+  it('無料期間中のテナントは請求しない', async () => {
+    const db = makeDb({
+      'SELECT DISTINCT tenant_id FROM stripe_subscriptions': () => ACTIVE_TENANTS,
+      'SELECT billing_enabled': () => ({
+        rows: [{ billing_enabled: true, billing_free_from: '2020-01-01', billing_free_until: '2999-01-01', plan: 'growth' }],
+        rowCount: 1,
+      }),
+      'billed_units_weighted': () => { throw new Error('集計SQLに到達してはいけない'); },
+    });
+    await reportUsageToStripe(db as any, mockLogger, { periodYyyyMm: '202603' });
+    expect(mockCreateUsageRecord).not.toHaveBeenCalled();
+  });
+
+  // ★このテストが今回の本題★
+  // 42703(migration未適用)は、旧カラム構成へフォールバックして送信を継続し、
+  // ループ内の後続テナントを巻き込まないこと。
+  it('migration未適用(42703)でも旧カラムで送信を継続し、他テナントを巻き込まない', async () => {
+    const insertCalls: string[] = [];
+    const db = makeDb({
+      'SELECT DISTINCT tenant_id FROM stripe_subscriptions': () => ({ rows: [{ tenant_id: 't1' }, { tenant_id: 't2' }], rowCount: 2 }),
+      'SELECT billing_enabled': () => TENANT_ROW,
+      'billed_units_weighted': () => AGG_ROW(10, 10, '15.00'),
+      'SELECT status FROM stripe_usage_reports': () => ({ rows: [] }),
+      'SELECT stripe_subscription_id': () => SUB_ROW,
+      'INSERT INTO stripe_usage_reports': (sql: string) => {
+        if (sql.includes('billed_quantity')) {
+          insertCalls.push('with_billed_quantity');
+          const e: any = new Error('column "billed_quantity" of relation "stripe_usage_reports" does not exist');
+          e.code = '42703';
+          throw e;
+        }
+        insertCalls.push('legacy');
+        return { rows: [] };
+      },
+    });
+
+    await reportUsageToStripe(db as any, mockLogger, { periodYyyyMm: '202603' });
+
+    // 両テナントとも新カラムで試み→42703→旧カラムで継続、が独立して起きている
+    expect(insertCalls).toEqual(['with_billed_quantity', 'legacy', 'with_billed_quantity', 'legacy']);
+    // t1 の失敗が t2 の送信を止めていない
+    expect(mockCreateUsageRecord).toHaveBeenCalledTimes(2);
+  });
+
+  it('42703以外のDBエラーはそのまま投げ、旧カラムへは切り替えない', async () => {
+    const db = makeDb({
+      'SELECT DISTINCT tenant_id FROM stripe_subscriptions': () => ACTIVE_TENANTS,
+      'SELECT billing_enabled': () => TENANT_ROW,
+      'billed_units_weighted': () => AGG_ROW(10, 10, '15.00'),
+      'SELECT status FROM stripe_usage_reports': () => ({ rows: [] }),
+      'SELECT stripe_subscription_id': () => SUB_ROW,
+      'INSERT INTO stripe_usage_reports': () => {
+        const e: any = new Error('connection terminated');
+        e.code = '57P01';
+        throw e;
+      },
+    });
+    await expect(reportUsageToStripe(db as any, mockLogger, { periodYyyyMm: '202603' })).rejects.toThrow('connection terminated');
+    expect(mockCreateUsageRecord).not.toHaveBeenCalled();
+  });
+
+  it('Stripe側が全リトライ失敗しても例外を投げず、failedとして記録する', async () => {
+    mockCreateUsageRecord.mockRejectedValue(new Error('Stripe API down'));
+    const db = makeDb({
+      'SELECT DISTINCT tenant_id FROM stripe_subscriptions': () => ACTIVE_TENANTS,
+      'SELECT billing_enabled': () => TENANT_ROW,
+      'billed_units_weighted': () => AGG_ROW(10, 10, '15.00'),
+      'SELECT status FROM stripe_usage_reports': () => ({ rows: [] }),
+      'SELECT stripe_subscription_id': () => SUB_ROW,
+    });
+    await expect(reportUsageToStripe(db as any, mockLogger, { periodYyyyMm: '202603' })).resolves.toBeUndefined();
+  }, 15000);
 });

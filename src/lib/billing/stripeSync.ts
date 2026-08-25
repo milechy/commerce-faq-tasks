@@ -197,13 +197,13 @@ export async function chargeOneOffJpy(
   }
 }
 
-function getPeriodYyyyMm(date: Date = new Date()): string {
+export function getPeriodYyyyMm(date: Date = new Date()): string {
   const y = date.getUTCFullYear();
   const m = String(date.getUTCMonth() + 1).padStart(2, '0');
   return `${y}${m}`;
 }
 
-function periodToDateRange(periodYyyyMm: string): { startDate: string; endDate: string } {
+export function periodToDateRange(periodYyyyMm: string): { startDate: string; endDate: string } {
   const year  = Number(periodYyyyMm.slice(0, 4));
   const month = Number(periodYyyyMm.slice(4, 6));
   const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
@@ -413,17 +413,49 @@ async function _reportTenantUsage(
   const subInfo = await getSubscriptionItemId(db, tenantId, stripe, logger);
   if (!subInfo) return;
 
-  // stripe_usage_reports にupsert（冪等）
-  await db.query(
-    `INSERT INTO stripe_usage_reports
-       (tenant_id, period_yyyymm, idempotency_key, total_requests, total_cost_cents)
-     VALUES ($1, $2, $3, $4, $5)
-     ON CONFLICT (idempotency_key) DO UPDATE SET
-       total_requests   = EXCLUDED.total_requests,
-       total_cost_cents = EXCLUDED.total_cost_cents,
-       updated_at       = NOW()`,
-    [tenantId, periodYyyyMm, idempotencyKey, totalRequests, totalCostCents]
-  );
+  // stripe_usage_reports にupsert（冪等）。billed_quantity は「送信を試みる数量」
+  // をこの時点で先に記録する。Stripe API呼び出し(下記)が例外→リトライを繰り返す間も、
+  // 「何を送ろうとしたか」を突合から追えるようにするため、送信成否を待たずに書く。
+  //
+  // ★migration未適用でも他テナントの報告を止めないこと★
+  // ここが例外を投げると、呼び出し元の reportUsageToStripe の for ループに伝播し、
+  // その回のバッチで後続の全テナントが報告されないまま24時間止まる
+  // (index.ts のスケジューラは reportUsageToStripe 全体を1つの catch で包むだけで、
+  // テナント単位のエラー分離をしていない)。migration_stripe_usage_reports_billed_quantity.sql
+  // が未適用のままデプロイすると、最初のテナントで即座に全滅しかねないため、
+  // usageTracker.ts と同じパターンで 42703 のときだけ旧カラム構成に1回だけ
+  // フォールバックし、記録の消失(=バッチ全体の停止)を防ぐ。
+  try {
+    await db.query(
+      `INSERT INTO stripe_usage_reports
+         (tenant_id, period_yyyymm, idempotency_key, total_requests, total_cost_cents, billed_quantity)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (idempotency_key) DO UPDATE SET
+         total_requests   = EXCLUDED.total_requests,
+         total_cost_cents = EXCLUDED.total_cost_cents,
+         billed_quantity  = EXCLUDED.billed_quantity,
+         updated_at       = NOW()`,
+      [tenantId, periodYyyyMm, idempotencyKey, totalRequests, totalCostCents, billedQuantity]
+    );
+  } catch (err) {
+    if ((err as { code?: string })?.code !== '42703') throw err;
+    logger.error(
+      { err, tenantId, periodYyyyMm },
+      '[stripeSync] stripe_usage_reports に billed_quantity 列が無い — ' +
+      'migration_stripe_usage_reports_billed_quantity.sql が未適用。旧カラムで継続するが、' +
+      '突合用の billed_quantity は記録できない状態のまま。至急 migration を適用すること'
+    );
+    await db.query(
+      `INSERT INTO stripe_usage_reports
+         (tenant_id, period_yyyymm, idempotency_key, total_requests, total_cost_cents)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (idempotency_key) DO UPDATE SET
+         total_requests   = EXCLUDED.total_requests,
+         total_cost_cents = EXCLUDED.total_cost_cents,
+         updated_at       = NOW()`,
+      [tenantId, periodYyyyMm, idempotencyKey, totalRequests, totalCostCents]
+    );
+  }
 
   // Stripe送信（最大3回リトライ）
   let lastError: Error | null = null;
