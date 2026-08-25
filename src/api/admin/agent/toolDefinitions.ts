@@ -48,7 +48,7 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
     type: 'function',
     function: {
       name: 'get_tenant_settings',
-      description: 'テナントの現在の設定（GA4 Measurement ID、PostHog ホスト、ウィジェットテーマ、Widget埋め込みを許可するドメイン）を取得する',
+      description: 'テナントの現在の設定（GA4 Measurement ID、PostHog ホスト、ウィジェットテーマ、Widget埋め込みを許可するドメイン、FAQ登録フォームの入力例）を取得する',
       parameters: {
         type: 'object',
         properties: {},
@@ -123,6 +123,31 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
           confirmed: { type: 'boolean', description: '確認フラグ（true でのみ実行される）' },
         },
         required: ['action', 'origin', 'confirmed'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'set_faq_hints',
+      description:
+        'テナントのFAQ登録フォーム（質問欄・回答欄）に表示する入力例（プレースホルダー文言）を設定する。' +
+        'question_hint / answer_hint のどちらか一方だけ、または両方を指定できる。指定しなかった方は' +
+        '変更されない。空文字列("")を指定するとその入力例を解除し、既定の例文表示に戻す（未指定と' +
+        'は異なる扱い）。顧客には表示されず、店主自身がFAQを登録する際の入力支援としてのみ使われる。',
+      parameters: {
+        type: 'object',
+        properties: {
+          question_hint: {
+            type: 'string',
+            description: '質問欄の入力例（200字以内）。空文字列("")で解除',
+          },
+          answer_hint: {
+            type: 'string',
+            description: '回答欄の入力例（200字以内）。空文字列("")で解除',
+          },
+        },
+        required: [],
       },
     },
   },
