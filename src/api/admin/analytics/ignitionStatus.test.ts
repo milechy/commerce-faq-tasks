@@ -7,7 +7,14 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { buildIgnitionStatus, type IgnitionDeps, type TenantIgnitionInput } from "./ignitionStatus";
+import {
+  buildIgnitionStatus,
+  computeSeriesGates,
+  fetchIgnitionStatus,
+  type IgnitionDeps,
+  type TenantIgnitionInput,
+  type SeriesGateDeps,
+} from "./ignitionStatus";
 
 const TENANTS: TenantIgnitionInput[] = [
   { id: "carnation", features: { sales_stage_continuity: true, hermes_raw_data_consent: false } },
@@ -30,7 +37,7 @@ describe("buildIgnitionStatus", () => {
   it("全テナント×全機能のセルを返す", () => {
     const res = buildIgnitionStatus(TENANTS, deps());
     expect(res.rows.map((r) => r.tenantId)).toEqual(["carnation", "r2c_default"]);
-    expect(res.rows[0]!.cells).toHaveLength(5);
+    expect(res.rows[0]!.cells).toHaveLength(6);
   });
 
   it("定期評価の対象テナントだけ judge_sweep が有効になる", () => {
@@ -82,6 +89,7 @@ describe("buildIgnitionStatus", () => {
     const res = buildIgnitionStatus(TENANTS, deps());
     expect(res.envControlledFeatures).toEqual([
       "judge_sweep",
+      "judge_x_memory_intersection",
       "learned_memory_read",
       "learned_memory_write",
     ]);
@@ -103,6 +111,177 @@ describe("buildIgnitionStatus", () => {
     for (const c of res.rows[0]!.cells) {
       expect(c.label).not.toMatch(/LEARNED_MEMORY|JUDGE_SWEEP|tenants\.features|_id\b/);
     }
+  });
+});
+
+describe("buildIgnitionStatus — judge_x_memory_intersection(ナレッジ配線是正P15)", () => {
+  it("交差が空のとき、両方のセルが ON でも交差セルは false になる", () => {
+    // sweep には carnation は入らず、memory write は carnation にしか許可しない
+    // → 個々のセルは片方ずつON/OFFに分かれるが、同一テナントの交差セルはfalseのまま。
+    const res = buildIgnitionStatus(TENANTS, deps({
+      sweepTenants: () => ["r2c_default"],
+      learnedMemoryWrite: (id) => id === "carnation",
+    }));
+    expect(cell(res, "carnation", "judge_sweep").enabled).toBe(false);
+    expect(cell(res, "carnation", "learned_memory_write").enabled).toBe(true);
+    expect(cell(res, "carnation", "judge_x_memory_intersection").enabled).toBe(false);
+
+    expect(cell(res, "r2c_default", "judge_sweep").enabled).toBe(true);
+    expect(cell(res, "r2c_default", "learned_memory_write").enabled).toBe(false);
+    expect(cell(res, "r2c_default", "judge_x_memory_intersection").enabled).toBe(false);
+  });
+
+  it("交差があるとき交差セルは true になる", () => {
+    const res = buildIgnitionStatus(TENANTS, deps({
+      sweepTenants: () => ["carnation"],
+      learnedMemoryWrite: (id) => id === "carnation",
+    }));
+    expect(cell(res, "carnation", "judge_sweep").enabled).toBe(true);
+    expect(cell(res, "carnation", "learned_memory_write").enabled).toBe(true);
+    expect(cell(res, "carnation", "judge_x_memory_intersection").enabled).toBe(true);
+  });
+
+  it("本番の実値(sweep=r2c_default既定 / memory write=carnationのみ許可)ではどのテナントも交差セルがfalse", () => {
+    // resolveSweepTenants() の既定(env未設定)は ["r2c_default"]。
+    // 本番 .env は LEARNED_MEMORY_TENANTS=carnation。交差ゼロが2026-08-25監査の実測値。
+    const res = buildIgnitionStatus(TENANTS, deps({
+      sweepTenants: () => ["r2c_default"],
+      learnedMemoryWrite: (id) => id === "carnation",
+    }));
+    for (const row of res.rows) {
+      expect(cell(res, row.tenantId, "judge_x_memory_intersection").enabled).toBe(false);
+    }
+  });
+});
+
+describe("computeSeriesGates(ナレッジ配線是正P15)", () => {
+  function seriesDeps(over: Partial<SeriesGateDeps> = {}): SeriesGateDeps {
+    return {
+      learnedMemoryThreshold: () => 80,
+      hasConvertingOutcome: jest.fn().mockResolvedValue(false),
+      ...over,
+    };
+  }
+
+  it("交差テナントが0件ならDBに問い合わせず4ゲート全て0/0を返す", async () => {
+    const query = jest.fn();
+    const db = { query };
+    const gates = await computeSeriesGates(db as any, [], seriesDeps());
+    expect(query).not.toHaveBeenCalled();
+    expect(gates).toHaveLength(4);
+    expect(gates.every((g) => g.currentCount === 0 && g.ofTotal === 0)).toBe(true);
+  });
+
+  it("交差テナントがあれば各ゲートの件数をSQL結果から組み立てる", async () => {
+    // userSourceExistsForTable() は conversation_evaluations 側のクエリにも
+    // `FROM chat_sessions cs` を含むEXISTSサブクエリを埋め込むため、
+    // 単純な `FROM <table>` 一致では3クエリが区別できない
+    // (このセッションで既に踏んだ罠。measurementHealth.test.ts と同じ流儀で
+    //  各クエリに固有のFILTER/SELECT句をアンカーにする)。
+    const query = jest.fn().mockImplementation((sql: string) => {
+      if (/message_count >= \$2\) AS ge_msg/.test(sql)) {
+        return Promise.resolve({ rows: [{ total: "10", ge_msg: "6", ge_len: "8" }] });
+      }
+      if (/^\s*SELECT ce\.tenant_id, ce\.session_id/.test(sql)) {
+        return Promise.resolve({
+          rows: [
+            { tenant_id: "carnation", session_id: "s1" },
+            { tenant_id: "carnation", session_id: "s2" },
+          ],
+        });
+      }
+      if (/ce\.score >= \$2\) AS ge_score/.test(sql)) {
+        return Promise.resolve({ rows: [{ total: "9", ge_score: "3" }] });
+      }
+      return Promise.resolve({ rows: [] });
+    });
+    const db = { query };
+    const hasConvertingOutcome = jest
+      .fn()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+
+    const gates = await computeSeriesGates(db as any, ["carnation"], seriesDeps({ hasConvertingOutcome }));
+
+    const byGate = Object.fromEntries(gates.map((g) => [g.gate, g]));
+    expect(byGate["message_count"]).toMatchObject({ currentCount: 6, ofTotal: 10 });
+    expect(byGate["messages_length"]).toMatchObject({ currentCount: 8, ofTotal: 10 });
+    expect(byGate["judge_score"]).toMatchObject({ currentCount: 3, ofTotal: 9 });
+    expect(byGate["converting_outcome"]).toMatchObject({ currentCount: 1, ofTotal: 2 });
+    expect(hasConvertingOutcome).toHaveBeenCalledWith("carnation", "s1");
+    expect(hasConvertingOutcome).toHaveBeenCalledWith("carnation", "s2");
+  });
+
+  it("hasConvertingOutcomeの対象がサンプル上限に達したときはラベルにその旨を出す(禁止34: 母数を隠さない)", async () => {
+    const LIMIT = 100;
+    const capped = Array.from({ length: LIMIT }, (_, i) => ({ tenant_id: "carnation", session_id: `s${i}` }));
+    const query = jest.fn().mockImplementation((sql: string) => {
+      if (/message_count >= \$2\) AS ge_msg/.test(sql)) return Promise.resolve({ rows: [{ total: "0", ge_msg: "0", ge_len: "0" }] });
+      if (/^\s*SELECT ce\.tenant_id, ce\.session_id/.test(sql)) return Promise.resolve({ rows: capped });
+      if (/ce\.score >= \$2\) AS ge_score/.test(sql)) return Promise.resolve({ rows: [{ total: "0", ge_score: "0" }] });
+      return Promise.resolve({ rows: [] });
+    });
+    const db = { query };
+
+    const gates = await computeSeriesGates(db as any, ["carnation"], seriesDeps());
+    const gate = gates.find((g) => g.gate === "converting_outcome")!;
+    expect(gate.ofTotal).toBe(LIMIT);
+    expect(gate.label).toContain("サンプル");
+  });
+});
+
+describe("fetchIgnitionStatus — 交差テナントをcomputeSeriesGatesに渡す配線(ナレッジ配線是正P15)", () => {
+  const ORIGINAL_ENV = { ...process.env };
+
+  afterEach(() => {
+    process.env = { ...ORIGINAL_ENV };
+  });
+
+  it("交差するテナントのIDだけをseriesGates計算に渡す(交差しないテナントを含めない)", async () => {
+    process.env["JUDGE_SWEEP_TENANTS"] = "carnation,other_tenant";
+    process.env["LEARNED_MEMORY_ENABLED"] = "true";
+    process.env["LEARNED_MEMORY_TENANTS"] = "carnation";
+    // TENANTS = [carnation, r2c_default]。carnationのみ交差する
+    // (sweep={carnation,other_tenant} ∩ write={carnation})。
+    const query = jest.fn().mockImplementation((sql: string) => {
+      if (/SELECT id, features FROM tenants/.test(sql)) {
+        return Promise.resolve({ rows: TENANTS });
+      }
+      return Promise.resolve({ rows: [] });
+    });
+    const db = { query };
+
+    const result = await fetchIgnitionStatus(db as any);
+
+    const messageCountCall = query.mock.calls.find(([sql]: [string]) =>
+      /message_count >= \$2\) AS ge_msg/.test(sql),
+    );
+    expect(messageCountCall).toBeDefined();
+    const [, params] = messageCountCall as [string, unknown[]];
+    expect(params[0]).toEqual(["carnation"]);
+    expect(result.seriesGates).toBeDefined();
+    expect(result.seriesGates).toHaveLength(4);
+  });
+
+  it("交差テナントが1件も無ければDBに問い合わせず全ゲート0/0のseriesGatesを返す", async () => {
+    process.env["JUDGE_SWEEP_TENANTS"] = "other_tenant";
+    process.env["LEARNED_MEMORY_ENABLED"] = "true";
+    process.env["LEARNED_MEMORY_TENANTS"] = "carnation";
+    const query = jest.fn().mockImplementation((sql: string) => {
+      if (/SELECT id, features FROM tenants/.test(sql)) {
+        return Promise.resolve({ rows: TENANTS });
+      }
+      return Promise.resolve({ rows: [] });
+    });
+    const db = { query };
+
+    const result = await fetchIgnitionStatus(db as any);
+
+    const gateQueryCalls = query.mock.calls.filter(([sql]: [string]) =>
+      /message_count >= \$2\) AS ge_msg|ce\.score >= \$2\) AS ge_score/.test(sql),
+    );
+    expect(gateQueryCalls).toHaveLength(0);
+    expect(result.seriesGates!.every((g) => g.currentCount === 0 && g.ofTotal === 0)).toBe(true);
   });
 });
 

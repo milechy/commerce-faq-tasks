@@ -46,7 +46,10 @@ export const REQUIRED_COLUMNS: Record<string, readonly string[]> = {
   faq_docs: ["answer", "category", "is_published", "product_cta_url", "product_image_url", "product_price", "question", "tags", "tenant_id"],
   faq_embeddings: ["embedding", "is_excluded_from_search", "metadata", "tenant_id", "text"],
   feedback_messages: ["content", "sender_email", "sender_role", "tenant_id"],
-  knowledge_gaps: ["detection_source", "frequency", "last_detected_at", "message_id", "rag_hit_count", "rag_top_score", "recommendation_status", "session_id", "tenant_id", "user_question"],
+  // recommended_action / suggested_answer は INSERT には現れず、gapRecommender.ts:130-140 の
+  // UPDATE でのみ書かれる(推薦生成時に後から埋まる列)。schemaHealth.test.ts の
+  // UPDATE_ONLY_COLUMNS で例外扱いされ、別テストでUPDATE文への実在を確認している。
+  knowledge_gaps: ["detection_source", "frequency", "last_detected_at", "message_id", "rag_hit_count", "rag_top_score", "recommendation_status", "recommended_action", "session_id", "suggested_answer", "tenant_id", "user_question"],
   learned_memory: ["answer", "embedding", "judge_score", "metadata", "question", "source_session_id", "tenant_id"],
   // 月額固定費の按分課金・冪等性テーブル(migration_lemonslice_monthly.sql)。
   // 未適用のまま _chargeMonthlyFixedShare が動くと INSERT が失敗し、按分請求が送れない。

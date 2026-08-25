@@ -39,6 +39,13 @@ interface DistilledQa {
   answer: string;
 }
 
+/**
+ * 蒸留対象とする最低メッセージ数。1往復未満(挨拶のみ等)を除外する。
+ * ナレッジ配線是正P15: analytics/ignitionStatus.ts の点火ゲート可視化からも
+ * この定数をそのまま import して使う(マジックナンバーの第2の置き場を作らない)。
+ */
+export const MIN_MESSAGES_FOR_DISTILL = 2;
+
 const DISTILL_SYSTEM_PROMPT = `あなたは営業チャットの会話ログから「再利用可能な正規Q&A」を1つだけ抽出する専門家です。
 顧客の中心的な質問・関心を1つの簡潔な質問にまとめ、AIの応答のうち最も効果的だった部分を簡潔な模範回答にまとめてください。
 個人情報・固有名詞・一回限りの文脈は除き、他の顧客にも再利用できる汎用的な形にしてください。
@@ -102,8 +109,11 @@ async function distillConversation(
  * outcome 単独では昇格させない(conversion_attributions があればそちらは曖昧さが
  * 無いため引き続き昇格する)。学習データに失注会話の知見を紛れ込ませる方が、
  * 昇格を1件見送るより実害が大きいため安全側に倒す。
+ *
+ * ナレッジ配線是正P15: analytics/ignitionStatus.ts の点火ゲート可視化からも
+ * この関数をそのまま import して使う(第2の判定ロジックを作らない)。
  */
-async function hasConvertingOutcome(tenantId: string, sessionId: string): Promise<boolean> {
+export async function hasConvertingOutcome(tenantId: string, sessionId: string): Promise<boolean> {
   const pool = getPool();
   const result = await pool.query<{ has_attribution: boolean; outcome: string | null }>(
     `SELECT
@@ -163,7 +173,7 @@ export async function distillAndPromote(
     return false;
   }
 
-  if (messages.length < 2) return false;
+  if (messages.length < MIN_MESSAGES_FOR_DISTILL) return false;
 
   try {
     // D2: Groq課金(蒸留)の前に、CVを伴わない高スコア会話を弾く。
