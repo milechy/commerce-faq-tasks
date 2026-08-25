@@ -3,13 +3,15 @@
 
 import express from "express";
 import request from "supertest";
-import { registerBillingAdminRoutes } from "../../src/lib/billing/billingApi";
+import { registerBillingAdminRoutes, _resetMeteredPriceCacheForTest } from "../../src/lib/billing/billingApi";
 
 // Stripe をモック
 // PR-7: customers.create / subscriptions.create をテストごとに差し替えられるよう
 // モジュールスコープの jest.fn() として外に出す(mock prefix はjestのhoist許可対象)。
+// PR-5(2026-08-25収益監査): prices.retrieve は「今月の請求見積り」が使う実単価取得。
 const mockCustomersCreate = jest.fn();
 const mockSubscriptionsCreate = jest.fn();
+const mockPricesRetrieve = jest.fn();
 jest.mock("stripe", () => {
   return jest.fn().mockImplementation(() => ({
     invoices: {
@@ -26,7 +28,15 @@ jest.mock("stripe", () => {
     subscriptions: {
       create: (...args: unknown[]) => mockSubscriptionsCreate(...args),
     },
+    prices: {
+      retrieve: (...args: unknown[]) => mockPricesRetrieve(...args),
+    },
   }));
+});
+
+beforeEach(() => {
+  // モジュールスコープの価格キャッシュ(billingApi.ts)がテスト間で漏れないようにする。
+  _resetMeteredPriceCacheForTest();
 });
 
 // ── テスト用 Express アプリ生成 ───────────────────────────────────────────
@@ -151,6 +161,105 @@ describe("GET /v1/admin/billing/usage", () => {
   test("4: 認証なし（role=anonymous）→ 403", async () => {
     const { app } = makeApp({ role: "anonymous", tenantId: null, dbRows: [] });
     await request(app).get("/v1/admin/billing/usage").expect(403);
+  });
+});
+
+// ─── GET /v1/admin/billing/usage — billing_estimate_jpy (PR-5) ─────────────
+// 2026-08-25収益監査: 「今月の請求額」が原価×マージン(USD)を無変換で¥表示していた
+// (禁止48違反)のを、Stripe実単価×billedQuantityの見積りに置き換えた。
+describe("GET /v1/admin/billing/usage — billing_estimate_jpy(PR-5)", () => {
+  const ORIG_ENV = process.env;
+
+  beforeEach(() => {
+    process.env = { ...ORIG_ENV, STRIPE_SECRET_KEY: "sk_test_dummy", STRIPE_METERED_PRICE_ID: "price_dummy" };
+    mockPricesRetrieve.mockClear();
+  });
+  afterEach(() => {
+    process.env = ORIG_ENV;
+  });
+
+  test("8: per_unit価格が取得できればbilledQuantity×単価の見積りを返す", async () => {
+    mockPricesRetrieve.mockResolvedValueOnce({ billing_scheme: "per_unit", unit_amount: 500 });
+    const { app } = makeApp({
+      role: "client_admin",
+      tenantId: "tenant-a",
+      dbCallbacks: {
+        "from tenants": [{ plan: "growth" }],
+        "billed_units_weighted": [{
+          total_requests: 10, total_cost_cents: 100, billable_units: 10,
+          billed_units_weighted: "15", unstamped_rows: 0,
+        }],
+      },
+    });
+
+    const res = await request(app)
+      .get("/v1/admin/billing/usage?from=2026-04-01&to=2026-05-01")
+      .expect(200);
+
+    // billedQuantity=15(切り上げ済み) × 単価500円 = 7500円
+    expect(res.body.billing_estimate_jpy).toBe(7500);
+  });
+
+  test("9: STRIPE_SECRET_KEY未設定はnull(0円ではない — 「今月は無料」と誤読させないため)", async () => {
+    delete process.env.STRIPE_SECRET_KEY;
+    const { app } = makeApp({ role: "client_admin", tenantId: "tenant-a", dbRows: [] });
+
+    const res = await request(app)
+      .get("/v1/admin/billing/usage?from=2026-04-01&to=2026-05-01")
+      .expect(200);
+
+    expect(res.body.billing_estimate_jpy).toBeNull();
+    expect(mockPricesRetrieve).not.toHaveBeenCalled();
+  });
+
+  test("10: Stripe priceが段階制(tiered)等でunit_amountが取れない場合はnullに倒す(推測しない)", async () => {
+    mockPricesRetrieve.mockResolvedValueOnce({ billing_scheme: "tiered", unit_amount: null });
+    const { app } = makeApp({
+      role: "client_admin",
+      tenantId: "tenant-a",
+      dbCallbacks: {
+        "from tenants": [{ plan: "growth" }],
+        "billed_units_weighted": [{
+          total_requests: 10, total_cost_cents: 100, billable_units: 10,
+          billed_units_weighted: "15", unstamped_rows: 0,
+        }],
+      },
+    });
+
+    const res = await request(app)
+      .get("/v1/admin/billing/usage?from=2026-04-01&to=2026-05-01")
+      .expect(200);
+
+    expect(res.body.billing_estimate_jpy).toBeNull();
+  });
+
+  test("11: from/toを指定しない横断ビュー(tenantId=all)はStripe呼び出しなしでnull", async () => {
+    const { app } = makeApp({ role: "super_admin", tenantId: null, dbRows: [] });
+
+    const res = await request(app).get("/v1/admin/billing/usage").expect(200);
+
+    expect(res.body.billing_estimate_jpy).toBeNull();
+    expect(mockPricesRetrieve).not.toHaveBeenCalled();
+  });
+
+  test("12: 価格は15分キャッシュされ、2回目の呼び出しではStripeを再度叩かない", async () => {
+    mockPricesRetrieve.mockResolvedValueOnce({ billing_scheme: "per_unit", unit_amount: 500 });
+    const { app } = makeApp({
+      role: "client_admin",
+      tenantId: "tenant-a",
+      dbCallbacks: {
+        "from tenants": [{ plan: "growth" }],
+        "billed_units_weighted": [{
+          total_requests: 10, total_cost_cents: 100, billable_units: 10,
+          billed_units_weighted: "1", unstamped_rows: 0,
+        }],
+      },
+    });
+
+    await request(app).get("/v1/admin/billing/usage?from=2026-04-01&to=2026-05-01").expect(200);
+    await request(app).get("/v1/admin/billing/usage?from=2026-04-01&to=2026-05-01").expect(200);
+
+    expect(mockPricesRetrieve).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -369,7 +478,7 @@ describe("GET /v1/admin/billing/cost-breakdown", () => {
       .get("/v1/admin/billing/cost-breakdown?from=2026-04-01&to=2026-05-01")
       .expect(200);
 
-    expect(res.body.total_yen).toBeGreaterThan(0);
+    expect(res.body.total_usd).toBeGreaterThan(0);
     expect(res.body.breakdown).toBeDefined();
     const chat = res.body.breakdown.chat;
     expect(chat.label).toBe("AI応答");

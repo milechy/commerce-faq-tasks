@@ -29,6 +29,10 @@ export interface BillingSummary {
   cost_llm_cents: number;
   cost_total_cents: number;
   billing_status: "pending" | "invoiced" | "error";
+  // PR-5(2026-08-25収益監査): Stripe実単価(billedQuantity × 実単価)ベースの見積り(円)。
+  // cost_total_cents(原価×マージン倍率、USD)とは別の数式。算出不可(価格未設定等)ならnull
+  // — 0円は「今月は無料」に読めてしまうため区別する。
+  billing_estimate_jpy: number | null;
 }
 
 export interface DailyUsage {
@@ -42,7 +46,9 @@ export interface DailyUsage {
 export interface Invoice {
   id: string;
   month: string;
-  amount_cents: number;
+  // PR-5: Stripeの請求はJPY建て(JPYはStripe上ゼロ小数通貨=最小単位がそのまま円)。
+  // 旧名 amount_cents のまま /100 していたため実額の1/100で表示されていた。
+  amount_jpy: number;
   status: "paid" | "open" | "draft";
   hosted_invoice_url: string | null;
   invoice_pdf: string | null;
@@ -51,13 +57,15 @@ export interface Invoice {
 
 export interface CostBreakdownItem {
   label: string;
-  cost_yen: number;
+  // PR-5: 原価(costCalculator.ts、USD建て)の機能別構成比。Stripeは機能別に請求を
+  // 分けないため実単価ベースにはできない。旧名 cost_yen は無変換のまま¥表示していた。
+  cost_usd: number;
   request_count: number;
   percentage: number;
 }
 
 export interface CostBreakdown {
-  total_yen: number;
+  total_usd: number;
   breakdown: Record<string, CostBreakdownItem>;
 }
 

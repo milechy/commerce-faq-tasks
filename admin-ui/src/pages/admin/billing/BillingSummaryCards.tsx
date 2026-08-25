@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import type { TranslationKey } from "../../../i18n/ja";
 import type { BillingSummary } from "./types";
-import { fmtCents, fmtNum, CARD } from "./utils";
+import { fmtCents, fmtJpy, fmtNum, CARD } from "./utils";
 
 interface BillingSummaryCardsProps {
   summaryTitle: string;
@@ -64,11 +64,13 @@ export function BillingSummaryCards({ summaryTitle, summary, statusBadge, t }: B
           </div>
         </div>
 
-        {/* 請求額 */}
+        {/* 請求見積り(Stripe実単価ベース) */}
         <div style={{ ...CARD, flex: "1 1 140px" }}>
           <div style={{ fontSize: 26, marginBottom: 4 }}>🧾</div>
           <div style={{ fontSize: 26, fontWeight: 700, color: "#4ade80", lineHeight: 1 }}>
-            {fmtCents(summary.cost_total_cents)}
+            {summary.billing_estimate_jpy !== null
+              ? fmtJpy(summary.billing_estimate_jpy)
+              : t("billing.amount_unavailable")}
           </div>
           <div style={{ fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)", marginTop: 4 }}>
             {t("billing.total_amount")}

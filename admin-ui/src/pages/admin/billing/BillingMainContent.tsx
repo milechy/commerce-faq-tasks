@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import type { TranslationKey } from "../../../i18n/ja";
 import type { BillingAdjustment, BillingSummary, CrossTenantRow, DailyUsage, Invoice } from "./types";
-import { fmtCents, fmtNum, CARD, BTN_LINK } from "./utils";
+import { fmtCents, fmtJpy, fmtNum, CARD, BTN_LINK } from "./utils";
 
 interface BillingMainContentProps {
   daily: DailyUsage[];
@@ -75,7 +75,7 @@ export function BillingMainContent({
                       {t("billing.invoice_month", { month: monthLabel })}
                     </div>
                     <div style={{ fontSize: 13, color: "var(--muted-foreground)", marginTop: 2 }}>
-                      {t("billing.invoice_amount", { amount: fmtCents(inv.amount_cents) })} &nbsp;|&nbsp;{" "}
+                      {t("billing.invoice_amount", { amount: fmtJpy(inv.amount_jpy) })} &nbsp;|&nbsp;{" "}
                       {invoiceStatusBadge(inv.status)}
                     </div>
                   </div>

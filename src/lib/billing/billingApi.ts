@@ -5,6 +5,7 @@ import type pino from 'pino';
 import type { Application, Request, Response, RequestHandler } from 'express';
 import { z } from 'zod';
 import { roleAuthMiddleware, requireRole } from '../../api/middleware/roleAuth';
+import { computeExpectedBilling } from './stripeSync';
 
 const usageQuerySchema = z.object({
   tenantId: z.string().min(1).optional(),
@@ -79,6 +80,78 @@ function getStripe(secretKey: string): any {
 }
 
 // ---------------------------------------------------------------------------
+// PR-5(2026-08-25収益監査): 「今月の請求額」に、原価×MARGIN_MULTIPLIER(USDセント)を
+// 無変換で¥表示していた(禁止48違反 — 原価と請求額は別の数式で、実際にStripeへ
+// 請求されるのは billedQuantity(件数×プラン倍率) × Stripe price の実単価)。
+// ここでは実単価をキャッシュ付きで取得し、billedQuantity と掛けて「Stripeが
+// 実際に計算する金額と同じ数式」の見積りを返す。取得できない場合は0円ではなく
+// null(算出不可)を返す — 0円は「今月は無料」に読めてしまうため。
+// ---------------------------------------------------------------------------
+
+let meteredPriceCache: { unitAmountJpy: number | null; fetchedAt: number } | null = null;
+const METERED_PRICE_CACHE_TTL_MS = 15 * 60 * 1000;
+
+/** テスト専用: モジュールスコープの価格キャッシュをリセットする。 */
+export function _resetMeteredPriceCacheForTest(): void {
+  meteredPriceCache = null;
+}
+
+async function getMeteredUnitPriceJpy(stripe: any): Promise<number | null> {
+  const now = Date.now();
+  if (meteredPriceCache && now - meteredPriceCache.fetchedAt < METERED_PRICE_CACHE_TTL_MS) {
+    return meteredPriceCache.unitAmountJpy;
+  }
+  const priceId = process.env.STRIPE_METERED_PRICE_ID;
+  if (!priceId) {
+    meteredPriceCache = { unitAmountJpy: null, fetchedAt: now };
+    return null;
+  }
+  try {
+    const price = await stripe.prices.retrieve(priceId);
+    // per_unit以外(段階制など)は「件数×単価」の単純計算が成立しないため、
+    // 推測せず算出不可に倒す(誤った金額を出すより「出さない」方が禁止10に沿う)。
+    const unitAmount =
+      price.billing_scheme === 'per_unit' && typeof price.unit_amount === 'number'
+        ? price.unit_amount
+        : null;
+    meteredPriceCache = { unitAmountJpy: unitAmount, fetchedAt: now };
+    return unitAmount;
+  } catch {
+    // Stripe到達不可時はキャッシュを更新せず、今回だけ算出不可を返す(次回再試行)。
+    return meteredPriceCache?.unitAmountJpy ?? null;
+  }
+}
+
+/**
+ * 指定テナント・期間について、Stripeが実際に計算する請求額と同じ数式
+ * (billedQuantity × 実単価)で見積りを円で返す。以下のいずれかに該当する場合は
+ * null(算出不可) — 0円を返すと「今月は無料」に読めてしまうため区別する。
+ *   - STRIPE_SECRET_KEY / STRIPE_METERED_PRICE_ID が未設定
+ *   - テナントが存在しない
+ *   - Stripe price が per_unit 以外(段階制等)
+ */
+export async function computeBillingEstimateJpy(
+  db: any,
+  tenantId: string,
+  from: string,
+  to: string,
+): Promise<number | null> {
+  const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
+  if (!stripeSecretKey) return null;
+
+  const tenantResult = await db.query(`SELECT plan FROM tenants WHERE id = $1`, [tenantId]);
+  if (tenantResult.rows.length === 0) return null;
+  const currentPlan = tenantResult.rows[0].plan as string | null;
+
+  const stripe = getStripe(stripeSecretKey);
+  const unitAmountJpy = await getMeteredUnitPriceJpy(stripe);
+  if (unitAmountJpy === null) return null;
+
+  const { billedQuantity } = await computeExpectedBilling(db, tenantId, from, to, currentPlan);
+  return billedQuantity * unitAmountJpy;
+}
+
+// ---------------------------------------------------------------------------
 // W2-7(docs/COPILOT_UI_PARITY.md §3.1 #15): GET /v1/admin/billing/{usage,cost-breakdown,
 // invoices} の集計本体。HTTPレイヤ(このファイルのルート本体)とチャットエージェント
 // (agent/actionExecutor.ts)の両方から同じ値を取得できるよう、認可・レスポンス整形から
@@ -108,7 +181,14 @@ export async function fetchBillingUsage(
   tenantId: string | null,
   from?: string,
   to?: string,
-): Promise<{ tenantId: string; daily: Record<string, unknown>[]; monthly: Record<string, unknown>[] }> {
+): Promise<{
+  tenantId: string;
+  daily: Record<string, unknown>[];
+  monthly: Record<string, unknown>[];
+  /** PR-5: Stripe実単価ベースの見積り(円)。tenantId未指定(横断ビュー)や
+   *  from/to未指定では算出しようがないため常にnull。 */
+  billing_estimate_jpy: number | null;
+}> {
   const { where, params } = billingWhereClause(tenantId, from, to);
 
   const dailyResult = await db.query(
@@ -149,21 +229,25 @@ export async function fetchBillingUsage(
     params,
   );
 
+  const billingEstimateJpy =
+    tenantId && from && to ? await computeBillingEstimateJpy(db, tenantId, from, to) : null;
+
   return {
     tenantId: tenantId ?? 'all',
     daily: dailyResult.rows,
     monthly: monthlyResult.rows,
+    billing_estimate_jpy: billingEstimateJpy,
   };
 }
 
-export type BillingCostBreakdownItem = { label: string; cost_yen: number; request_count: number; percentage: number };
+export type BillingCostBreakdownItem = { label: string; cost_usd: number; request_count: number; percentage: number };
 
 export async function fetchBillingCostBreakdown(
   db: any,
   tenantId: string | null,
   from?: string,
   to?: string,
-): Promise<{ tenantId: string; total_yen: number; breakdown: Record<string, BillingCostBreakdownItem> }> {
+): Promise<{ tenantId: string; total_usd: number; breakdown: Record<string, BillingCostBreakdownItem> }> {
   const { where, params } = billingWhereClause(tenantId, from, to);
 
   const result = await db.query(
@@ -190,18 +274,21 @@ export async function fetchBillingCostBreakdown(
     0,
   );
 
+  // PR-5: この内訳は機能別の「原価」構成比であり、USD建て(costCalculator.ts)。
+  // Stripeは機能別に請求を分けないため実単価ベースには変換できない。
+  // 変換なしに¥表示していたのが禁止48違反の一つだったので、正直に$のまま返す。
   const breakdown: Record<string, BillingCostBreakdownItem> = {};
   for (const row of result.rows) {
     const feature = row.feature_used as string;
     breakdown[feature] = {
       label: LABELS[feature] ?? feature,
-      cost_yen: Math.round(Number(row.total_cents) / 100),
+      cost_usd: Math.round(Number(row.total_cents) / 100),
       request_count: Number(row.request_count),
       percentage: totalCents > 0 ? Math.round((Number(row.total_cents) / totalCents) * 100) : 0,
     };
   }
 
-  return { tenantId: tenantId ?? 'all', total_yen: Math.round(totalCents / 100), breakdown };
+  return { tenantId: tenantId ?? 'all', total_usd: Math.round(totalCents / 100), breakdown };
 }
 
 export type BillingInvoicesResult =

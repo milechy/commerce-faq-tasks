@@ -245,8 +245,10 @@ export type BillingSummaryAgentActionCard = {
   kind: "billing_summary";
   period: string;
   plan: string;
-  totalYen: number;
-  breakdown: Array<{ feature: string; label: string; costYen: number; percentage: number }>;
+  /** Stripe実単価ベースの見積り(円)。算出不可ならnull(0円=無料と誤読させないため区別)。 */
+  billingEstimateJpy: number | null;
+  /** 機能別の原価構成比(USD)。Stripeは機能別に請求を分けないため実単価ベースにはできない。 */
+  breakdown: Array<{ feature: string; label: string; costUsd: number; percentage: number }>;
   invoicesAvailable: boolean;
   invoices: Array<{
     id: string;

@@ -354,6 +354,7 @@ export default function BillingPage() {
             cost_llm_cents: number;
             cost_total_cents: number;
           }>;
+          billing_estimate_jpy: number | null;
         };
 
         // daily マッピング
@@ -388,6 +389,7 @@ export default function BillingPage() {
           cost_llm_cents: costLlmCents,
           cost_total_cents: costTotalCents,
           billing_status: costTotalCents > 0 ? "invoiced" : "pending",
+          billing_estimate_jpy: data.billing_estimate_jpy ?? null,
         });
       } else if (usageRes.status === "fulfilled") {
         // APIが200以外を返した場合（no_active_subscription など）
@@ -400,6 +402,7 @@ export default function BillingPage() {
           cost_llm_cents: 0,
           cost_total_cents: 0,
           billing_status: "pending",
+          billing_estimate_jpy: null,
         });
       }
 
@@ -430,7 +433,8 @@ export default function BillingPage() {
         const mappedInvoices: Invoice[] = data.invoices.map((inv) => ({
           id: inv.id,
           month: tsToYearMonth(inv.periodStart),
-          amount_cents: inv.amountDue,
+          // amountDue はStripeのJPY建て請求額(ゼロ小数通貨=既に円そのもの)。/100しない。
+          amount_jpy: inv.amountDue,
           status: (["paid", "open", "draft"].includes(inv.status)
             ? inv.status
             : "open") as Invoice["status"],
@@ -793,11 +797,11 @@ export default function BillingPage() {
             <UsageChartSection daily={daily} chartMode={chartMode} setChartMode={setChartMode} t={t} />
           )}
 
-          {/* コスト内訳 */}
-          {costBreakdown && costBreakdown.total_yen > 0 && (
+          {/* コスト内訳(原価、USD概算) */}
+          {costBreakdown && costBreakdown.total_usd > 0 && (
             <section style={{ ...CARD, marginBottom: 20 }}>
               <h2 style={{ fontSize: 15, fontWeight: 600, color: "var(--muted-foreground)", margin: "0 0 16px" }}>
-                コスト内訳
+                コスト内訳（原価・USD概算）
               </h2>
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 {Object.entries(costBreakdown.breakdown).map(([feature, item]) => {
@@ -811,7 +815,7 @@ export default function BillingPage() {
                     <div key={feature}>
                       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, fontSize: 13 }}>
                         <span style={{ color: "var(--muted-foreground)", fontWeight: 600 }}>{item.label}</span>
-                        <span style={{ color }}>¥{item.cost_yen.toLocaleString("ja-JP")} ({item.percentage}%)</span>
+                        <span style={{ color }}>${item.cost_usd.toLocaleString("en-US")} ({item.percentage}%)</span>
                       </div>
                       <div style={{ height: 8, borderRadius: 4, background: "rgba(255,255,255,0.05)", overflow: "hidden" }}>
                         <div

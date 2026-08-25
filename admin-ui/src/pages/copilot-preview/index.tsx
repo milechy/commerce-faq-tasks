@@ -958,11 +958,11 @@ export default function CopilotPreviewPage() {
         };
       }
       if (a.card?.kind === "billing_summary") {
-        const { period, plan, totalYen, breakdown, invoicesAvailable, invoices, portalUrl } = a.card;
+        const { period, plan, billingEstimateJpy, breakdown, invoicesAvailable, invoices, portalUrl } = a.card;
         return {
           id: nextId(),
           role: "ai",
-          card: { kind: "billingSummary", period, plan, totalYen, breakdown, invoicesAvailable, invoices, portalUrl },
+          card: { kind: "billingSummary", period, plan, billingEstimateJpy, breakdown, invoicesAvailable, invoices, portalUrl },
         };
       }
       // D6: 優先度を含め、正規表現では拾えなかった内容(複数行の対応方針)もそのまま運ぶ。
@@ -3459,7 +3459,7 @@ function KnowledgeAttributionCard({ card }: { card: Extract<Card, { kind: "knowl
 // ポータル(支払い方法の確認・変更・請求書ダウンロードができる、Stripe自身の認証で
 // 保護された画面)なので、外部リンクとして案内する(旧UIの「invoices」タブと同じ導線)。
 function BillingSummaryCard({ card }: { card: Extract<Card, { kind: "billingSummary" }> }) {
-  const { period, plan, totalYen, breakdown, invoicesAvailable, invoices, portalUrl } = card;
+  const { period, plan, billingEstimateJpy, breakdown, invoicesAvailable, invoices, portalUrl } = card;
   const periodLabel = period === "7d" ? "直近7日間" : period === "90d" ? "直近90日間" : "直近30日間";
 
   return (
@@ -3469,18 +3469,19 @@ function BillingSummaryCard({ card }: { card: Extract<Card, { kind: "billingSumm
           {plan}
         </span>
         <span style={{ fontSize: 15, fontWeight: 700, color: "var(--foreground)" }}>
-          今期の費用 {totalYen.toLocaleString("ja-JP")}円
+          今期の請求見積り {billingEstimateJpy !== null ? `${billingEstimateJpy.toLocaleString("ja-JP")}円` : "算出できません"}
         </span>
       </div>
       {breakdown.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <div style={{ fontSize: 11.5, color: "var(--muted-foreground)" }}>機能別の原価構成比(参考)</div>
           {breakdown.map((b) => (
             <div key={b.feature} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5 }}>
               <span style={{ width: 80, flexShrink: 0, color: "var(--muted-foreground)" }}>{b.label}</span>
               <div style={{ flex: 1, height: 8, borderRadius: 4, background: "rgba(120,120,140,0.15)", overflow: "hidden" }}>
                 <div style={{ width: `${b.percentage}%`, height: "100%", background: "linear-gradient(90deg, #3b82f6, #8b5cf6)" }} />
               </div>
-              <span style={{ width: 90, flexShrink: 0, textAlign: "right", color: "var(--foreground)" }}>{b.percentage}%（{b.costYen.toLocaleString("ja-JP")}円）</span>
+              <span style={{ width: 90, flexShrink: 0, textAlign: "right", color: "var(--foreground)" }}>{b.percentage}%（${b.costUsd.toLocaleString("en-US")}）</span>
             </div>
           ))}
         </div>

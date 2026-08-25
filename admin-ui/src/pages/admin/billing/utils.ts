@@ -2,8 +2,16 @@ import type * as React from "react";
 import type { DailyUsage } from "./types";
 
 // ─── ユーティリティ ────────────────────────────────────────
+// PR-5(2026-08-25収益監査): costCalculator.ts由来のUSDセントを無変換のまま¥表示していた
+// (禁止48違反)。為替換算は持ち込まず、実態通り$表示に直す。実際にStripeへ請求される
+// 円建て金額(JPYはStripe上ゼロ小数通貨)は下のfmtJpyで別に表示する。
 export function fmtCents(cents: number): string {
-  return `¥${Math.round(cents / 100).toLocaleString("ja-JP")}`;
+  return `$${Math.round(cents / 100).toLocaleString("en-US")}`;
+}
+
+/** Stripeの実請求額(円)をそのまま表示する。JPYはゼロ小数通貨のため/100しない。 */
+export function fmtJpy(amount: number): string {
+  return `¥${Math.round(amount).toLocaleString("ja-JP")}`;
 }
 
 export function fmtNum(n: number): string {
