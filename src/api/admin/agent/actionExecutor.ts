@@ -3093,6 +3093,9 @@ export async function executeToolCall(
       try {
         const result = await approveGapRecommendation(gapId, tenantId, isSuperAdmin);
         if (!result.ok) {
+          if (result.reason === 'already_resolved') {
+            return truncate(`知識ギャップ（ID: ${gapId}）は既に解決済みです。再承認はできません`);
+          }
           return truncate(`知識ギャップ（ID: ${gapId}）が見つかりません`);
         }
         // 出所を示さずに承認させない(禁止29・33の趣旨)。質問文・検出源・頻度を必ず添える。
@@ -3136,6 +3139,9 @@ export async function executeToolCall(
           }
           if (result.reason === 'forbidden') {
             return truncate('このギャップは他のテナントのものです');
+          }
+          if (result.reason === 'already_resolved') {
+            return truncate(`知識ギャップ（ID: ${gapId}）は既に解決済みです。重複してFAQを作成することはできません`);
           }
           return truncate(`知識ギャップ（ID: ${gapId}）はまだ承認されていません。先に approve_gap_recommendation で承認してください`);
         }
