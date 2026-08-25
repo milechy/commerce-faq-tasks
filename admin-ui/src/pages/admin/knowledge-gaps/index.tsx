@@ -51,7 +51,7 @@ export default function KnowledgeGapsPage() {
     try {
       const params = new URLSearchParams({ status: "open" });
       if (effectiveTenant) params.set("tenant", effectiveTenant);
-      const res = await authFetch(`${API_BASE}/v1/admin/knowledge/gaps?${params}`);
+      const res = await authFetch(`${API_BASE}/v1/admin/knowledge-gaps?${params}`);
       if (!res.ok) throw new Error();
       const data = (await res.json()) as { gaps: KnowledgeGap[] };
       setGaps(data.gaps ?? []);
@@ -102,7 +102,7 @@ export default function KnowledgeGapsPage() {
   const handleDismiss = async (gap: KnowledgeGap) => {
     setDismissingId(gap.id);
     try {
-      const res = await authFetch(`${API_BASE}/v1/admin/knowledge/gaps/${gap.id}`, {
+      const res = await authFetch(`${API_BASE}/v1/admin/knowledge-gaps/${gap.id}`, {
         method: "PATCH",
         body: JSON.stringify({ status: "dismissed" }),
       });

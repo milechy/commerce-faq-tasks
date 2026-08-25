@@ -39,7 +39,6 @@ import {
   seedTenantsFromDB,
 } from "./lib/tenant-context";
 import { registerKnowledgeAdminRoutes } from "./api/admin/knowledge/routes";
-import { registerKnowledgeGapRoutes } from "./api/admin/knowledge/knowledgeGapRoutes";
 import { registerFeedbackRoutes } from "./api/admin/feedback/feedbackRoutes";
 import { registerAdminFeedbackManagementRoutes } from "./api/admin/feedback/routes";
 import { registerAdminAiAssistRoutes } from "./api/admin/ai-assist/routes";
@@ -587,9 +586,9 @@ registerMonitoringRoutes(app);
 registerChatHistoryRoutes(app);
 registerTuningRoutes(app);
 registerTestResponseRoutes(app);
-// Phase38+: ナレッジギャップ検出 API
-registerKnowledgeGapRoutes(app);
-// Phase46 Stream B: Knowledge Gap 推薦・ナレッジ追加 API
+// ナレッジギャップ検出・推薦・ナレッジ追加 API(Phase38+/Phase46)。
+// 2026-08-25(P10): 2系統に分かれていたAPIをPhase46に一本化(旧
+// registerKnowledgeGapRoutes は削除。admin-ui/copilot-preview も新パスへ移行済み)。
 registerKnowledgeGapPhase46Routes(app);
 // Phase43: admin_feedback チケット管理 API（feedbackRoutes.ts より前に登録）
 registerAdminFeedbackManagementRoutes(app);

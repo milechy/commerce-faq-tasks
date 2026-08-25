@@ -11,7 +11,7 @@ import { t } from "../i18n/messages";
 import type { Lang } from "../i18n/messages";
 import { saveMessage } from "../admin/chat-history/chatHistoryRepository";
 import { resolveTrafficSource, TRAFFIC_SOURCE_HEADER } from "../../lib/traffic/trafficSource";
-import { saveKnowledgeGap } from "../admin/knowledge/knowledgeGapRepository";
+import { detectGap } from "../../agent/gap/gapDetector";
 import { analyzeSentiment } from "../../lib/sentiment/client";
 import { sanitizeInput, sanitizeOutput, blockReasonToMessage } from "../../lib/security/inputSanitizer";
 import { sanitizeInput as l5SanitizeInput, sessionHistoryStore } from "../../middleware/inputSanitizer";
@@ -426,17 +426,26 @@ export function createChatHandler(logger: Logger) {
 
       res.status(200).json(response);
 
-      // Phase38+: ナレッジギャップ検出 + 保存（fire-and-forget）
+      // Phase38+/2026-08-25(P10): ナレッジギャップ検出は detectGap(gapDetector.ts)
+      // に一本化する(第2の起票経路を作らない)。no_rag/low_confidence は
+      // synthesisTool.ts の detectGap 呼び出しが同じ gapSignal で既に判定済みのため、
+      // ここで同条件を再検出すると同一メッセージの frequency を二重加算してしまう
+      // (upsertGap は7日以内ILIKE一致の既存行を見つけて+1する)。
+      // ここで拾うのは「ヒットはあり信頼度も十分だったのに、LLMの応答文面が
+      // 未回答を示している」ケースのみ — synthesisTool.ts 側では検出できない
+      // 固有の信号であり、fallback として記録する。
       const gapSignal = result.meta?.gapSignal;
-      if (isKnowledgeGap(gapSignal) || isResponseGap(content)) {
-        saveKnowledgeGap({
+      const hasConfidentHit = (gapSignal?.hitCount ?? 0) > 0 && (gapSignal?.topScore ?? 0) >= 0.3;
+      if (isResponseGap(content) && hasConfidentHit) {
+        detectGap({
           tenantId,
-          userQuestion: body.message,
           sessionId,
-          ragHitCount: gapSignal?.hitCount ?? 0,
-          ragTopScore: gapSignal?.topScore ?? 0,
+          userMessage: body.message,
+          ragResultCount: gapSignal?.hitCount ?? 0,
+          topRerankScore: gapSignal?.topScore,
+          templateSource: "fallback",
         }).catch((err) =>
-          logger.warn({ err }, "[knowledge-gap] save failed")
+          logger.warn({ err }, "[knowledge-gap] detect failed")
         );
       }
 

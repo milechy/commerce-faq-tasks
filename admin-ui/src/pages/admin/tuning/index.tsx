@@ -214,7 +214,7 @@ export default function TuningRulesPage() {
     showToast(msg);
     // GID 1216275179995736: 未回答質問からの作成であれば、元のgapをresolvedにする
     if (resolveGapId) {
-      void authFetch(`${API_BASE}/v1/admin/knowledge/gaps/${resolveGapId}`, {
+      void authFetch(`${API_BASE}/v1/admin/knowledge-gaps/${resolveGapId}`, {
         method: "PATCH",
         body: JSON.stringify({ status: "resolved" }),
       }).catch(() => {/* best-effort */});

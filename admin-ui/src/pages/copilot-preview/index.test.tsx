@@ -83,7 +83,7 @@ const mockOk = (data: unknown): Promise<Response> =>
 
 // 左レールの件数バッジ用にマウント時に叩かれる2本(既存の /v1/admin/agent/chat の応答
 // シーケンスに割り込まないよう、既存テストでは常に0件で素通りさせる)
-const BADGE_URL_RE = /knowledge\/gaps\/count|chat-history\/escalations/;
+const BADGE_URL_RE = /knowledge-gaps\/count|chat-history\/escalations/;
 const isBadgeUrl = (url: unknown) => BADGE_URL_RE.test(String(url));
 const mockEmptyBadges = () => mockOk({ count: 0, escalations: [] });
 
@@ -3939,7 +3939,7 @@ describe("CopilotPreviewPage — 対応中の会話カテゴリーと会話の�
 
 // GID 1217007275511487: 左レールが「今どれだけ溜まっているか」を一切示しておらず、
 // 旧ダッシュボードのstatカード無しでは対応漏れに気づけなかった。既存エンドポイント
-// (knowledge/gaps/count・chat-history/escalations)の件数をバッジで出す。
+// (knowledge-gaps/count・chat-history/escalations)の件数をバッジで出す。
 // 0件・取得失敗時はバッジを出さない(店主に「0」やエラーを読ませない)。
 describe("CopilotPreviewPage — 左レールの件数バッジ", () => {
   // バッジ用件数の応答だけを差し替え、それ以外(オンボーディング判定・エージェント応答)は共通
@@ -4005,7 +4005,7 @@ describe("CopilotPreviewPage — 左レールの件数バッジ", () => {
 
     await screen.findByLabelText("未回答質問 1件");
     const urls = vi.mocked(authFetch).mock.calls.map((c) => String(c[0]));
-    expect(urls).toContain("http://localhost:3100/v1/admin/knowledge/gaps/count?tenant=tenant-a");
+    expect(urls).toContain("http://localhost:3100/v1/admin/knowledge-gaps/count?tenant=tenant-a");
     expect(urls).toContain("http://localhost:3100/v1/admin/chat-history/escalations?tenant=tenant-a");
   });
 
@@ -4020,7 +4020,7 @@ describe("CopilotPreviewPage — 左レールの件数バッジ", () => {
 
     await screen.findByLabelText("未回答質問 5件");
     const urls = vi.mocked(authFetch).mock.calls.map((c) => String(c[0]));
-    expect(urls).toContain("http://localhost:3100/v1/admin/knowledge/gaps/count?tenant=tenant-preview");
+    expect(urls).toContain("http://localhost:3100/v1/admin/knowledge-gaps/count?tenant=tenant-preview");
   });
 
   it("0件のカテゴリーにはバッジを出さない", async () => {

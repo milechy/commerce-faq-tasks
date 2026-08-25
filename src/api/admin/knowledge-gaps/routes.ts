@@ -10,6 +10,7 @@ import { superAdminMiddleware } from '../tenants/superAdminMiddleware';
 import { generateRecommendations } from '../../../agent/gap/gapRecommender';
 import { callGeminiJudge } from '../../../lib/gemini/client';
 import { insertEmbeddingAsync, upsertToEsAsync } from '../knowledge/faqCrudRoutes';
+import { getGapCount } from '../knowledge/knowledgeGapRepository';
 
 const logger = pino();
 
@@ -60,6 +61,16 @@ const recommendationActionSchema = z.object({
   action: z.enum(['approve', 'dismiss']),
 });
 
+// 2026-08-25(P10): 旧 knowledgeGapRoutes.ts の PATCH は knowledge_gaps.status
+// (ギャップ自体のライフサイクル: open/resolved/dismissed)を更新していたが、
+// 本ファイルの PATCH は recommendation_status(AI推薦の承認状態)しか更新できず、
+// 別の関心事だった。1つのPATCHエンドポイントで両方受けられるよう union にする
+// (第2のPATCHルートを作らない)。
+const gapStatusUpdateSchema = z.object({
+  status: z.enum(['resolved', 'dismissed']),
+  resolved_faq_id: z.number().int().positive().nullable().optional(),
+});
+
 const addKnowledgeSchema = z.object({
   answer_text: z.string().min(1).max(5000),
   category: z.string().max(100).optional(),
@@ -98,6 +109,37 @@ interface KnowledgeGapRow {
 export function registerKnowledgeGapPhase46Routes(app: Express): void {
 
   // -------------------------------------------------------------------------
+  // GET /v1/admin/knowledge-gaps/count  (バッジ用: 未解決件数)
+  // 2026-08-25(ナレッジ配線是正P10): 旧 knowledgeGapRoutes.ts(/v1/admin/knowledge/gaps/count)
+  // を統合。/:id より先に登録する必要がある(Express のパスマッチ順)。
+  // -------------------------------------------------------------------------
+  app.get(
+    '/v1/admin/knowledge-gaps/count',
+    supabaseAuthMiddleware,
+    async (req: Request, res: Response) => {
+      const { su, role, jwtTenantId, isSuperAdmin } = resolveJwt(req);
+      if (!isAllowedKgPhase46Role(role)) {
+        return denyKgPhase46Role(req, res, su, role);
+      }
+      const tenantFilter = isSuperAdmin
+        ? ((req.query['tenant_id'] as string | undefined) || (req.query['tenant'] as string | undefined) || undefined)
+        : jwtTenantId;
+
+      if (!isSuperAdmin && !tenantFilter) {
+        return res.status(400).json({ error: 'tenant が解決できません' });
+      }
+
+      try {
+        const count = await getGapCount(tenantFilter);
+        return res.json({ count });
+      } catch (err) {
+        logger.warn({ err }, '[GET /knowledge-gaps/count]');
+        return res.status(500).json({ error: '件数の取得に失敗しました' });
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
   // GET /v1/admin/knowledge-gaps
   // frequency DESC + last_detected_at DESC デフォルトソート
   // -------------------------------------------------------------------------
@@ -111,7 +153,7 @@ export function registerKnowledgeGapPhase46Routes(app: Express): void {
       }
 
       const tenantFilter = isSuperAdmin
-        ? ((req.query['tenant_id'] as string | undefined) || undefined)
+        ? ((req.query['tenant_id'] as string | undefined) || (req.query['tenant'] as string | undefined) || undefined)
         : jwtTenantId;
 
       if (!isSuperAdmin && !tenantFilter) {
@@ -217,7 +259,11 @@ export function registerKnowledgeGapPhase46Routes(app: Express): void {
 
   // -------------------------------------------------------------------------
   // PATCH /v1/admin/knowledge-gaps/:id
-  // approve / dismiss → recommendation_status を更新
+  // body に応じて2つの異なる関心事のどちらかを更新する(1エンドポイントに統合。
+  // 2026-08-25是正: 旧 knowledgeGapRoutes.ts が別ファイル・別カラムで
+  // 同種のPATCHを実装していたため統合した):
+  //   { action: 'approve'|'dismiss' } → recommendation_status(AI推薦の承認状態)
+  //   { status: 'resolved'|'dismissed', resolved_faq_id? } → status(ギャップ自体のライフサイクル)
   // -------------------------------------------------------------------------
   app.patch(
     '/v1/admin/knowledge-gaps/:id',
@@ -231,25 +277,40 @@ export function registerKnowledgeGapPhase46Routes(app: Express): void {
         return denyKgPhase46Role(req, res, su, role);
       }
 
-      const parsed = recommendationActionSchema.safeParse(req.body);
-      if (!parsed.success) {
-        return res.status(400).json({ error: '入力が不正です', issues: parsed.error.issues });
+      const actionParsed = recommendationActionSchema.safeParse(req.body);
+      const statusParsed = gapStatusUpdateSchema.safeParse(req.body);
+      if (!actionParsed.success && !statusParsed.success) {
+        return res.status(400).json({
+          error: '入力が不正です',
+          issues: [...actionParsed.error.issues, ...statusParsed.error.issues],
+        });
       }
-
-      const newStatus = parsed.data.action === 'approve' ? 'approved' : 'dismissed';
 
       try {
         const pool = getPool();
         const tenantCondition = isSuperAdmin ? '' : ' AND tenant_id = $3';
-        const args: unknown[] = [newStatus, id];
-        if (!isSuperAdmin) args.push(jwtTenantId);
 
-        const result = await pool.query(
-          `UPDATE knowledge_gaps
-           SET recommendation_status = $1
-           WHERE id = $2${tenantCondition}`,
-          args,
-        );
+        let result;
+        if (actionParsed.success) {
+          const newRecommendationStatus = actionParsed.data.action === 'approve' ? 'approved' : 'dismissed';
+          const args: unknown[] = [newRecommendationStatus, id];
+          if (!isSuperAdmin) args.push(jwtTenantId);
+          result = await pool.query(
+            `UPDATE knowledge_gaps SET recommendation_status = $1 WHERE id = $2${tenantCondition}`,
+            args,
+          );
+        } else {
+          const { status, resolved_faq_id } = statusParsed.data!;
+          const args: unknown[] = [status, resolved_faq_id ?? null, id];
+          const tenantConditionForStatus = isSuperAdmin ? '' : ' AND tenant_id = $4';
+          if (!isSuperAdmin) args.push(jwtTenantId);
+          result = await pool.query(
+            `UPDATE knowledge_gaps
+             SET status = $1, resolved_faq_id = COALESCE($2, resolved_faq_id)
+             WHERE id = $3${tenantConditionForStatus}`,
+            args,
+          );
+        }
 
         if ((result.rowCount ?? 0) === 0) {
           return res.status(404).json({ error: 'ギャップが見つかりません' });
