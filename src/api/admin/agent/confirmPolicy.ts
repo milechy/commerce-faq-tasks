@@ -28,6 +28,9 @@ export const WRITE_TOOL_RISK_TIERS: Record<string, RiskTier> = {
   set_ga4_id: 'low',
   set_posthog: 'low',
   set_widget_theme: 'low',
+  // 顧客には表示されない、店主自身のFAQ登録フォームの入力支援文言。set_ga4_id/set_posthog
+  // と同じ性質(単一の設定値、元の値を入れ直せば完全に戻る、外部送出も課金も無い)。
+  set_faq_hints: 'low',
   activate_avatar: 'low',
   // 同じ is_active フラグを倒すだけで、activate_avatar で元に戻せる。
   // 顧客の画面からアバターが消えるが、コンテンツは失われないため activate と同じ階層。

@@ -541,7 +541,7 @@ export async function executeToolCall(
     case 'get_tenant_settings': {
       try {
         const result = await db.query(
-          'SELECT ga4_measurement_id, posthog_host, widget_theme, allowed_origins FROM tenants WHERE id = $1',
+          'SELECT ga4_measurement_id, posthog_host, widget_theme, allowed_origins, faq_question_hint, faq_answer_hint FROM tenants WHERE id = $1',
           [tenantId]
         );
         if (result.rows.length === 0) {
@@ -552,6 +552,8 @@ export async function executeToolCall(
           posthog_host: string | null;
           widget_theme: Record<string, unknown> | null;
           allowed_origins: string[] | null;
+          faq_question_hint: string | null;
+          faq_answer_hint: string | null;
         };
         const origins = row.allowed_origins ?? [];
         return truncate(
@@ -559,7 +561,9 @@ export async function executeToolCall(
           `• GA4 Measurement ID: ${row.ga4_measurement_id ?? '未設定'}\n` +
           `• PostHog ホスト: ${row.posthog_host ?? '未設定'}\n` +
           `• ウィジェットテーマ: ${JSON.stringify(row.widget_theme ?? {})}\n` +
-          `• Widget埋め込み許可ドメイン: ${origins.length > 0 ? origins.join(', ') : '未登録（全ドメインから埋め込み可能）'}`
+          `• Widget埋め込み許可ドメイン: ${origins.length > 0 ? origins.join(', ') : '未登録（全ドメインから埋め込み可能）'}\n` +
+          `• FAQ質問欄の入力例: ${row.faq_question_hint ?? '未設定（既定の例文を表示）'}\n` +
+          `• FAQ回答欄の入力例: ${row.faq_answer_hint ?? '未設定（既定の例文を表示）'}`
         );
       } catch (err) {
         logger.warn('[actionExecutor] get_tenant_settings failed', err);
@@ -674,6 +678,62 @@ export async function executeToolCall(
       } catch (err) {
         logger.warn('[actionExecutor] update_allowed_origins failed', err);
         return truncate('許可ドメインの更新に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // set_ga4_id/set_posthogと同じ低リスクの純粋な設定値(顧客には見えない、店主自身の
+    // 入力支援のみ)のためconfirmedは要求しない。ただしparseOptionalTextArgは再利用しない —
+    // あちらは空文字列を「未指定」に丸めるため(名前/性格を空にする正当な用途が無いとの
+    // 理由)、この機能で必要な「空文字列を渡して入力例を解除する」が表現できない。
+    // 「キーが存在し値が文字列」なら明示指定(空文字列も含む)、キー自体が無ければ
+    // 未指定として扱う。未指定/指定済みの2状態はCOALESCEで表現できない(COALESCEの
+    // NULLは「未指定」と「明示的にクリア」を区別できない)ため、admin/tenants/routes.ts の
+    // PATCH /v1/admin/my-tenant と同じ動的SET句構築パターンを踏襲する。
+    case 'set_faq_hints': {
+      const hasQuestionHint = typeof args['question_hint'] === 'string';
+      const hasAnswerHint = typeof args['answer_hint'] === 'string';
+      if (!hasQuestionHint && !hasAnswerHint) {
+        return truncate('question_hint か answer_hint のどちらかを指定してください');
+      }
+      const questionHint = hasQuestionHint
+        ? (String(args['question_hint']).trim().slice(0, 200) || null)
+        : undefined;
+      const answerHint = hasAnswerHint
+        ? (String(args['answer_hint']).trim().slice(0, 200) || null)
+        : undefined;
+
+      const setClauses: string[] = [];
+      const params: unknown[] = [];
+      if (questionHint !== undefined) {
+        params.push(questionHint);
+        setClauses.push(`faq_question_hint = $${params.length}`);
+      }
+      if (answerHint !== undefined) {
+        params.push(answerHint);
+        setClauses.push(`faq_answer_hint = $${params.length}`);
+      }
+      setClauses.push('updated_at = NOW()');
+      params.push(tenantId);
+
+      try {
+        const result = await db.query(
+          `UPDATE tenants SET ${setClauses.join(', ')} WHERE id = $${params.length}
+           RETURNING faq_question_hint, faq_answer_hint`,
+          params
+        );
+        if (result.rows.length === 0) {
+          return truncate('テナントが見つかりません');
+        }
+        const row = result.rows[0] as { faq_question_hint: string | null; faq_answer_hint: string | null };
+        return truncate(
+          `FAQ入力例を更新しました。\n` +
+          `• 質問欄の入力例: ${row.faq_question_hint ?? '未設定（既定の例文を表示）'}\n` +
+          `• 回答欄の入力例: ${row.faq_answer_hint ?? '未設定（既定の例文を表示）'}`
+        );
+      } catch (err) {
+        logger.warn('[actionExecutor] set_faq_hints failed', err);
+        return truncate('FAQ入力例の更新に失敗しました');
       }
     }
 

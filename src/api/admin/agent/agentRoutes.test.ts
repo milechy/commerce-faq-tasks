@@ -4175,6 +4175,129 @@ describe('POST /v1/admin/agent/chat', () => {
   });
 
   // -------------------------------------------------------------------------
+  // W1-3: set_faq_hints(docs/COPILOT_UI_PARITY.md §3.1 #3)
+  describe('set_faq_hints', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    it('question_hint だけを指定すると、answer_hint は変更せずSET句に含めない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-sfh-1', 'set_faq_hints', {
+          question_hint: '例: 保証期間について',
+        }))
+        .mockResolvedValueOnce(makeGroqResponse('設定しました。'));
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ faq_question_hint: '例: 保証期間について', faq_answer_hint: '既存の回答例' }],
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '質問欄の入力例を「例: 保証期間について」にして', sessionId: 'sess-sfh-01' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenCalledWith(
+        expect.stringMatching(/UPDATE tenants SET faq_question_hint = \$1, updated_at = NOW\(\) WHERE id = \$2/),
+        ['例: 保証期間について', 'tenant-abc'],
+      );
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('例: 保証期間について');
+      expect(result).toContain('既存の回答例');
+    });
+
+    it('question_hint と answer_hint を同時に指定できる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-sfh-2', 'set_faq_hints', {
+          question_hint: '例: 送料について',
+          answer_hint: '例: 全国一律500円です',
+        }))
+        .mockResolvedValueOnce(makeGroqResponse('設定しました。'));
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ faq_question_hint: '例: 送料について', faq_answer_hint: '例: 全国一律500円です' }],
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '入力例を両方設定して', sessionId: 'sess-sfh-02' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenCalledWith(
+        expect.stringMatching(/faq_question_hint = \$1, faq_answer_hint = \$2, updated_at = NOW\(\)/),
+        ['例: 送料について', '例: 全国一律500円です', 'tenant-abc'],
+      );
+    });
+
+    // 空文字列("")は「解除」であり「未指定」ではない — parseOptionalTextArgと意図的に
+    // 異なる挙動(actionExecutor.tsのコメント参照)。
+    it('空文字列を指定すると入力例を解除しNULLで保存する', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-sfh-3', 'set_faq_hints', { question_hint: '' }))
+        .mockResolvedValueOnce(makeGroqResponse('解除しました。'));
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ faq_question_hint: null, faq_answer_hint: null }],
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '質問欄の入力例を消して', sessionId: 'sess-sfh-03' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenCalledWith(
+        expect.stringMatching(/UPDATE tenants SET faq_question_hint = \$1, updated_at = NOW\(\) WHERE id = \$2/),
+        [null, 'tenant-abc'],
+      );
+      expect(res.body.actions[0].result).toContain('未設定（既定の例文を表示）');
+    });
+
+    it('どちらも未指定ならDBに到達せず案内する', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-sfh-4', 'set_faq_hints', {}))
+        .mockResolvedValueOnce(makeGroqResponse('確認しました。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '入力例を設定して', sessionId: 'sess-sfh-04' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('question_hint か answer_hint');
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    // confirmedゲート無し(set_ga4_id/set_posthogと同じlowリスクの設定値)であることの固定。
+    it('confirmedフラグを渡さなくても実行される(低リスク設定値のため)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-sfh-5', 'set_faq_hints', { answer_hint: '例: 3営業日以内に発送します' }))
+        .mockResolvedValueOnce(makeGroqResponse('設定しました。'));
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ faq_question_hint: null, faq_answer_hint: '例: 3営業日以内に発送します' }],
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '回答欄の入力例を設定して', sessionId: 'sess-sfh-05' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      expect(res.body.actions[0].result).not.toContain('確認が必要');
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // チャット版 FAQ一括取り込み: suggest_faq_import_from_text / suggest_faq_import_from_urls
   // / commit_faq_import / discard_faq_import（プロセス内ステージング経由）
   // -------------------------------------------------------------------------
