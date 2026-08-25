@@ -87,11 +87,13 @@ describe("global guard — knowledge routes source", () => {
 // src/index.ts — PDF route の target 対応
 // ──────────────────────────────────────────────
 describe("PDF route target support — index.ts source", () => {
-  it("target 変数が定義されている", () => {
+  it("target 変数が定義されている(query経由。bodyからは取得しない — CLAUDE.md禁止1)", () => {
     const filePath = path.resolve(__dirname, "../../src/index.ts");
     const source = fs.readFileSync(filePath, "utf8");
     expect(source).toContain("const target");
-    expect(source).toContain('req.body?.target');
+    expect(source).toContain("req.query.target");
+    expect(source).not.toContain("req.body?.target");
+    expect(source).not.toContain("req.body.target");
   });
 
   it("runOcrPipeline に target が渡されている", () => {
