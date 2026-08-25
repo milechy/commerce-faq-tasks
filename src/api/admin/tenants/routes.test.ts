@@ -1179,3 +1179,307 @@ describe("PUT /v1/admin/my-tenant/plan", () => {
     expect(db.query).not.toHaveBeenCalled();
   });
 });
+
+// --------------------------------------------------------------------------
+// PUT /v1/admin/my-tenant/plan — 壊れやすい箇所を突くテスト
+//
+// 方針: 「呼ばれたか」をスパイで見るのではなく、観測可能な副作用
+// (キャッシュの中身・DBに飛んだSQL・レスポンス)で判定する。
+// スパイは実装を差し替えても気づけないことがあるため。
+// --------------------------------------------------------------------------
+
+describe("PUT /v1/admin/my-tenant/plan — 境界・異常系", () => {
+  const updatedRow = (plan: string) => ({
+    id: "tenant-a", name: "テストテナント", plan, features: { avatar: false, voice: false, rag: true },
+  });
+  /** before(SELECT) → UPDATE → 監査INSERT の順で応答するモック */
+  const okDb = (before: string, after: string) => ({
+    query: jest.fn()
+      .mockResolvedValueOnce({ rows: [{ plan: before }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [updatedRow(after)], rowCount: 1 })
+      .mockResolvedValue({ rows: [], rowCount: 1 }),
+  });
+
+  // ★最重要★ blockFreeAdTransition は「free_ad へ行く」ことだけを塞ぐ。
+  // 判定を previousPlan 側に書き換えると free_ad テナントが有料へ上がれなくなり、
+  // 課金できないまま閉じ込められる（収益が止まる方向の事故）。
+  it("free_ad テナントは有料プランへアップグレードできる（降格ブロックに巻き込まれない）", async () => {
+    const db = okDb("free_ad", "growth");
+    const res = await request(makeApp(db, "client_admin"))
+      .put("/v1/admin/my-tenant/plan")
+      .set("Authorization", "Bearer dummy")
+      .send({ plan: "growth" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.plan).toBe("growth");
+    expect(res.body.previous_plan).toBe("free_ad");
+  });
+
+  it.each(["starter", "growth", "enterprise"])(
+    "free_ad から %s への昇格は 403 にならない",
+    async (target) => {
+      const db = okDb("free_ad", target);
+      const res = await request(makeApp(db, "client_admin"))
+        .put("/v1/admin/my-tenant/plan")
+        .set("Authorization", "Bearer dummy")
+        .send({ plan: target });
+      expect(res.status).toBe(200);
+    }
+  );
+
+  // ★重要★ この2行を消してもレスポンスは200のままなので、
+  // キャッシュの中身を直接見ないと退行に気づけない。
+  // 消えると: 機能ゲートが最大60秒古いプランで判定され、
+  // usage_logs にも旧倍率が最大60秒焼き付く（課金がズレる）。
+  it("プラン変更で機能ゲート用キャッシュが実際に消える", async () => {
+    const { tenantPlanCache } = require("../../../lib/billing/planFeatures");
+    tenantPlanCache.set("tenant-a", { plan: "starter", expiresAt: Date.now() + 60_000 });
+    expect(tenantPlanCache.has("tenant-a")).toBe(true);
+
+    await request(makeApp(okDb("starter", "growth"), "client_admin"))
+      .put("/v1/admin/my-tenant/plan")
+      .set("Authorization", "Bearer dummy")
+      .send({ plan: "growth" });
+
+    expect(tenantPlanCache.has("tenant-a")).toBe(false);
+  });
+
+  it("他テナントのキャッシュは巻き込まない（テナント境界）", async () => {
+    const { tenantPlanCache } = require("../../../lib/billing/planFeatures");
+    tenantPlanCache.set("tenant-a", { plan: "starter", expiresAt: Date.now() + 60_000 });
+    tenantPlanCache.set("other-tenant", { plan: "enterprise", expiresAt: Date.now() + 60_000 });
+
+    await request(makeApp(okDb("starter", "growth"), "client_admin", "tenant-a"))
+      .put("/v1/admin/my-tenant/plan")
+      .set("Authorization", "Bearer dummy")
+      .send({ plan: "growth" });
+
+    expect(tenantPlanCache.has("tenant-a")).toBe(false);
+    expect(tenantPlanCache.get("other-tenant")?.plan).toBe("enterprise");
+  });
+
+  it("no-op（同一プラン）のときはキャッシュを触らない副作用も無い", async () => {
+    const db = { query: jest.fn().mockResolvedValueOnce({ rows: [{ plan: "growth" }], rowCount: 1 }) };
+    const res = await request(makeApp(db, "client_admin"))
+      .put("/v1/admin/my-tenant/plan")
+      .set("Authorization", "Bearer dummy")
+      .send({ plan: "growth" });
+
+    expect(res.body.changed).toBe(false);
+    // UPDATE も監査INSERTも走らない（SELECT 1本だけ）
+    expect(db.query).toHaveBeenCalledTimes(1);
+    const sqls = db.query.mock.calls.map(([s]: [string]) => s).join(" ");
+    expect(sqls).not.toMatch(/UPDATE tenants/);
+    expect(sqls).not.toMatch(/tenant_settings_history/);
+  });
+
+  it("テナントが存在しない場合は 404（UPDATE を走らせない）", async () => {
+    const db = { query: jest.fn().mockResolvedValueOnce({ rows: [], rowCount: 0 }) };
+    const res = await request(makeApp(db, "client_admin"))
+      .put("/v1/admin/my-tenant/plan")
+      .set("Authorization", "Bearer dummy")
+      .send({ plan: "growth" });
+
+    expect(res.status).toBe(404);
+    expect(db.query).toHaveBeenCalledTimes(1);
+  });
+
+  // SELECT と UPDATE の間にテナントが消える競合。UPDATE が0行なら 404 にする。
+  it("SELECT 後に行が消えた場合(UPDATE 0行)は 404", async () => {
+    const db = {
+      query: jest.fn()
+        .mockResolvedValueOnce({ rows: [{ plan: "starter" }], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 }),
+    };
+    const res = await request(makeApp(db, "client_admin"))
+      .put("/v1/admin/my-tenant/plan")
+      .set("Authorization", "Bearer dummy")
+      .send({ plan: "growth" });
+
+    expect(res.status).toBe(404);
+  });
+
+  it("DBエラーは 200 で握り潰さず 500 を返す", async () => {
+    const db = { query: jest.fn().mockRejectedValue(new Error("connection terminated")) };
+    const res = await request(makeApp(db, "client_admin"))
+      .put("/v1/admin/my-tenant/plan")
+      .set("Authorization", "Bearer dummy")
+      .send({ plan: "growth" });
+
+    expect(res.status).toBe(500);
+  });
+
+  // ★監査は fire-and-forget★ await に変えると、履歴テーブルの不調で
+  // プラン変更そのものが 500 になる。ユーザー操作を監査の都合で失敗させない。
+  it("監査INSERTが失敗してもプラン変更は成功として返る", async () => {
+    const db = {
+      query: jest.fn()
+        .mockResolvedValueOnce({ rows: [{ plan: "starter" }], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: [updatedRow("growth")], rowCount: 1 })
+        .mockRejectedValue(new Error("tenant_settings_history is missing")),
+    };
+    const res = await request(makeApp(db, "client_admin"))
+      .put("/v1/admin/my-tenant/plan")
+      .set("Authorization", "Bearer dummy")
+      .send({ plan: "growth" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.plan).toBe("growth");
+    await new Promise((r) => setImmediate(r)); // 未処理拒否で落ちないこと
+  });
+
+  it("UPDATE は必ず updated_at を更新する（変更時刻が追えなくなるのを防ぐ）", async () => {
+    const db = okDb("starter", "growth");
+    await request(makeApp(db, "client_admin"))
+      .put("/v1/admin/my-tenant/plan")
+      .set("Authorization", "Bearer dummy")
+      .send({ plan: "growth" });
+
+    const updateCall = db.query.mock.calls.find(
+      ([sql]: [string]) => typeof sql === "string" && sql.includes("UPDATE tenants")
+    );
+    expect(updateCall![0]).toMatch(/updated_at\s*=\s*NOW\(\)/);
+  });
+
+  // 不正な plan 値。zod の enum を素通りする形が無いことを固定する。
+  it.each([
+    ["未知の文字列", { plan: "platinum" }],
+    ["plan 欠落", {}],
+    ["null", { plan: null }],
+    ["数値", { plan: 1 }],
+    ["配列", { plan: ["growth"] }],
+    ["大文字", { plan: "GROWTH" }],
+    ["前後空白", { plan: " growth " }],
+    ["空文字", { plan: "" }],
+  ])("不正な plan (%s) は 400 で、DBに一切触れない", async (_label, body) => {
+    const db = { query: jest.fn() };
+    const res = await request(makeApp(db, "client_admin"))
+      .put("/v1/admin/my-tenant/plan")
+      .set("Authorization", "Bearer dummy")
+      .send(body as object);
+
+    expect(res.status).toBe(400);
+    expect(db.query).not.toHaveBeenCalled();
+  });
+
+  // ★free_ad ブロックは DB に触れる前に効くこと★
+  // 後段に置くと、ブロックされた要求でも SELECT が走り、
+  // 「弾いたのにDB負荷はかかる」状態になる。
+  it("free_ad への降格は SELECT すら走らせずに 403", async () => {
+    const db = { query: jest.fn() };
+    const res = await request(makeApp(db, "client_admin"))
+      .put("/v1/admin/my-tenant/plan")
+      .set("Authorization", "Bearer dummy")
+      .send({ plan: "free_ad" });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("free_ad_plan_not_yet_available");
+    expect(db.query).not.toHaveBeenCalled();
+  });
+
+  it("監査の changed_by は JWT の email。無ければ空文字で落ちない", async () => {
+    const app = express();
+    app.use(express.json());
+    app.use((req: any, _res: any, next: any) => {
+      // email を持たないトークン
+      req.supabaseUser = { app_metadata: { tenant_id: "tenant-a", role: "client_admin" } };
+      next();
+    });
+    const db = okDb("starter", "growth");
+    registerTenantAdminRoutes(app, db as any);
+
+    const res = await request(app)
+      .put("/v1/admin/my-tenant/plan")
+      .set("Authorization", "Bearer dummy")
+      .send({ plan: "growth" });
+    await new Promise((r) => setImmediate(r));
+
+    expect(res.status).toBe(200);
+    const auditCall = db.query.mock.calls.find(
+      ([sql]: [string]) => typeof sql === "string" && sql.includes("tenant_settings_history")
+    );
+    expect(auditCall![1][1]).toBe("");
+  });
+
+  // 全プラン遷移の網羅（free_ad 行きだけが 403、それ以外は通る）
+  const PAID = ["starter", "growth", "enterprise"] as const;
+  it.each(PAID.flatMap((f) => PAID.filter((t) => t !== f).map((t) => [f, t])))(
+    "有料間の遷移 %s → %s は許可される",
+    async (from, to) => {
+      const db = okDb(from, to);
+      const res = await request(makeApp(db, "client_admin"))
+        .put("/v1/admin/my-tenant/plan")
+        .set("Authorization", "Bearer dummy")
+        .send({ plan: to });
+      expect(res.status).toBe(200);
+      expect(res.body.plan).toBe(to);
+    }
+  );
+});
+
+// --------------------------------------------------------------------------
+// ★ダウングレード時に、新プランで許されない features を落とすこと★
+//
+// アバターのランタイム認可は plan ではなく features.avatar だけを見ている
+// (src/api/avatar/anamRoutes.ts / livekitTokenRoutes.ts / api/widget/routes.ts)。
+// plan だけ下げて features を残すと、最も原価の重い Anam/LiveKit が動いたまま
+// 倍率だけ 1.5→1.0 に下がる。UI は「使えなくなる機能: AIアバター」と明示している
+// ので、表示と実挙動が食い違う状態にもなる。
+// --------------------------------------------------------------------------
+describe("PUT /v1/admin/my-tenant/plan — 降格時の features 整合", () => {
+  const before = (plan: string, features: object) => ({
+    query: jest.fn()
+      .mockResolvedValueOnce({ rows: [{ plan, features }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [{ id: "tenant-a", name: "t", plan: "starter", features: {} }], rowCount: 1 })
+      .mockResolvedValue({ rows: [], rowCount: 1 }),
+  });
+
+  const updateParams = (db: any) =>
+    db.query.mock.calls.find(([sql]: [string]) => typeof sql === "string" && sql.includes("UPDATE tenants"))![1];
+
+  it("growth → starter で features.avatar / voice を false にする", async () => {
+    const db = before("growth", { avatar: true, voice: true, rag: true });
+    await request(makeApp(db, "client_admin"))
+      .put("/v1/admin/my-tenant/plan")
+      .set("Authorization", "Bearer dummy")
+      .send({ plan: "starter" });
+
+    const patch = JSON.parse(updateParams(db).find((p: unknown) => typeof p === "string" && p.startsWith("{")) as string);
+    expect(patch.avatar).toBe(false);
+    expect(patch.voice).toBe(false);
+    // 差分だけを || でマージする。プランに紐づかない rag を差分に含めない
+    // (含めると、無関係なフラグを取り違えて上書きしうる)。
+    expect(patch).not.toHaveProperty("rag");
+    const sql = db.query.mock.calls.find(([q]: [string]) => q.includes("UPDATE tenants"))![0];
+    expect(sql).toMatch(/features\s*=\s*COALESCE\(features, '\{\}'::jsonb\)\s*\|\|/);
+  });
+
+  it("enterprise → growth で enterprise 限定機能だけ落ちる", async () => {
+    const db = before("enterprise", { avatar: true, voice: true, rag: true, deep_research: true, pre_dispatch: true });
+    await request(makeApp(db, "client_admin"))
+      .put("/v1/admin/my-tenant/plan")
+      .set("Authorization", "Bearer dummy")
+      .send({ plan: "growth" });
+
+    const patch = JSON.parse(updateParams(db).find((p: unknown) => typeof p === "string" && p.startsWith("{")) as string);
+    expect(patch.deep_research).toBe(false);
+    expect(patch.pre_dispatch).toBe(false);
+    // growth で許される avatar は取り消し対象に入れない(維持される)
+    expect(patch).not.toHaveProperty("avatar");
+    expect(patch).not.toHaveProperty("voice");
+  });
+
+  it("アップグレードでは features を勝手に有効化しない（権能の自動付与をしない）", async () => {
+    const db = before("starter", { avatar: false, voice: false, rag: true });
+    await request(makeApp(db, "client_admin"))
+      .put("/v1/admin/my-tenant/plan")
+      .set("Authorization", "Bearer dummy")
+      .send({ plan: "enterprise" });
+
+    const merged = updateParams(db).find((p: unknown) => typeof p === "string" && (p as string).startsWith("{"));
+    if (merged) {
+      const f = JSON.parse(merged as string);
+      expect(f.avatar).not.toBe(true);
+    }
+  });
+});

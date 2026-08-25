@@ -1,7 +1,7 @@
 // src/lib/billing/usageTracker.test.ts
 // Phase32: usageTracker の非同期記録テスト
 
-import { trackUsage, initUsageTracker } from './usageTracker';
+import { trackUsage, initUsageTracker, invalidateBillingPlanCache } from './usageTracker';
 
 /**
  * INSERT INTO usage_logs のパラメータ配列における billable($13) の添字。
@@ -599,5 +599,203 @@ describe('usageTracker', () => {
       // 気づけるように error で鳴らす（warn ではなく）
       expect(errorLog).toHaveBeenCalled();
     });
+  });
+});
+
+// ─── #920↔#921 の継ぎ目・テナント境界・fail-safe の向き ─────────────────────
+describe('請求用プランキャッシュの継ぎ目', () => {
+  function makePool(planByTenant: Record<string, string>) {
+    return jest.fn().mockImplementation((sql: string, params: any[]) => {
+      if (sql.includes('SELECT plan FROM tenants')) {
+        const plan = planByTenant[params[0]];
+        return Promise.resolve({ rows: plan ? [{ plan }] : [] });
+      }
+      return Promise.resolve({ rowCount: 1 });
+    });
+  }
+
+  async function track(tenantId: string, requestId: string) {
+    trackUsage({
+      tenantId, requestId, model: 'llama-3.1-8b-instant',
+      inputTokens: 10, outputTokens: 10, featureUsed: 'chat',
+    });
+    await flushSetImmediate();
+    await flushSetImmediate();
+    await flushSetImmediate();
+  }
+
+  const insertFor = (q: jest.Mock, requestId: string) =>
+    q.mock.calls.find(
+      ([sql, p]: [string, any[]]) => sql.includes('INSERT INTO usage_logs') && p?.[1] === requestId
+    )![1];
+
+  const planSelects = (q: jest.Mock) =>
+    q.mock.calls.filter(([sql]: [string]) => sql.includes('SELECT plan FROM tenants'));
+
+  // ★#921 のプラン変更が #920 の焼き付けに届くか★
+  // ルート側の invalidateBillingPlanCache を消しても、レスポンスも他テストも緑のまま。
+  // ここが唯一「変更後の最初の1件から新倍率で焼かれる」ことを守っている。
+  it('invalidateBillingPlanCache 後は次の記録で新しいプランを引き直す', async () => {
+    const plans: Record<string, string> = { t1: 'starter' };
+    const q = makePool(plans);
+    initUsageTracker({ query: q } as any, { warn: jest.fn(), error: jest.fn(), debug: jest.fn(), info: jest.fn() } as any);
+
+    await track('t1', 'r1');
+    expect(insertFor(q, 'r1')[PLAN_MULTIPLIER_PARAM_INDEX]).toBe(1.0);
+
+    plans.t1 = 'enterprise';           // プラン変更が起きた
+    invalidateBillingPlanCache('t1');  // ルートが呼ぶはずの無効化
+
+    await track('t1', 'r2');
+    expect(insertFor(q, 'r2')[PLAN_PARAM_INDEX]).toBe('enterprise');
+    expect(insertFor(q, 'r2')[PLAN_MULTIPLIER_PARAM_INDEX]).toBe(2.5);
+  });
+
+  it('無効化しなければ TTL 内は旧プランのまま（無効化が効いていることの対照）', async () => {
+    const plans: Record<string, string> = { t1: 'starter' };
+    const q = makePool(plans);
+    initUsageTracker({ query: q } as any, { warn: jest.fn(), error: jest.fn(), debug: jest.fn(), info: jest.fn() } as any);
+
+    await track('t1', 'r1');
+    plans.t1 = 'enterprise';
+    await track('t1', 'r2'); // 無効化しない
+
+    expect(insertFor(q, 'r2')[PLAN_PARAM_INDEX]).toBe('starter');
+    expect(planSelects(q)).toHaveLength(1);
+  });
+
+  it('無効化は指定テナントだけに効き、他テナントのキャッシュを消さない', async () => {
+    const q = makePool({ t1: 'starter', t2: 'growth' });
+    initUsageTracker({ query: q } as any, { warn: jest.fn(), error: jest.fn(), debug: jest.fn(), info: jest.fn() } as any);
+
+    await track('t1', 'a1');
+    await track('t2', 'b1');
+    expect(planSelects(q)).toHaveLength(2);
+
+    invalidateBillingPlanCache('t1');
+
+    await track('t1', 'a2'); // 引き直す
+    await track('t2', 'b2'); // キャッシュのまま
+    expect(planSelects(q)).toHaveLength(3);
+    expect(insertFor(q, 'b2')[PLAN_PARAM_INDEX]).toBe('growth');
+  });
+
+  // ★CLAUDE.md 禁止25: キャッシュをテナント非スコープでキー付けしない★
+  // キーを固定文字列にする等の退行で、あるテナントの倍率が別テナントに漏れる。
+  it('テナントごとに別のプランが焼かれる（キャッシュが混ざらない）', async () => {
+    const q = makePool({ t1: 'starter', t2: 'enterprise', t3: 'growth' });
+    initUsageTracker({ query: q } as any, { warn: jest.fn(), error: jest.fn(), debug: jest.fn(), info: jest.fn() } as any);
+
+    await track('t1', 'x1');
+    await track('t2', 'x2');
+    await track('t3', 'x3');
+
+    expect(insertFor(q, 'x1')[PLAN_MULTIPLIER_PARAM_INDEX]).toBe(1.0);
+    expect(insertFor(q, 'x2')[PLAN_MULTIPLIER_PARAM_INDEX]).toBe(2.5);
+    expect(insertFor(q, 'x3')[PLAN_MULTIPLIER_PARAM_INDEX]).toBe(1.5);
+  });
+
+  it('TTL(60秒)を過ぎたら引き直す', async () => {
+    const plans: Record<string, string> = { t1: 'starter' };
+    const q = makePool(plans);
+    initUsageTracker({ query: q } as any, { warn: jest.fn(), error: jest.fn(), debug: jest.fn(), info: jest.fn() } as any);
+
+    const realNow = Date.now;
+    const base = realNow.call(Date);
+    try {
+      jest.spyOn(Date, 'now').mockReturnValue(base);
+      await track('t1', 'ttl1');
+      expect(planSelects(q)).toHaveLength(1);
+
+      (Date.now as jest.Mock).mockReturnValue(base + 59_000); // TTL内
+      await track('t1', 'ttl2');
+      expect(planSelects(q)).toHaveLength(1);
+
+      (Date.now as jest.Mock).mockReturnValue(base + 61_000); // TTL超過
+      plans.t1 = 'growth';
+      await track('t1', 'ttl3');
+      expect(planSelects(q)).toHaveLength(2);
+      expect(insertFor(q, 'ttl3')[PLAN_PARAM_INDEX]).toBe('growth');
+    } finally {
+      (Date.now as jest.Mock).mockRestore();
+    }
+  });
+
+  // initUsageTracker が cache.clear() を落とすと、pool を差し替えても
+  // 前の pool 由来のプランが残る（テスト間汚染・本番の再初期化時のズレ）。
+  it('initUsageTracker はキャッシュを空にする（pool 差し替えで前の値が残らない）', async () => {
+    const q1 = makePool({ t1: 'starter' });
+    initUsageTracker({ query: q1 } as any, { warn: jest.fn(), error: jest.fn(), debug: jest.fn(), info: jest.fn() } as any);
+    await track('t1', 'i1');
+    expect(insertFor(q1, 'i1')[PLAN_PARAM_INDEX]).toBe('starter');
+
+    const q2 = makePool({ t1: 'enterprise' });
+    initUsageTracker({ query: q2 } as any, { warn: jest.fn(), error: jest.fn(), debug: jest.fn(), info: jest.fn() } as any);
+    await track('t1', 'i2');
+
+    expect(planSelects(q2)).toHaveLength(1); // 引き直している
+    expect(insertFor(q2, 'i2')[PLAN_PARAM_INDEX]).toBe('enterprise');
+  });
+});
+
+describe('INSERT 失敗時のフォールバック条件', () => {
+  /** 指定のエラーコードで plan_multiplier 付き INSERT だけを失敗させる */
+  function poolFailingInsert(code: string | undefined) {
+    return jest.fn().mockImplementation((sql: string) => {
+      if (sql.includes('SELECT plan FROM tenants')) {
+        return Promise.resolve({ rows: [{ plan: 'growth' }] });
+      }
+      if (sql.includes('plan_multiplier')) {
+        const e: any = new Error('insert failed');
+        if (code !== undefined) e.code = code;
+        return Promise.reject(e);
+      }
+      return Promise.resolve({ rowCount: 1 });
+    });
+  }
+
+  async function run(q: jest.Mock, requestId: string) {
+    initUsageTracker({ query: q } as any, { warn: jest.fn(), error: jest.fn(), debug: jest.fn(), info: jest.fn() } as any);
+    trackUsage({
+      tenantId: 'tenant-fallback', requestId, model: 'llama-3.1-8b-instant',
+      inputTokens: 10, outputTokens: 10, featureUsed: 'chat',
+    });
+    await flushSetImmediate();
+    await flushSetImmediate();
+    await flushSetImmediate();
+  }
+
+  const legacyInserts = (q: jest.Mock) =>
+    q.mock.calls.filter(
+      ([sql]: [string]) => sql.includes('INSERT INTO usage_logs') && !sql.includes('plan_multiplier')
+    );
+
+  // ★フォールバックは 42703(列が無い)専用★
+  // 条件を緩めて「INSERTが失敗したら旧カラムで再試行」にすると、
+  // 一時的な接続断や制約違反のたびに二重INSERTを試みることになる。
+  it.each([
+    ['57P01 (管理者による切断)', '57P01'],
+    ['23505 (一意制約違反)', '23505'],
+    ['53300 (接続数超過)', '53300'],
+    ['コード無しの汎用エラー', undefined],
+  ])('42703 以外(%s)では旧カラムINSERTを試みない', async (_label, code) => {
+    const q = poolFailingInsert(code as string | undefined);
+    await run(q, `fb-${code ?? 'nocode'}`);
+    expect(legacyInserts(q)).toHaveLength(0);
+  });
+
+  it('42703 のときだけ旧カラムINSERTに1回だけフォールバックする', async () => {
+    const q = poolFailingInsert('42703');
+    await run(q, 'fb-42703');
+    expect(legacyInserts(q)).toHaveLength(1);
+  });
+
+  it('フォールバックも失敗したら例外を投げずに終わる（APIを巻き込まない）', async () => {
+    const q = jest.fn().mockImplementation((sql: string) => {
+      if (sql.includes('SELECT plan FROM tenants')) return Promise.resolve({ rows: [{ plan: 'growth' }] });
+      const e: any = new Error('boom'); e.code = '42703';
+      return Promise.reject(e);
+    });
+    await expect(run(q, 'fb-double-fail')).resolves.toBeUndefined();
   });
 });

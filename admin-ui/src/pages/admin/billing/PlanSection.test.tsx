@@ -139,4 +139,169 @@ describe("PlanSection", () => {
     renderSection(null);
     expect(screen.getByText(/確認中/)).toBeTruthy();
   });
+  // ─── ユーザーがやりそうなイレギュラー操作 ───────────────────────────────
+  describe("イレギュラー操作", () => {
+    const fetchMock = () => authFetch as unknown as ReturnType<typeof vi.fn>;
+
+    // 「反応が無い」と思って何度も押す。プラン変更は課金に効くので多重送信させない。
+    it("確認ボタンを連打しても PUT は1回だけ", async () => {
+      renderSection("starter");
+      fireEvent.click(screen.getByRole("button", { name: /Growth/ }));
+      const btn = screen.getByRole("button", { name: /Growth に変更する/ });
+      fireEvent.click(btn);
+      fireEvent.click(btn);
+      fireEvent.click(btn);
+
+      await waitFor(() => expect(fetchMock()).toHaveBeenCalled());
+      expect(fetchMock().mock.calls).toHaveLength(1);
+    });
+
+    // 確認を出したまま気が変わって別のプランを押す。最後に選んだものが送られること。
+    it("確認中に別プランへ切り替えると、最後に選んだプランが送られる", async () => {
+      renderSection("starter");
+      fireEvent.click(screen.getByRole("button", { name: /Growth/ }));
+      expect(screen.getByText(/→ Growth に変更しますか/)).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: /Enterprise/ }));
+      expect(screen.getByText(/→ Enterprise に変更しますか/)).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: /Enterprise に変更する/ }));
+      await waitFor(() => expect(fetchMock()).toHaveBeenCalled());
+      expect(JSON.parse(fetchMock().mock.calls[0][1].body)).toEqual({ plan: "enterprise" });
+    });
+
+    it("失敗 → やめる → 別プラン選択 で、前のエラーが残らない", async () => {
+      fetchMock().mockResolvedValue({ ok: false, json: async () => ({ message: "一時的な失敗" }) });
+      renderSection("starter");
+
+      fireEvent.click(screen.getByRole("button", { name: /Growth/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Growth に変更する/ }));
+      await waitFor(() => expect(screen.getByText("一時的な失敗")).toBeTruthy());
+
+      fireEvent.click(screen.getByRole("button", { name: "やめる" }));
+      expect(screen.queryByText("一時的な失敗")).toBeNull();
+    });
+
+    // ★「やめる」を経由せず直接別プランを押す経路★
+    // 取消でもエラーは消えるため、この経路を分けないと
+    // プラン選択時の setError(null) を外しても検出できない。
+    it("失敗 → やめずに別プランを選び直しても、前のエラーが残らない", async () => {
+      fetchMock().mockResolvedValue({ ok: false, json: async () => ({ message: "一時的な失敗" }) });
+      renderSection("starter");
+
+      fireEvent.click(screen.getByRole("button", { name: /Growth/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Growth に変更する/ }));
+      await waitFor(() => expect(screen.getByText("一時的な失敗")).toBeTruthy());
+
+      fireEvent.click(screen.getByRole("button", { name: /Enterprise/ }));
+      expect(screen.queryByText("一時的な失敗")).toBeNull();
+      expect(screen.getByText(/→ Enterprise に変更しますか/)).toBeTruthy();
+    });
+
+    // 無料プラン利用中のテナントが課金プランへ上がる導線。ここが塞がると収益が止まる。
+    it("free_ad 利用中でも有料プランへは上げられる", () => {
+      renderSection("free_ad");
+      for (const name of [/Starter/, /Growth/, /Enterprise/]) {
+        expect((screen.getByRole("button", { name }) as HTMLButtonElement).disabled).toBe(false);
+      }
+      fireEvent.click(screen.getByRole("button", { name: /Growth/ }));
+      expect(screen.getByText(/変更しますか/)).toBeTruthy();
+    });
+
+    it("通信が切れた(fetchがreject)場合もクラッシュせずエラー表示で確定する", async () => {
+      fetchMock().mockRejectedValue(new TypeError("Failed to fetch"));
+      const { onChanged, showToast } = renderSection("starter");
+
+      fireEvent.click(screen.getByRole("button", { name: /Growth/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Growth に変更する/ }));
+
+      await waitFor(() => expect(screen.getByText("プランの変更に失敗しました")).toBeTruthy());
+      expect(onChanged).not.toHaveBeenCalled();
+      expect(showToast).not.toHaveBeenCalled();
+      // 再試行できる状態が残っていること
+      expect(screen.getByRole("button", { name: /Growth に変更する/ })).toBeTruthy();
+    });
+
+    // nginx の 502 HTML など、本文がJSONでない失敗応答。json() が throw する。
+    it("非JSONのエラー応答でも汎用メッセージで確定する", async () => {
+      fetchMock().mockResolvedValue({
+        ok: false,
+        json: async () => { throw new SyntaxError("Unexpected token < in JSON"); },
+      });
+      renderSection("starter");
+      fireEvent.click(screen.getByRole("button", { name: /Growth/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Growth に変更する/ }));
+
+      await waitFor(() => expect(screen.getByText("プランの変更に失敗しました")).toBeTruthy());
+    });
+
+    // サーバが要求と違う値を確定した場合(将来の強制降格など)、画面はサーバ値に従う。
+    it("サーバが返したプランを採用する（要求値を信じない）", async () => {
+      fetchMock().mockResolvedValue({ ok: true, json: async () => ({ plan: "starter" }) });
+      const { onChanged } = renderSection("growth");
+
+      fireEvent.click(screen.getByRole("button", { name: /Enterprise/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Enterprise に変更する/ }));
+
+      await waitFor(() => expect(onChanged).toHaveBeenCalledWith("starter"));
+    });
+
+    it("成功したら確認が閉じ、トーストが出る", async () => {
+      const { showToast } = renderSection("starter");
+      fireEvent.click(screen.getByRole("button", { name: /Growth/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Growth に変更する/ }));
+
+      await waitFor(() => expect(showToast).toHaveBeenCalled());
+      expect(screen.queryByText(/変更しますか/)).toBeNull();
+    });
+
+    it("送信中は確認・取消の両方を押せない", async () => {
+      let release: (v: unknown) => void = () => {};
+      fetchMock().mockReturnValue(new Promise((r) => { release = r; }));
+      renderSection("starter");
+      fireEvent.click(screen.getByRole("button", { name: /Growth/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Growth に変更する/ }));
+
+      await waitFor(() =>
+        expect((screen.getByRole("button", { name: "変更中..." }) as HTMLButtonElement).disabled).toBe(true)
+      );
+      expect((screen.getByRole("button", { name: "やめる" }) as HTMLButtonElement).disabled).toBe(true);
+      release({ ok: true, json: async () => ({ plan: "growth" }) });
+    });
+
+    // plan 未確定(null)。差分は出さないが、操作自体は塞がない。
+    it("プラン未確定でも確認まで進める（機能差分は出さない）", () => {
+      renderSection(null);
+      fireEvent.click(screen.getByRole("button", { name: /Growth/ }));
+      expect(screen.getByText(/変更しますか/)).toBeTruthy();
+      expect(screen.queryByText("使えなくなる機能")).toBeNull();
+      expect(screen.queryByText("使えるようになる機能")).toBeNull();
+    });
+    // ★成功したのに失敗表示になる経路★
+    // 204・空ボディ・プロキシの割り込みで res.json() が throw する。
+    // サーバは変更済みなので、失敗表示にするとユーザーが無駄に再送する。
+    it("成功応答の本文がJSONでなくても成功として扱う", async () => {
+      fetchMock().mockResolvedValue({
+        ok: true,
+        json: async () => { throw new SyntaxError("Unexpected end of JSON input"); },
+      });
+      const { onChanged, showToast } = renderSection("starter");
+
+      fireEvent.click(screen.getByRole("button", { name: /Growth/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Growth に変更する/ }));
+
+      await waitFor(() => expect(onChanged).toHaveBeenCalledWith("growth"));
+      expect(showToast).toHaveBeenCalled();
+      expect(screen.queryByText("プランの変更に失敗しました")).toBeNull();
+      expect(screen.queryByText(/変更しますか/)).toBeNull();
+    });
+
+    it("成功応答に plan が無くても、要求したプランで確定する", async () => {
+      fetchMock().mockResolvedValue({ ok: true, json: async () => ({}) });
+      const { onChanged } = renderSection("starter");
+      fireEvent.click(screen.getByRole("button", { name: /Enterprise/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Enterprise に変更する/ }));
+      await waitFor(() => expect(onChanged).toHaveBeenCalledWith("enterprise"));
+    });
+  });
 });

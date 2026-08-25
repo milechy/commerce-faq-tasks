@@ -36,5 +36,13 @@ export const PLAN_MULTIPLIERS: Record<string, number> = {
  * 未知の文字列に対する請求漏れ回避のフォールバック。
  */
 export function planMultiplier(plan: string | null | undefined): number {
-  return PLAN_MULTIPLIERS[plan ?? 'starter'] ?? 1.0;
+  const key = plan ?? 'starter';
+  // 素の [key] だと Object.prototype 由来のキー('constructor' 等)で
+  // 関数が返り、`?? 1.0`(null/undefined しか捕まえない)を素通りする。
+  // tenants.plan の CHECK 制約が未適用の環境では任意の文字列が入りうるため、
+  // 自前プロパティに限定したうえで数値であることまで確認する。
+  const value = Object.prototype.hasOwnProperty.call(PLAN_MULTIPLIERS, key)
+    ? PLAN_MULTIPLIERS[key]
+    : undefined;
+  return typeof value === 'number' ? value : 1.0;
 }

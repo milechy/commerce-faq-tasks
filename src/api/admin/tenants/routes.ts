@@ -33,6 +33,18 @@ const planValues = ["free_ad", "starter", "growth", "enterprise"] as const;
 //
 // 撤去する際は、この関数の呼び出し元をすべて外すのではなく、この関数の中身だけを
 // 変えれば全経路に効く。撤去の前提だったバナー実装(S5a・PR #919)は完了済み。
+// tenants.features のフラグと、それを許可する最小プラン(planFeatures の GatedFeature)の対応。
+// プラン降格時にどのフラグを落とすかの唯一の出どころ。
+// 新しいプラン依存フラグを features に足すときは、ここにも足すこと
+// (足し忘れると、降格しても権能が残り原価だけ当社負担になる)。
+const FEATURE_FLAG_GATES: ReadonlyArray<[string, "avatar" | "voice_clone" | "deep_research" | "pre_dispatch"]> = [
+  ["avatar", "avatar"],
+  // voice は PATCH /my-tenant の既存ゲートと揃えて avatar と同じ段(growth)で判定する。
+  ["voice", "avatar"],
+  ["deep_research", "deep_research"],
+  ["pre_dispatch", "pre_dispatch"],
+];
+
 function blockFreeAdTransition(plan: string | undefined, res: Response): boolean {
   if (plan !== "free_ad") return false;
   res.status(403).json({
@@ -425,8 +437,8 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
     if (blockFreeAdTransition(nextPlan, res)) return;
 
     try {
-      const beforeResult = await db.query<{ plan: TenantPlan | null }>(
-        `SELECT plan FROM tenants WHERE id = $1`,
+      const beforeResult = await db.query<{ plan: TenantPlan | null; features: Record<string, unknown> | null }>(
+        `SELECT plan, features FROM tenants WHERE id = $1`,
         [tenantId]
       );
       if (beforeResult.rowCount === 0) {
@@ -439,17 +451,46 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
         return res.json({ plan: nextPlan, previous_plan: previousPlan, changed: false });
       }
 
-      const result = await db.query(
-        `UPDATE tenants SET plan = $1, updated_at = NOW() WHERE id = $2
-         RETURNING id, name, plan, features`,
-        [nextPlan, tenantId]
-      );
+      // ★降格時は新プランで許されない features を落とす★
+      // アバターのランタイム認可は plan ではなく features.avatar だけを見ている
+      // (anamRoutes.ts / livekitTokenRoutes.ts / api/widget/routes.ts)。plan だけ下げると
+      // 最も原価の重い Anam/LiveKit が動いたまま倍率だけ下がる。UI の
+      // 「使えなくなる機能」表示とも食い違う。
+      //
+      // 落とすだけで、昇格時に勝手に有効化はしない(権能の自動付与はしない。
+      // 有効化は従来どおりテナントが明示的に PATCH /my-tenant で行う)。
+      const beforeFeatures = beforeResult.rows[0].features ?? {};
+      const revoked: Record<string, false> = {};
+      for (const [flag, gate] of FEATURE_FLAG_GATES) {
+        if (beforeFeatures[flag] === true && !planHasFeature(nextPlan, gate)) {
+          revoked[flag] = false;
+        }
+      }
+      const hasRevocation = Object.keys(revoked).length > 0;
+
+      const result = hasRevocation
+        ? await db.query(
+            `UPDATE tenants
+               SET plan = $1,
+                   features = COALESCE(features, '{}'::jsonb) || $3::jsonb,
+                   updated_at = NOW()
+             WHERE id = $2
+             RETURNING id, name, plan, features`,
+            [nextPlan, tenantId, JSON.stringify(revoked)]
+          )
+        : await db.query(
+            `UPDATE tenants SET plan = $1, updated_at = NOW() WHERE id = $2
+             RETURNING id, name, plan, features`,
+            [nextPlan, tenantId]
+          );
       if (result.rowCount === 0) {
         return res.status(404).json({ error: "not_found", message: "テナントが見つかりません" });
       }
 
       // プラン判定のキャッシュは2系統ある（機能ゲート用・請求焼き付け用）。両方消す。
-      // いずれも同一プロセス内のみ。PM2 の他ワーカーは最大TTL分だけ旧プランを見る。
+      // 片方だけだと、機能は開いたのに請求だけ旧倍率、といったズレが最大60秒残る。
+      // いずれもプロセスローカル。現構成は単一プロセス(instances 1/fork)なので
+      // 実質は即時だが、スケールアウト時は他ワーカーが最大TTL分だけ旧プランを見る。
       invalidateTenantPlanCache(tenantId);
       invalidateBillingPlanCache(tenantId);
 
