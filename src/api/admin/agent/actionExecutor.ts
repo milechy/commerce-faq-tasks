@@ -140,6 +140,27 @@ function parseFaqCategoryArg(raw: unknown): { ok: true; category: string | null 
   return { ok: true, category: raw };
 }
 
+// W2-3: FAQのタグ。旧UI(KnowledgeFaqEditModal.tsx)・PATCH側(faqCrudRoutes.ts)に長さ・件数上限は
+// 無いが、チャット経由での無制限な入力(改行・絵文字の連投等)を防ぐため、ここでのみ上限を設ける。
+// 空文字列・重複・前後空白は正規化して除く(黙って保存せず、そのまま保存すると一覧表示が崩れるため)。
+const MAX_FAQ_TAGS = 10;
+const MAX_FAQ_TAG_LENGTH = 30;
+
+function normalizeFaqTags(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const tags: string[] = [];
+  for (const t of raw) {
+    if (typeof t !== 'string') continue;
+    const trimmed = t.trim().slice(0, MAX_FAQ_TAG_LENGTH);
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    tags.push(trimmed);
+    if (tags.length >= MAX_FAQ_TAGS) break;
+  }
+  return tags;
+}
+
 // update_avatar_profile の任意テキスト引数(name / personality_prompt / behavior_description)の解析。
 // 空文字列・空白のみは「未指定」として扱う。
 // 理由: Groq の function calling は省略した任意引数に '' を入れて送ってくることがある
@@ -842,13 +863,14 @@ export async function executeToolCall(
         return truncate(categoryResult.error);
       }
       const category = categoryResult.category;
+      const tags = normalizeFaqTags(args['tags']);
 
       try {
         const result = await db.query(
-          `INSERT INTO faq_docs (tenant_id, question, answer, category, is_published)
-           VALUES ($1, $2, $3, $4, true)
+          `INSERT INTO faq_docs (tenant_id, question, answer, category, tags, is_published)
+           VALUES ($1, $2, $3, $4, $5, true)
            RETURNING id, question, answer, is_published`,
-          [tenantId, question, answer, category]
+          [tenantId, question, answer, category, tags]
         );
         const row = result.rows[0] as { id: number; question: string; answer: string; is_published: boolean };
 
@@ -859,7 +881,8 @@ export async function executeToolCall(
         });
         upsertToEsAsync(tenantId, row.id, row.question, row.answer, row.is_published);
 
-        return truncate(`FAQ を追加しました（ID: ${row.id}）: ${row.question}`);
+        const tagsNote = tags.length > 0 ? `（タグ: ${tags.join(', ')}）` : '';
+        return truncate(`FAQ を追加しました（ID: ${row.id}）: ${row.question}${tagsNote}`);
       } catch (err) {
         logger.warn('[actionExecutor] add_faq failed', err);
         return truncate('FAQ の追加に失敗しました');
@@ -882,6 +905,10 @@ export async function executeToolCall(
       const category = categoryResult.category;
       // W1-2: 未指定(undefined)なら COALESCE で既存値を保持する(category と同じ作法)。
       const excludedFromSearch = parseBooleanArg(args['excluded_from_search']);
+      // W2-3: 配列であれば明示指定(空配列 = タグを全て外す、も正当な指定として扱う)。
+      // キー自体が無い/配列でなければ未指定としてCOALESCEで既存値を保持する。
+      const tagsProvided = Array.isArray(args['tags']);
+      const tags = tagsProvided ? normalizeFaqTags(args['tags']) : undefined;
 
       try {
         // テナント確認
@@ -897,18 +924,19 @@ export async function executeToolCall(
           return truncate('この FAQ へのアクセス権限がありません');
         }
 
-        // category / excludedFromSearch は未指定(null)なら COALESCE で既存値を保持する
-        // (指定時のみ更新)。
+        // category / excludedFromSearch / tags は未指定(null)なら COALESCE で既存値を
+        // 保持する(指定時のみ更新)。
         const updateResult = await db.query(
           `UPDATE faq_docs SET question = $1, answer = $2, category = COALESCE($3, category),
-             is_excluded_from_search = COALESCE($4, is_excluded_from_search), updated_at = NOW()
-           WHERE id = $5 AND tenant_id = $6
-           RETURNING id, question, answer, is_published, is_excluded_from_search`,
-          [question, answer, category, excludedFromSearch ?? null, id, tenantId]
+             is_excluded_from_search = COALESCE($4, is_excluded_from_search),
+             tags = COALESCE($5, tags), updated_at = NOW()
+           WHERE id = $6 AND tenant_id = $7
+           RETURNING id, question, answer, is_published, is_excluded_from_search, tags`,
+          [question, answer, category, excludedFromSearch ?? null, tags ?? null, id, tenantId]
         );
         const updated = updateResult.rows[0] as {
           id: number; question: string; answer: string; is_published: boolean;
-          is_excluded_from_search: boolean | null;
+          is_excluded_from_search: boolean | null; tags: string[] | null;
         };
 
         // 古い embedding 削除 → 再挿入（best-effort）
@@ -937,7 +965,10 @@ export async function executeToolCall(
         const excludedNote = excludedFromSearch !== undefined
           ? `（検索対象: ${updated.is_excluded_from_search ? '除外中' : '含める'}）`
           : '';
-        return truncate(`FAQ（ID: ${id}）を更新しました: ${updated.question}${excludedNote}`);
+        const tagsNote = tagsProvided
+          ? `（タグ: ${(updated.tags ?? []).length > 0 ? (updated.tags ?? []).join(', ') : 'なし'}）`
+          : '';
+        return truncate(`FAQ（ID: ${id}）を更新しました: ${updated.question}${excludedNote}${tagsNote}`);
       } catch (err) {
         logger.warn('[actionExecutor] update_faq failed', err);
         return truncate('FAQ の更新に失敗しました');

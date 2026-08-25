@@ -94,7 +94,7 @@ handoff は出るが、店主はチャットを離れる。離れた先で「何
 | 4 | アバター設定の削除 | T1 | tool化(2026-08-25, `delete_avatar_config`) | `avatar/index.tsx:227` |
 | 5 | FAQ一括非公開・一括削除 | T2 | tool化(2026-08-25, `bulk_unpublish_faqs`/`bulk_delete_faqs`)。旧`faq_bulk_ops` handoffキーは計測窓のため残置 | `KnowledgeListTab.tsx:238,260` |
 | 6 | FAQ一覧のカテゴリ絞り込み | T2 | tool化(2026-08-25, `get_faq_list`拡張) | `KnowledgeListTab.tsx:118` |
-| 7 | FAQ のタグ | T2 | handoff無し | `KnowledgeFaqEditModal.tsx:69` |
+| 7 | FAQ のタグ | T2 | tool化(2026-08-25, `add_faq`/`update_faq`拡張) | `KnowledgeFaqEditModal.tsx:69` |
 | 8 | アバター画像「写真をアップロード」 | T3 | 不可視 | `StudioImageSection.tsx:87` |
 | 9 | 音声クローン | T3 | `avatar_studio` | `StudioVoiceCloneSection.tsx` |
 | 10 | 高品質画像の生成 | T3 | `avatar_premium` | `AvatarWizard.tsx:318` |
@@ -509,7 +509,7 @@ handoff は出るが、店主はチャットを離れる。離れた先で「何
 | 4 | アバター設定の削除 | `tool:delete_avatar_config` |
 | 5 | FAQ一括非公開・一括削除 | `tool:bulk_unpublish_faqs,bulk_delete_faqs` |
 | 6 | FAQ一覧のカテゴリ絞り込み | `tool:get_faq_list` |
-| 7 | FAQのタグ | `pending` |
+| 7 | FAQのタグ | `tool:add_faq,update_faq` |
 | 8 | アバター画像「写真をアップロード」 | `pending` |
 | 9 | 音声クローン | `handoff:avatar_studio` |
 | 10 | 高品質画像の生成 | `handoff:avatar_premium` |
@@ -520,4 +520,4 @@ handoff は出るが、店主はチャットを離れる。離れた先で「何
 | 15 | ご利用状況・お支払い | `handoff:billing` |
 | 16 | 集計期間90日 | `tool:get_analytics_summary,get_conversion_summary` |
 
-現在地（2026-08-25、W2-2/W2-8着手時点）: `tool:` 7 / `handoff:` 7 / `pending` 2。W1完了。W2-1(#5)/W2-2(#6)/W2-8(#16)tool化。S0 の完了は `pending` が 0 になった時点（`tool:` か `handoff:` のどちらかに必ず分類されている状態）。
+現在地（2026-08-25、W2-3着手時点）: `tool:` 8 / `handoff:` 7 / `pending` 1。W1完了。W2-1(#5)/W2-2(#6)/W2-3(#7)/W2-8(#16)tool化。残るpendingは#8写真アップロードのみ。S0 の完了は `pending` が 0 になった時点（`tool:` か `handoff:` のどちらかに必ず分類されている状態）。

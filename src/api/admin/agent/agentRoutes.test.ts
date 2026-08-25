@@ -3602,7 +3602,7 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.status).toBe(200);
       expect(mockQuery).toHaveBeenCalledWith(
         expect.stringContaining('INSERT INTO faq_docs'),
-        ['tenant-abc', 'q', 'a', category],
+        ['tenant-abc', 'q', 'a', category, []],
       );
       expect(res.body.actions[0].result).toContain('ID: 1');
     });
@@ -3639,7 +3639,7 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.status).toBe(200);
       expect(mockQuery).toHaveBeenCalledWith(
         expect.stringContaining('INSERT INTO faq_docs'),
-        ['tenant-abc', 'q', 'a', null],
+        ['tenant-abc', 'q', 'a', null, []],
       );
       expect(res.body.actions[0].result).toContain('ID: 2');
     });
@@ -3662,7 +3662,7 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(mockQuery).toHaveBeenNthCalledWith(
         2,
         expect.stringContaining('COALESCE($3, category)'),
-        ['q', 'a', null, null, 42, 'tenant-abc'],
+        ['q', 'a', null, null, null, 42, 'tenant-abc'],
       );
       expect(res.body.actions[0].result).toContain('ID: 42');
     });
@@ -3687,7 +3687,7 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(mockQuery).toHaveBeenNthCalledWith(
         2,
         expect.stringContaining('COALESCE($3, category)'),
-        ['q', 'a', 'pricing', null, 42, 'tenant-abc'],
+        ['q', 'a', 'pricing', null, null, 42, 'tenant-abc'],
       );
       expect(res.body.actions[0].result).toContain('ID: 42');
     });
@@ -3710,7 +3710,7 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(mockQuery).toHaveBeenNthCalledWith(
         2,
         expect.stringContaining('COALESCE($3, category)'),
-        ['q2', 'a2', null, null, 42, 'tenant-abc'],
+        ['q2', 'a2', null, null, null, 42, 'tenant-abc'],
       );
       expect(res.body.actions[0].result).toContain('ID: 42');
     });
@@ -3775,7 +3775,7 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(mockQuery).toHaveBeenNthCalledWith(
         2,
         expect.stringContaining('is_excluded_from_search = COALESCE($4, is_excluded_from_search)'),
-        ['q', 'a', null, true, 42, 'tenant-abc'],
+        ['q', 'a', null, true, null, 42, 'tenant-abc'],
       );
       // ESにも除外状態を引き継いで反映する
       expect(mockUpsertToEsAsync).toHaveBeenCalledWith('tenant-abc', 42, 'q', 'a', true, true);
@@ -3804,7 +3804,7 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(mockQuery).toHaveBeenNthCalledWith(
         2,
         expect.stringContaining('is_excluded_from_search = COALESCE($4, is_excluded_from_search)'),
-        ['q', 'a', null, false, 42, 'tenant-abc'],
+        ['q', 'a', null, false, null, 42, 'tenant-abc'],
       );
       expect(mockUpsertToEsAsync).toHaveBeenCalledWith('tenant-abc', 42, 'q', 'a', true, false);
       expect(res.body.actions[0].result).toContain('含める');
@@ -3835,6 +3835,153 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.status).toBe(200);
       // 修正前は ('tenant-abc', 42, 'q2', 'a2', true) の5引数だった
       expect(mockUpsertToEsAsync).toHaveBeenCalledWith('tenant-abc', 42, 'q2', 'a2', true, true);
+    });
+
+    // W2-3(docs/COPILOT_UI_PARITY.md §3.1 #7): FAQのタグ
+    it('add_faq: tagsを指定すると正規化されてINSERTされる(前後空白除去・重複除去)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-af-tags-1', 'add_faq', {
+          question: 'q', answer: 'a', tags: [' 送料 ', '送料', '割引'],
+        }))
+        .mockResolvedValueOnce(makeGroqResponse('追加しました。'));
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ id: 10, question: 'q', answer: 'a', is_published: true }],
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'FAQを追加して', sessionId: 'sess-af-tags-01' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO faq_docs'),
+        ['tenant-abc', 'q', 'a', null, ['送料', '割引']],
+      );
+      expect(res.body.actions[0].result).toContain('タグ: 送料, 割引');
+    });
+
+    it('add_faq: tags未指定なら空配列でINSERTされる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-af-tags-2', 'add_faq', { question: 'q', answer: 'a' }))
+        .mockResolvedValueOnce(makeGroqResponse('追加しました。'));
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ id: 11, question: 'q', answer: 'a', is_published: true }],
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'FAQを追加して', sessionId: 'sess-af-tags-02' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO faq_docs'),
+        ['tenant-abc', 'q', 'a', null, []],
+      );
+      expect(res.body.actions[0].result).not.toContain('タグ:');
+    });
+
+    it('add_faq: 11個以上のtagsは先頭10個に切り詰められる', async () => {
+      const tooManyTags = Array.from({ length: 15 }, (_, i) => `tag${i}`);
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-af-tags-3', 'add_faq', { question: 'q', answer: 'a', tags: tooManyTags }))
+        .mockResolvedValueOnce(makeGroqResponse('追加しました。'));
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [{ id: 12, question: 'q', answer: 'a', is_published: true }],
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'FAQを追加して', sessionId: 'sess-af-tags-03' });
+
+      expect(res.status).toBe(200);
+      const insertCall = mockQuery.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO faq_docs'));
+      const insertedTags = insertCall![1][4] as string[];
+      expect(insertedTags).toHaveLength(10);
+      expect(insertedTags).toEqual(tooManyTags.slice(0, 10));
+    });
+
+    it('update_faq: tagsを指定すると既存タグを丸ごと置き換える', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-uf-tags-1', 'update_faq', {
+          id: 42, question: 'q', answer: 'a', tags: ['新タグ'],
+        }))
+        .mockResolvedValueOnce(makeGroqResponse('更新しました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ id: 42, tenant_id: 'tenant-abc' }] })
+        .mockResolvedValueOnce({
+          rows: [{ id: 42, question: 'q', answer: 'a', is_published: true, is_excluded_from_search: false, tags: ['新タグ'] }],
+        })
+        .mockResolvedValueOnce({ rows: [] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'タグを新タグに変更して', sessionId: 'sess-uf-tags-01' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining('tags = COALESCE($5, tags)'),
+        ['q', 'a', null, null, ['新タグ'], 42, 'tenant-abc'],
+      );
+      expect(res.body.actions[0].result).toContain('タグ: 新タグ');
+    });
+
+    it('update_faq: tagsに空配列を指定すると全てのタグを外す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-uf-tags-2', 'update_faq', {
+          id: 42, question: 'q', answer: 'a', tags: [],
+        }))
+        .mockResolvedValueOnce(makeGroqResponse('更新しました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ id: 42, tenant_id: 'tenant-abc' }] })
+        .mockResolvedValueOnce({
+          rows: [{ id: 42, question: 'q', answer: 'a', is_published: true, is_excluded_from_search: false, tags: [] }],
+        })
+        .mockResolvedValueOnce({ rows: [] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'タグを全部外して', sessionId: 'sess-uf-tags-02' });
+
+      expect(res.status).toBe(200);
+      // 空配列は「未指定」ではなく明示指定として扱われ、COALESCEの第2引数(空配列)がそのまま渡る
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining('tags = COALESCE($5, tags)'),
+        ['q', 'a', null, null, [], 42, 'tenant-abc'],
+      );
+      expect(res.body.actions[0].result).toContain('タグ: なし');
+    });
+
+    it('update_faq: tags未指定の通常編集では既存のタグ配列が保持される(COALESCEにnullを渡す)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-uf-tags-3', 'update_faq', { id: 42, question: 'q2', answer: 'a2' }))
+        .mockResolvedValueOnce(makeGroqResponse('更新しました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ id: 42, tenant_id: 'tenant-abc' }] })
+        .mockResolvedValueOnce({
+          rows: [{ id: 42, question: 'q2', answer: 'a2', is_published: true, is_excluded_from_search: false, tags: ['既存タグ'] }],
+        })
+        .mockResolvedValueOnce({ rows: [] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '本文だけ直して', sessionId: 'sess-uf-tags-03' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining('tags = COALESCE($5, tags)'),
+        ['q2', 'a2', null, null, null, 42, 'tenant-abc'],
+      );
+      // tags未指定のため結果文言にタグ情報は含まれない(excluded_from_searchと同じ作法)
+      expect(res.body.actions[0].result).not.toContain('タグ:');
     });
   });
 
