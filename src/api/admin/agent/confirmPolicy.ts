@@ -93,6 +93,10 @@ export const WRITE_TOOL_RISK_TIERS: Record<string, RiskTier> = {
   // --- high: 不可逆な破棄 / 課金 / 外部送出 ---
   delete_faq: 'high',
   delete_tuning_rule: 'high',
+  // アバター設定の完全削除。不可逆な破棄で delete_faq と同じ階層。稼働中(is_active)の
+  // 設定は削除できない制約があるため、顧客画面からアバターが消える経路そのものは
+  // このツール単体では発生しない(delete_avatar_config: 実行前チェックを参照)。
+  delete_avatar_config: 'high',
   delete_engagement_rule: 'high',
   // 会話セッションの完全削除。不可逆な破棄(audit_logsに理由付きで残るのみ)。
   delete_chat_session: 'high',

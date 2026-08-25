@@ -405,6 +405,32 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
   {
     type: 'function',
     function: {
+      name: 'delete_avatar_config',
+      description:
+        '指定したアバター設定を完全に削除する。取り消せない操作のため、必ず先に削除対象の名前を' +
+        'ユーザーに提示し、明確な同意を得たターンでのみ confirmed=true で呼び出すこと。' +
+        '稼働中（is_active）の設定は削除できない — 先に activate_avatar で別の設定に切り替えるか、' +
+        'set_avatar_feature でアバター機能自体を停止してから削除すること。' +
+        '対象の ID は get_avatar_list で事前に確認したものだけを使うこと。',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: {
+            type: 'string',
+            description: '削除対象のアバター設定ID（get_avatar_list で確認したもの）',
+          },
+          confirmed: {
+            type: 'boolean',
+            description: '削除確認フラグ（true でのみ実行）',
+          },
+        },
+        required: ['id', 'confirmed'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'set_avatar_feature',
       description:
         'アバター機能全体のマスターON/OFFを切り替える。OFFにするとテナントのアバターが' +

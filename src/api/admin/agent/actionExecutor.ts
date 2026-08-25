@@ -1396,6 +1396,61 @@ export async function executeToolCall(
     }
 
     // -----------------------------------------------------------------------
+    // W1-4(docs/COPILOT_UI_PARITY.md §3.1 #4): 不可逆な破棄のためhighリスク・confirmed必須。
+    // 稼働中(is_active)の設定を削除させない制約は admin/avatar/routes.ts の
+    // DELETE /v1/admin/avatar/configs/:id と同じ(client_adminは403相当で拒否)。
+    // 削除後にアクティブな設定が0件になった場合 features.avatar を false に同期する後処理も
+    // 同ルートと同じ。routes.ts側のハンドラは再利用可能な関数として切り出されておらず、
+    // activate_avatar/deactivate_avatarと同様にここでも同じロジックを直接持つ(既存の
+    // パターンを踏襲。切り出しは本タスクの範囲外)。
+    case 'delete_avatar_config': {
+      const id = String(args['id'] ?? '');
+      const confirmed = isConfirmed(args['confirmed']);
+
+      if (!id) {
+        return truncate('id は必須です');
+      }
+      if (!confirmed) {
+        return truncate('アバター設定の削除には確認が必要です。confirmed=true を指定して再度実行してください');
+      }
+
+      try {
+        const existing = await db.query(
+          'SELECT name, is_active FROM avatar_configs WHERE id = $1 AND tenant_id = $2',
+          [id, tenantId]
+        );
+        if (existing.rows.length === 0) {
+          return truncate('アバター設定が見つかりません。get_avatar_list で ID を確認してください');
+        }
+        const target = existing.rows[0] as { name: string; is_active: boolean };
+        if (target.is_active) {
+          return truncate(
+            `「${target.name}」は現在稼働中のため削除できません。先に activate_avatar で別の設定に` +
+            '切り替えるか、set_avatar_feature でアバター機能自体を停止してから削除してください'
+          );
+        }
+
+        await db.query('DELETE FROM avatar_configs WHERE id = $1 AND tenant_id = $2', [id, tenantId]);
+
+        const remaining = await db.query(
+          'SELECT COUNT(*) AS count FROM avatar_configs WHERE tenant_id = $1 AND is_active = true',
+          [tenantId]
+        );
+        if (parseInt(remaining.rows[0]!.count as string, 10) === 0) {
+          await db.query(
+            `UPDATE tenants SET features = jsonb_set(COALESCE(features, '{}'), '{avatar}', 'false') WHERE id = $1`,
+            [tenantId]
+          );
+        }
+
+        return truncate(`アバター設定「${target.name}」を削除しました`);
+      } catch (err) {
+        logger.warn('[actionExecutor] delete_avatar_config failed', err);
+        return truncate('アバター設定の削除に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
     // GID 1217535352042856(E1): アバター機能のマスターON/OFF(tenants.features.avatar)を
     // チャットから行えるようにする。activate_avatar は avatar_configs.is_active しか触らず、
     // 旧UIの AvatarFeatureToggle(client_admin専用)にしかこのフラグを変える手段が無かった
