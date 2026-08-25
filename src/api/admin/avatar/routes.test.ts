@@ -595,7 +595,10 @@ describe("POST /v1/admin/avatar/configs/:id/voice-clone", () => {
 
     expect(res.status).toBe(200);
     const calls = clientQuery.mock.calls as Array<[string, unknown[]?]>;
-    expect(calls[2]![0]).not.toContain("tenant_id"); // SELECT
+    // GID 1217808323836843: SELECTの列に tenant_id を足した(outcome.tenantId解決のため)ので、
+    // 列名の部分一致ではなく実際の絞り込み条件(fishVoiceModel.tsの `AND tenant_id = $2`、
+    // !isSuperAdmin時のみ付与)が無いことを直接検証する。
+    expect(calls[2]![0]).not.toContain("AND tenant_id"); // SELECT: スコープ絞り込みなし
     expect(calls[3]![0]).not.toContain("tenant_id"); // UPDATE
   });
 
@@ -788,7 +791,10 @@ describe("POST /v1/admin/avatar/configs/:id/adopt-designed-voice", () => {
       .attach("audio", CANDIDATE_AUDIO, { filename: "candidate.wav", contentType: "audio/wav" });
 
     expect(res.status).toBe(200);
-    expect(clientQuery.mock.calls[2]![0]).not.toContain("tenant_id");
+    // GID 1217808323836843: SELECTの列に tenant_id を足した(outcome.tenantId解決のため)ので、
+    // 列名の部分一致ではなく実際の絞り込み条件(`AND tenant_id = $2`、!isSuperAdmin時のみ付与)
+    // が無いことを直接検証する。
+    expect(clientQuery.mock.calls[2]![0]).not.toContain("AND tenant_id");
   });
 
   it("previewMode相当: super_adminが空テナントで他テナントconfigを操作しても越境しない(super_adminスコープ確認)", async () => {
