@@ -213,9 +213,11 @@ jest.mock('../../../lib/notifications', () => ({
 // get_billing_summary が使う依存をモック
 const mockFetchBillingCostBreakdown = jest.fn();
 const mockFetchBillingInvoices = jest.fn();
+const mockComputeBillingEstimateJpy = jest.fn();
 jest.mock('../../../lib/billing/billingApi', () => ({
   fetchBillingCostBreakdown: (...args: any[]) => mockFetchBillingCostBreakdown(...args),
   fetchBillingInvoices: (...args: any[]) => mockFetchBillingInvoices(...args),
+  computeBillingEstimateJpy: (...args: any[]) => mockComputeBillingEstimateJpy(...args),
 }));
 
 // logger モック
@@ -9665,11 +9667,11 @@ describe('POST /v1/admin/agent/chat', () => {
 
     const BREAKDOWN = {
       tenantId: 'tenant-abc',
-      total_yen: 3300,
+      total_usd: 3300,
       breakdown: {
-        chat: { label: 'AI応答', cost_yen: 2000, request_count: 100, percentage: 61 },
-        avatar: { label: 'アバター映像', cost_yen: 1000, request_count: 20, percentage: 30 },
-        voice: { label: '音声合成', cost_yen: 300, request_count: 10, percentage: 9 },
+        chat: { label: 'AI応答', cost_usd: 2000, request_count: 100, percentage: 61 },
+        avatar: { label: 'アバター映像', cost_usd: 1000, request_count: 20, percentage: 30 },
+        voice: { label: '音声合成', cost_usd: 300, request_count: 10, percentage: 9 },
       },
     };
     const INVOICE = {
@@ -9689,6 +9691,7 @@ describe('POST /v1/admin/agent/chat', () => {
         status: 'ok', tenantId: 'tenant-abc', customerId: 'cus_1',
         portalUrl: 'https://billing.stripe.com/portal/test', invoices: [INVOICE],
       });
+      mockComputeBillingEstimateJpy.mockResolvedValueOnce(3300);
 
       const res = await request(makeApp(CLIENT_ADMIN_USER))
         .post('/v1/admin/agent/chat')
@@ -9701,6 +9704,11 @@ describe('POST /v1/admin/agent/chat', () => {
         expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
       );
       expect(mockFetchBillingInvoices).toHaveBeenCalledWith(mockDb, 'tenant-abc');
+      expect(mockComputeBillingEstimateJpy).toHaveBeenCalledWith(
+        mockDb, 'tenant-abc',
+        expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+        expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+      );
 
       const result = res.body.actions[0].result as string;
       expect(result).toContain('Growth');
@@ -9711,11 +9719,11 @@ describe('POST /v1/admin/agent/chat', () => {
         kind: 'billing_summary',
         period: '30d',
         plan: 'Growth',
-        totalYen: 3300,
+        billingEstimateJpy: 3300,
         breakdown: [
-          { feature: 'chat', label: 'AI応答', costYen: 2000, percentage: 61 },
-          { feature: 'avatar', label: 'アバター映像', costYen: 1000, percentage: 30 },
-          { feature: 'voice', label: '音声合成', costYen: 300, percentage: 9 },
+          { feature: 'chat', label: 'AI応答', costUsd: 2000, percentage: 61 },
+          { feature: 'avatar', label: 'アバター映像', costUsd: 1000, percentage: 30 },
+          { feature: 'voice', label: '音声合成', costUsd: 300, percentage: 9 },
         ],
         invoicesAvailable: true,
         invoices: [{
@@ -9732,8 +9740,9 @@ describe('POST /v1/admin/agent/chat', () => {
         .mockResolvedValueOnce(makeGroqResponse('ご利用状況をお伝えします。'));
 
       mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'starter' }] });
-      mockFetchBillingCostBreakdown.mockResolvedValueOnce({ tenantId: 'tenant-abc', total_yen: 0, breakdown: {} });
+      mockFetchBillingCostBreakdown.mockResolvedValueOnce({ tenantId: 'tenant-abc', total_usd: 0, breakdown: {} });
       mockFetchBillingInvoices.mockResolvedValueOnce({ status: 'no_subscription', tenantId: 'tenant-abc' });
+      mockComputeBillingEstimateJpy.mockResolvedValueOnce(null);
 
       const res = await request(makeApp(CLIENT_ADMIN_USER))
         .post('/v1/admin/agent/chat')
@@ -9754,6 +9763,7 @@ describe('POST /v1/admin/agent/chat', () => {
       mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'growth' }] });
       mockFetchBillingCostBreakdown.mockResolvedValueOnce(BREAKDOWN);
       mockFetchBillingInvoices.mockResolvedValueOnce({ status: 'stripe_not_configured' });
+      mockComputeBillingEstimateJpy.mockResolvedValueOnce(null);
 
       const res = await request(makeApp(CLIENT_ADMIN_USER))
         .post('/v1/admin/agent/chat')
@@ -9778,6 +9788,7 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(mockQuery).not.toHaveBeenCalled();
       expect(mockFetchBillingCostBreakdown).not.toHaveBeenCalled();
       expect(mockFetchBillingInvoices).not.toHaveBeenCalled();
+      expect(mockComputeBillingEstimateJpy).not.toHaveBeenCalled();
     });
   });
 

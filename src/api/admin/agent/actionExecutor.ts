@@ -47,7 +47,7 @@ import { recordSaiTask, resolveSaiTaskTenant } from '../../../lib/sai/saiTaskReg
 import { trackUsage } from '../../../lib/billing/usageTracker';
 import { GPT_OSS_120B } from '../../../config/groqModels';
 import { queryTenantPlan, planHasFeature, resolveShareForTenantPlan } from '../../../lib/billing/planFeatures';
-import { fetchBillingCostBreakdown, fetchBillingInvoices } from '../../../lib/billing/billingApi';
+import { fetchBillingCostBreakdown, fetchBillingInvoices, computeBillingEstimateJpy } from '../../../lib/billing/billingApi';
 import { fetchAnalyticsSummary, fetchAnalyticsTrend, fetchConversionSummary, fetchKnowledgeAttribution, fetchLowScoreSessions } from '../analytics/summaryQueries';
 import { getRuleEffect } from '../analytics/ruleEffect';
 import { computeAbExperimentResults, fetchAbExperimentsOverview } from '../../conversion/abResultsQuery';
@@ -634,8 +634,10 @@ export type BillingSummaryCardPayload = {
   kind: 'billing_summary';
   period: string;
   plan: string;
-  totalYen: number;
-  breakdown: Array<{ feature: string; label: string; costYen: number; percentage: number }>;
+  /** Stripe実単価(billedQuantity × 実単価)ベースの見積り(円)。算出不可ならnull。 */
+  billingEstimateJpy: number | null;
+  /** 機能別の原価構成比(USD)。Stripeは機能別に請求を分けないため実単価ベースにはできない。 */
+  breakdown: Array<{ feature: string; label: string; costUsd: number; percentage: number }>;
   invoicesAvailable: boolean;
   invoices: Array<{
     id: string;
@@ -4636,21 +4638,24 @@ export async function executeToolCall(
       const from = new Date(now.getTime() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
       try {
-        const [plan, breakdown, invoicesResult] = await Promise.all([
+        const [plan, breakdown, invoicesResult, billingEstimateJpy] = await Promise.all([
           queryTenantPlan(db, tenantId),
           fetchBillingCostBreakdown(db, tenantId, from, to),
           fetchBillingInvoices(db, tenantId),
+          computeBillingEstimateJpy(db, tenantId, from, to),
         ]);
         const planLabel = BILLING_PLAN_LABEL[plan] ?? plan;
 
         const lines = [
           `ご利用状況・お支払い（${periodLabel}）`,
           `• 契約プラン: ${planLabel}`,
-          `• 今期の費用: ${breakdown.total_yen.toLocaleString('ja-JP')}円`,
+          billingEstimateJpy !== null
+            ? `• 今期の請求見積り: ${billingEstimateJpy.toLocaleString('ja-JP')}円`
+            : '• 今期の請求見積り: 現在算出できません',
         ];
         const breakdownEntries = Object.values(breakdown.breakdown);
         if (breakdownEntries.length > 0) {
-          lines.push(`  内訳: ${breakdownEntries.map((b) => `${b.label} ${b.percentage}%（${b.cost_yen.toLocaleString('ja-JP')}円）`).join(' / ')}`);
+          lines.push(`  原価内訳: ${breakdownEntries.map((b) => `${b.label} ${b.percentage}%（$${b.cost_usd.toLocaleString('en-US')}）`).join(' / ')}`);
         }
 
         const invoicesAvailable = invoicesResult.status === 'ok';
@@ -4669,11 +4674,11 @@ export async function executeToolCall(
           kind: 'billing_summary',
           period,
           plan: planLabel,
-          totalYen: breakdown.total_yen,
+          billingEstimateJpy,
           breakdown: Object.entries(breakdown.breakdown).map(([feature, b]) => ({
             feature,
             label: b.label,
-            costYen: b.cost_yen,
+            costUsd: b.cost_usd,
             percentage: b.percentage,
           })),
           invoicesAvailable,

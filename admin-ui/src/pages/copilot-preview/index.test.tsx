@@ -1802,11 +1802,11 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
               kind: "billing_summary",
               period: "30d",
               plan: "Growth",
-              totalYen: 3300,
+              billingEstimateJpy: 3300,
               breakdown: [
-                { feature: "chat", label: "AI応答", costYen: 2000, percentage: 61 },
-                { feature: "avatar", label: "アバター映像", costYen: 1000, percentage: 30 },
-                { feature: "voice", label: "音声合成", costYen: 300, percentage: 9 },
+                { feature: "chat", label: "AI応答", costUsd: 20, percentage: 61 },
+                { feature: "avatar", label: "アバター映像", costUsd: 10, percentage: 30 },
+                { feature: "voice", label: "音声合成", costUsd: 3, percentage: 9 },
               ],
               invoicesAvailable: true,
               invoices: [
@@ -1821,7 +1821,7 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
       await send("今月の請求額を教えて");
 
       expect(await screen.findByText("Growth")).toBeTruthy();
-      expect(screen.getByText(/今期の費用/)).toBeTruthy();
+      expect(screen.getByText(/今期の請求見積り/)).toBeTruthy();
       expect(screen.getAllByText(/3,300円/).length).toBeGreaterThan(0);
       expect(screen.getByText(/お支払い済み/)).toBeTruthy();
       const portalLink = screen.getByText(/お支払い方法の確認・変更/).closest("a");
@@ -1843,7 +1843,7 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
               kind: "billing_summary",
               period: "30d",
               plan: "Starter",
-              totalYen: 0,
+              billingEstimateJpy: 0,
               breakdown: [],
               invoicesAvailable: false,
               invoices: [],
