@@ -749,6 +749,13 @@ export async function executeToolCall(
         const published = parseFaqPublishedFilter(args['published']);
         const sortBy = parseFaqSortBy(args['sort_by']);
         const { column, direction } = FAQ_SORT_OPTIONS[sortBy];
+        // W2-2: add_faq/update_faqと同じ検証(parseFaqCategoryArg)を再利用し、
+        // カテゴリ語彙のenumを二重に持たない。
+        const categoryResult = parseFaqCategoryArg(args['category']);
+        if (!categoryResult.ok) {
+          return truncate(categoryResult.error);
+        }
+        const category = categoryResult.category;
 
         const whereParams: unknown[] = [tenantId];
         let whereClause = 'WHERE tenant_id = $1';
@@ -765,6 +772,10 @@ export async function executeToolCall(
           whereClause += ' AND is_published = true';
         } else if (published === 'draft') {
           whereClause += ' AND is_published = false';
+        }
+        if (category) {
+          whereParams.push(category);
+          whereClause += ` AND category = $${whereParams.length}`;
         }
 
         const listParams = [...whereParams, limit, offset];
@@ -4029,8 +4040,11 @@ export async function executeToolCall(
         return truncate(planLimitNotice(tenantId, sessionId, feature));
       }
 
-      const period = args['period'] === '7d' ? '7d' : '30d';
-      const periodLabel = period === '7d' ? '直近7日間' : '直近30日間';
+      // W2-8: 以前は '7d' 以外をすべて '30d' に丸めていたため、'90d' を指定しても黙って
+      // 30日に差し替わっていた(旧UIの analytics/utils.ts PERIOD_LABELS は7d/30d/90dの3つ)。
+      // periodToInterval(summaryQueries.ts) は既に90dに対応済みで、この2行だけが穴だった。
+      const period = args['period'] === '7d' || args['period'] === '90d' ? args['period'] : '30d';
+      const periodLabel = period === '7d' ? '直近7日間' : period === '90d' ? '直近90日間' : '直近30日間';
 
       try {
         if (toolName === 'get_analytics_summary') {

@@ -3370,6 +3370,85 @@ describe('POST /v1/admin/agent/chat', () => {
       // 食い違わない(500字truncateの旧実装で起きていた「20件表示と嘘をつく」の回帰確認)
       expect(result).toContain('全25件中20件を表示');
     });
+
+    // W2-2(docs/COPILOT_UI_PARITY.md §3.1 #6): カテゴリ絞り込み
+    it('category を指定するとWHERE句に絞り込み条件が追加される', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fl-cat-1', 'get_faq_list', { category: 'pricing' }))
+        .mockResolvedValueOnce(makeGroqResponse('料金についてのFAQです。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ n: 2 }] })
+        .mockResolvedValueOnce({
+          rows: [{ id: 1, question: 'q', answer: 'a' }, { id: 2, question: 'q2', answer: 'a2' }],
+        });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '料金のFAQを見せて', sessionId: 'sess-fl-cat-01' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        1,
+        expect.stringContaining('AND category = $2'),
+        ['tenant-abc', 'pricing'],
+      );
+      expect(res.body.actions[0].result).toContain('FAQ 一覧（2件）');
+    });
+
+    it('category未指定なら絞り込み条件を追加しない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fl-cat-2', 'get_faq_list', {}))
+        .mockResolvedValueOnce(makeGroqResponse('FAQ一覧です。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ n: 1 }] })
+        .mockResolvedValueOnce({ rows: [{ id: 1, question: 'q', answer: 'a' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'FAQ一覧を見せて', sessionId: 'sess-fl-cat-02' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenNthCalledWith(1, expect.not.stringContaining('category ='), ['tenant-abc']);
+    });
+
+    it('不明なカテゴリはDBに触れず拒否する', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fl-cat-3', 'get_faq_list', { category: 'unknown_cat' }))
+        .mockResolvedValueOnce(makeGroqResponse('確認できませんでした。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'unknown_catのFAQを見せて', sessionId: 'sess-fl-cat-03' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('不明なカテゴリです');
+    });
+
+    it('search・published・categoryを同時に指定できる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fl-cat-4', 'get_faq_list', {
+          search: '送料', published: 'published', category: 'campaign',
+        }))
+        .mockResolvedValueOnce(makeGroqResponse('該当のFAQです。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ n: 1 }] })
+        .mockResolvedValueOnce({ rows: [{ id: 5, question: 'q5', answer: 'a5' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '送料の公開中キャンペーンFAQを見せて', sessionId: 'sess-fl-cat-04' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        1,
+        expect.stringMatching(/ILIKE \$2 OR answer ILIKE \$2\) AND is_published = true AND category = \$3/),
+        ['tenant-abc', '%送料%', 'campaign'],
+      );
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -8845,6 +8924,37 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(result).toContain('テナントが特定できません');
       expect(result).not.toContain('Growthプラン以上');
       expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    // W2-8(docs/COPILOT_UI_PARITY.md §3.1 #16): 以前は '7d' 以外をすべて '30d' に
+    // 丸めていたため、90d を指定しても黙って30日に差し替わっていた。旧UI
+    // (analytics/utils.ts PERIOD_LABELS)は7d/30d/90dの3つに対応している。
+    it.each([
+      ['get_analytics_summary', mockFetchAnalyticsSummary, 'sess-as-90d'],
+      ['get_conversion_summary', mockFetchConversionSummary, 'sess-cs-90d'],
+    ])('%s: period=90d を指定すると集計期間として渡され、30dに丸められない', async (toolName, mockFetchFn, sessionId) => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-90d-1', toolName, { period: '90d' }))
+        .mockResolvedValueOnce(makeGroqResponse('直近90日間の状況です。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'growth' }] });
+      if (toolName === 'get_analytics_summary') {
+        mockFetchFn.mockResolvedValueOnce({ ...ANALYTICS_SUMMARY, period: '90d' });
+      } else {
+        mockFetchFn.mockResolvedValueOnce(CONVERSION_SUMMARY);
+      }
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '直近90日間の状況を教えて', sessionId });
+
+      expect(res.status).toBe(200);
+      expect(mockFetchFn).toHaveBeenCalledWith({
+        db: mockDb,
+        tenantId: 'tenant-abc',
+        period: '90d',
+      });
+      expect(res.body.actions[0].result).toContain('直近90日間');
     });
   });
 
