@@ -8,7 +8,7 @@ import { pool } from "../../../lib/db";
 import { registerFaqCrudRoutes } from "./faqCrudRoutes";
 import { registerBookPdfRoutes } from "./bookPdfRoutes";
 import { logger } from '../../../lib/logger';
-import { resolveFaqWriteIndex } from "../../../search/langIndex";
+import { deleteFaqFromEs } from "../../../lib/knowledge/faqIndexSync";
 import type { SupabaseJwtUser } from '../../middleware/roleAuth';
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 import {
@@ -34,16 +34,6 @@ function resolveTenantId(req: Request): string | null {
   const fromQuery = (req.query.tenant || req.query.tenant_id) as string | undefined;
   const fromHeader = req.headers["x-tenant-id"] as string | undefined;
   return fromQuery || fromHeader || null;
-}
-
-/** ESインデックスからドキュメントを削除（best-effort）
- * Phase69-2-E: write index を read path と同じ faq_${tenantId} に統一 */
-async function deleteFromEs(tenantId: string, esDocId: string): Promise<void> {
-  const esUrl = process.env.ES_URL;
-  const index = resolveFaqWriteIndex(tenantId);
-  if (!esUrl || !esDocId) return;
-  const url = `${esUrl.replace(/\/$/, "")}/${index}/_doc/${encodeURIComponent(esDocId)}`;
-  await fetch(url, { method: "DELETE" }).catch(() => {});
 }
 
 export function registerKnowledgeAdminRoutes(app: Express): void {
@@ -192,9 +182,9 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
     }
 
     try {
-      // tenant_id 一致チェック + es_doc_id 取得（globalも対象に含める）
+      // tenant_id 一致チェック（globalも対象に含める）
       const check = await db.query(
-        "SELECT id, es_doc_id, tenant_id FROM faq_docs WHERE id = $1 AND (tenant_id = $2 OR tenant_id = 'global')",
+        "SELECT id, tenant_id FROM faq_docs WHERE id = $1 AND (tenant_id = $2 OR tenant_id = 'global')",
         [id, tenantId]
       );
       if (check.rowCount === 0) {
@@ -209,8 +199,6 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
           return res.status(403).json({ error: "全店舗共通の知識データはSuper Adminのみ削除可能です" });
         }
       }
-
-      const esDocId = check.rows[0].es_doc_id as string | null;
 
       // faq_embeddings 削除
       await db.query(
@@ -227,8 +215,10 @@ export function registerKnowledgeAdminRoutes(app: Express): void {
         [id, recordTenantId]
       );
 
-      // ES 削除（best-effort）
-      if (esDocId) await deleteFromEs(recordTenantId, esDocId);
+      // ES 削除（best-effort）。doc id は es_doc_id 列(常にNULLで一度も埋まらない
+      // 死列)からではなく、faqEsDocId(tenantId, faqId) の規約から決定的に導出する
+      // (2026-08-25 是正: 従来は esDocId が常にnullのためこの削除が一度も実行されていなかった)。
+      await deleteFaqFromEs(recordTenantId, id);
 
       return res.json({ ok: true, id });
     } catch (err) {

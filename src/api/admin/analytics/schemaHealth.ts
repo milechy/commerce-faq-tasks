@@ -43,7 +43,7 @@ export const REQUIRED_COLUMNS: Record<string, readonly string[]> = {
   conversation_evaluations: ["customer_reaction_score", "effective_principles", "evaluation_axes", "failed_principles", "feedback", "judge_model", "message_count", "model_used", "notes", "psychology_fit_score", "score", "session_id", "stage_progress_score", "suggested_rules", "taboo_violation_score", "tenant_id", "used_principles"],
   conversation_flow_logs: ["from_state", "metadata", "session_id", "tenant_id", "to_state", "turn_index"],
   conversion_attributions: ["conversion_type", "conversion_value", "created_at", "deduplicated_at", "event_id", "event_type", "message_count", "psychology_principle_used", "sales_stage_at_conversion", "session_duration_sec", "session_id", "source", "temp_score_at_conversion", "tenant_id", "trigger_rule_id", "trigger_type"],
-  faq_docs: ["answer", "category", "es_doc_id", "is_published", "product_cta_url", "product_image_url", "product_price", "question", "tags", "tenant_id"],
+  faq_docs: ["answer", "category", "is_published", "product_cta_url", "product_image_url", "product_price", "question", "tags", "tenant_id"],
   faq_embeddings: ["embedding", "is_excluded_from_search", "metadata", "tenant_id", "text"],
   feedback_messages: ["content", "sender_email", "sender_role", "tenant_id"],
   knowledge_gaps: ["detection_source", "frequency", "last_detected_at", "message_id", "rag_hit_count", "rag_top_score", "recommendation_status", "session_id", "tenant_id", "user_question"],
