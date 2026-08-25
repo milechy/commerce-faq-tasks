@@ -9,6 +9,7 @@ import pino from "pino";
 import { groqClient } from "../llm/groqClient";
 import { GPT_OSS_120B } from "../../config/groqModels";
 import { embedText } from "../llm/openaiEmbeddingClient";
+import { trackUsage } from "../../lib/billing/usageTracker";
 import { getPool } from "../../lib/db";
 import { getNonConvertingOutcomes } from "../../api/admin/chat-history/chatHistoryRepository";
 import {
@@ -56,6 +57,7 @@ JSONのみで回答してください: {"question":"...","answer":"..."}
  * Groq で会話ログを正規 Q&A に蒸留する。抽出不能なら null。
  */
 async function distillConversation(
+  tenantId: string,
   messages: DistillSourceMessage[],
 ): Promise<DistilledQa | null> {
   // Anti-Slop: 各発話 200 文字に制限 (judgeEvaluator と同方針)
@@ -63,7 +65,7 @@ async function distillConversation(
     .map((m) => `${m.role}: ${m.content.slice(0, 200)}`)
     .join("\n");
 
-  const raw = await groqClient.call({
+  const { content: raw, usage } = await groqClient.callWithUsage({
     model: GPT_OSS_120B,
     messages: [
       { role: "system", content: DISTILL_SYSTEM_PROMPT },
@@ -71,6 +73,18 @@ async function distillConversation(
     ],
     temperature: 0.2,
     maxTokens: 500,
+  });
+
+  // PR-1(2026-08-25収益監査): 会話蒸留のLLM原価が計上漏れていた。
+  // Gemini judge等と同じ内部LLM処理として featureUsed='admin_tuning' で計上する
+  // (NON_BILLABLE_FEATURESのため原価は可視化されるがStripe請求数量には含まれない)。
+  trackUsage({
+    tenantId,
+    requestId: `learned-memory-distill:${tenantId}:${Date.now()}`,
+    model: GPT_OSS_120B,
+    inputTokens: usage?.prompt_tokens ?? 0,
+    outputTokens: usage?.completion_tokens ?? 0,
+    featureUsed: "admin_tuning",
   });
 
   const jsonMatch = raw.match(/\{[\s\S]*\}/);
@@ -185,7 +199,7 @@ export async function distillAndPromote(
       return false;
     }
 
-    const qa = await distillConversation(messages);
+    const qa = await distillConversation(tenantId, messages);
     if (!qa) {
       logger.debug({ tenantId, sessionId }, "[learnedMemory] distill yielded no Q&A");
       return false;

@@ -9,7 +9,21 @@ jest.mock('../logger', () => ({
 
 const mockGroqCall = jest.fn();
 jest.mock('../../agent/llm/groqClient', () => ({
-  groqClient: { call: (...args: unknown[]) => mockGroqCall(...args) },
+  groqClient: {
+    call: (...args: unknown[]) => mockGroqCall(...args),
+    // PR-1(2026-08-25収益監査): textToFaqs は callWithUsage に差し替え済み。
+    // 既存テストの mockGroqCall はそのまま content 文字列を返す実装なので、
+    // callWithUsage 経由でも同じ返り値を { content, usage } でラップして流用する。
+    callWithUsage: async (...args: unknown[]) => ({
+      content: await mockGroqCall(...args),
+      usage: { prompt_tokens: 100, completion_tokens: 50 },
+    }),
+  },
+}));
+
+const mockTrackUsage = jest.fn();
+jest.mock('../billing/usageTracker', () => ({
+  trackUsage: (...args: unknown[]) => mockTrackUsage(...args),
 }));
 
 const mockEmbedText = jest.fn();
@@ -51,6 +65,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   mockEmbedText.mockResolvedValue([0.1, 0.2, 0.3]);
   mockUpsertFaqToEs.mockReset();
+  mockTrackUsage.mockReset();
 });
 
 describe('bigramSimilarity', () => {
@@ -148,6 +163,43 @@ describe('textToFaqs', () => {
     mockGroqCall.mockResolvedValue('申し訳ありません、うまく生成できませんでした');
     await expect(textToFaqs('十分な長さのテキスト。'.repeat(10))).rejects.toThrow();
   });
+
+  // PR-1(2026-08-25収益監査): FAQ生成の計上漏れ是正。
+  it('usageを渡すとtrackUsageがadmin_guideで計上される', async () => {
+    mockGroqCall.mockResolvedValue('[{"question":"Q1","answer":"A1","category":"general"}]');
+    await textToFaqs('十分な長さのテキスト。'.repeat(10), undefined, undefined, { tenantId: 't1' });
+    expect(mockTrackUsage).toHaveBeenCalledTimes(1);
+    expect(mockTrackUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: 't1',
+        featureUsed: 'admin_guide',
+        inputTokens: 100,
+        outputTokens: 50,
+      }),
+    );
+  });
+
+  it('usage未指定ならtrackUsageを呼ばない', async () => {
+    mockGroqCall.mockResolvedValue('[{"question":"Q1","answer":"A1","category":"general"}]');
+    await textToFaqs('十分な長さのテキスト。'.repeat(10));
+    expect(mockTrackUsage).not.toHaveBeenCalled();
+  });
+
+  it('requestId省略時は一意な値を自動生成する(二重クリックでも別ID)', async () => {
+    mockGroqCall.mockResolvedValue('[{"question":"Q1","answer":"A1","category":"general"}]');
+    await textToFaqs('十分な長さのテキスト。'.repeat(10), undefined, undefined, { tenantId: 't1' });
+    await textToFaqs('十分な長さのテキスト。'.repeat(10), undefined, undefined, { tenantId: 't1' });
+    const ids = mockTrackUsage.mock.calls.map((c) => c[0].requestId);
+    expect(new Set(ids).size).toBe(2);
+  });
+
+  it('JSON parseが失敗しても、Groq呼び出し自体の計上は行われる(原価は既に発生している)', async () => {
+    mockGroqCall.mockResolvedValue('申し訳ありません、うまく生成できませんでした');
+    await expect(
+      textToFaqs('十分な長さのテキスト。'.repeat(10), undefined, undefined, { tenantId: 't1' })
+    ).rejects.toThrow();
+    expect(mockTrackUsage).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('generateTextFaqPreview', () => {
@@ -160,6 +212,16 @@ describe('generateTextFaqPreview', () => {
     const preview = await generateTextFaqPreview(db, 't1', '十分な長さのテキスト。'.repeat(10));
     expect(preview).toHaveLength(1);
     expect(preview[0]!.duplicate).not.toBeNull();
+  });
+
+  // PR-1: 呼び出し元(routes.ts / actionExecutor.ts)がusageを個別に渡さなくても、
+  // tenantIdは元々パラメータにあるため generateTextFaqPreview が内部で計上する。
+  it('呼び出し元がtenantIdを渡すだけでtrackUsageが計上される', async () => {
+    const db = makeMockPool(jest.fn().mockResolvedValue({ rows: [] }));
+    mockGroqCall.mockResolvedValue('[{"question":"Q1","answer":"A1","category":"general"}]');
+
+    await generateTextFaqPreview(db, 't1', '十分な長さのテキスト。'.repeat(10));
+    expect(mockTrackUsage).toHaveBeenCalledWith(expect.objectContaining({ tenantId: 't1' }));
   });
 });
 
@@ -182,6 +244,23 @@ describe('generateScrapeFaqPreview / scrapeUrlToFaqs', () => {
     expect(results[0]!.url).toBe('https://example.com/p/1');
     expect(results[0]!.faqs).toHaveLength(1);
     expect(results[0]!.error).toBeUndefined();
+    // PR-1: URLごとに独立したtrackUsage計上(1リクエスト=1行、request_idはURL単位で一意)
+    expect(mockTrackUsage).toHaveBeenCalledTimes(1);
+    expect(mockTrackUsage).toHaveBeenCalledWith(expect.objectContaining({ tenantId: 't1' }));
+  });
+
+  it('複数URLはそれぞれ別のrequestIdでtrackUsageされる(二重計上・取り違えが起きない)', async () => {
+    const db = makeMockPool(jest.fn().mockResolvedValue({ rows: [] }));
+    const bodyText = 'この商品の詳細説明文です。'.repeat(10);
+    global.fetch = jest.fn().mockResolvedValue({
+      text: () => Promise.resolve(`<html><body>${bodyText}</body></html>`),
+    }) as unknown as typeof fetch;
+    mockGroqCall.mockResolvedValue('[{"question":"Q1","answer":"A1","category":"general"}]');
+
+    await generateScrapeFaqPreview(db, 't1', ['https://example.com/p/1', 'https://example.com/p/2']);
+    expect(mockTrackUsage).toHaveBeenCalledTimes(2);
+    const ids = mockTrackUsage.mock.calls.map((c) => c[0].requestId);
+    expect(new Set(ids).size).toBe(2);
   });
 
   it('本文が50字未満ならerrorを返しGroqは呼ばない', async () => {
@@ -194,6 +273,7 @@ describe('generateScrapeFaqPreview / scrapeUrlToFaqs', () => {
     expect(results[0]!.error).toBe('ページからテキストを取得できませんでした');
     expect(results[0]!.faqs).toEqual([]);
     expect(mockGroqCall).not.toHaveBeenCalled();
+    expect(mockTrackUsage).not.toHaveBeenCalled();
   });
 
   it('fetch失敗時は例外を投げずerrorフィールドに格納する', async () => {

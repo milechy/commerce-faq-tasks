@@ -14,6 +14,8 @@ import type { StructurizerDeps } from "./structurizer";
 import { analyzeContentType } from "./contentAnalyzer";
 import { createNotification } from "../notifications";
 import { logger } from '../logger';
+import { trackUsage } from "../billing/usageTracker";
+import { GPT_OSS_120B } from "../../config/groqModels";
 
 export interface PipelineDeps {
   db: Pool;
@@ -150,9 +152,27 @@ export async function runBookPipeline(
     }
 
     // 6. Groq 8b 構造化
+    // PR-1(2026-08-25収益監査): 書籍構造化のLLM原価が全経路で計上されていなかった。
+    // 「1ジョブ=1行」の原則(禁止49)を守るため、チャンクごとに行を作らず、
+    // onUsage で全チャンクのトークン消費を合算してから最後に1回だけ計上する。
+    let totalPromptTokens = 0;
+    let totalCompletionTokens = 0;
     const structuredChunks = await structurizeChunks(chunks, {
       ...deps.structurizer,
       schema: contentSchema,
+      onUsage: (usage) => {
+        totalPromptTokens += usage.promptTokens;
+        totalCompletionTokens += usage.completionTokens;
+      },
+    });
+    // requestId は bookId 単位で決定的(D-06: 再実行時の二重計上を ON CONFLICT で防ぐ)。
+    trackUsage({
+      tenantId: book.tenant_id,
+      requestId: `book-structurize:${bookId}`,
+      model: GPT_OSS_120B,
+      inputTokens: totalPromptTokens,
+      outputTokens: totalCompletionTokens,
+      featureUsed: "book_structurize",
     });
 
     // 7. Embedding + 保存 + ES sync

@@ -1091,6 +1091,13 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(mockCreateRule).not.toHaveBeenCalled();
       expect(res.body.actions[0].tool).toBe('suggest_tuning_rule');
       expect(res.body.actions[0].result).toContain('保証期間は2年とお伝えする');
+
+      // PR-1(2026-08-25収益監査): agent経由のsuggest_tuning_ruleはUI経路(tuning/routes.ts)
+      // と違いtrackUsageが計上漏れていた。UI経路と同じfeatureUsed='admin_tuning'で
+      // 計上されることを固定する(admin_agentの1回とは別に、もう1回呼ばれる)。
+      expect(mockTrackUsage).toHaveBeenCalledWith(
+        expect.objectContaining({ tenantId: 'tenant-abc', featureUsed: 'admin_tuning' }),
+      );
     });
 
     // D6: 下書きカードに優先度を表示し、複数行の対応方針も欠落なく運ぶための構造化カード。
@@ -3553,10 +3560,12 @@ describe('POST /v1/admin/agent/chat', () => {
         .send({ message: '送料は550円、5000円以上で無料と答えて', sessionId: 'sess-050' });
 
       expect(res.status).toBe(200);
+      // PR-1(2026-08-25収益監査): agent経由のFAQ生成計上漏れ是正で第4引数(usage)を追加。
       expect(mockTextToFaqs).toHaveBeenCalledWith(
         '送料は550円、5000円以上で無料と答えて',
         undefined,
         ['返品はできますか？'],
+        { tenantId: 'tenant-abc' },
       );
       expect(mockQuery).not.toHaveBeenCalledWith(expect.stringContaining('INSERT INTO faq_docs'), expect.anything());
       const result = res.body.actions[0].result as string;

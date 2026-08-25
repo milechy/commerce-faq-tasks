@@ -25,6 +25,7 @@ import { groqClient } from '../../agent/llm/groqClient';
 import { logger } from '../logger';
 import { buildFaqCategoryPromptSection } from './faqCategories';
 import { insertFaqEmbeddingAsync, upsertFaqToEs } from './faqIndexSync';
+import { trackUsage } from '../billing/usageTracker';
 
 export interface FaqEntry {
   question: string;
@@ -33,15 +34,28 @@ export interface FaqEntry {
 }
 
 /**
+ * PR-1(2026-08-25収益監査): FAQ生成の課金計上に使う最小限のコンテキスト。
+ * requestId 省略時は呼び出しごとに一意な値を生成する(FAQ生成は毎回が新規の
+ * Groq呼び出しであり、book-pipeline のようなジョブ単位の集約対象ではないため)。
+ */
+export interface FaqGenUsageContext {
+  tenantId: string;
+  requestId?: string;
+}
+
+/**
  * テキスト→FAQ変換。
  * categoryOverride が指定された場合は全FAQのカテゴリをその値で上書き。
  * 未指定（null/undefined）の場合はAIがカテゴリを自動判定する。
  * existingQuestions が指定された場合はプロンプトに組み込み重複生成を防止する。
+ * usage が指定された場合はGroq呼び出しのトークン消費を trackUsage で計上する
+ * (省略時は原価が計上されないため、呼び出し元は可能な限り渡すこと)。
  */
 export async function textToFaqs(
   text: string,
   categoryOverride?: string | null,
-  existingQuestions?: string[]
+  existingQuestions?: string[],
+  usage?: FaqGenUsageContext,
 ): Promise<FaqEntry[]> {
   const model = process.env.GROQ_FAQ_GEN_MODEL ?? GPT_OSS_120B;
 
@@ -83,13 +97,29 @@ ${text.slice(0, 4000)}
 出力形式: JSON配列のみ（他のテキストは含めない）
 [{"question": "...", "answer": "...", "category": "..."}]`;
 
-  const raw = await groqClient.call({
+  const { content: raw, usage: llmUsage } = await groqClient.callWithUsage({
     model,
     messages: [{ role: "user", content: prompt }],
     temperature: 0.2,
     maxTokens: 3000,
     tag: "knowledge-text-to-faq",
   });
+
+  // 計上はJSON parseの成否より前に行う: Groq呼び出し自体は成功しており
+  // 原価は既に発生しているため、後続のparseエラーで計上を諦めない
+  // (CLAUDE.md: 副作用の記録の失敗が応答を変えてはならない、の裏返し
+  // — 応答が失敗するとしても記録は残す)。
+  if (usage) {
+    trackUsage({
+      tenantId: usage.tenantId,
+      requestId: usage.requestId
+        ?? `faq-gen:${usage.tenantId}:${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      model,
+      inputTokens: llmUsage?.prompt_tokens ?? 0,
+      outputTokens: llmUsage?.completion_tokens ?? 0,
+      featureUsed: 'admin_guide',
+    });
+  }
 
   const jsonMatch = raw.match(/\[[\s\S]*\]/);
   if (!jsonMatch) throw new Error("LLMがJSON形式で回答しませんでした");
@@ -309,7 +339,7 @@ export async function generateTextFaqPreview(
 ): Promise<FaqEntryWithDuplicate[]> {
   const existingRows = await fetchExistingFaqRows(db, tenantId);
   const existingQuestions = existingRows.map((r) => r.question);
-  const faqs = await textToFaqs(text, categoryOverride, existingQuestions);
+  const faqs = await textToFaqs(text, categoryOverride, existingQuestions, { tenantId });
   return attachDuplicateInfo(faqs, existingRows);
 }
 
@@ -326,6 +356,7 @@ export async function scrapeUrlToFaqs(
   categoryOverride: string | null | undefined,
   existingRows: { question: string; answer: string }[],
   existingQuestions: string[],
+  usage?: FaqGenUsageContext,
 ): Promise<ScrapeUrlResult> {
   try {
     const html = await fetch(url, {
@@ -348,7 +379,7 @@ export async function scrapeUrlToFaqs(
       return { url, faqs: [], error: "ページからテキストを取得できませんでした" };
     }
 
-    const faqs = await textToFaqs(text, categoryOverride, existingQuestions);
+    const faqs = await textToFaqs(text, categoryOverride, existingQuestions, usage);
     const faqsWithDuplicate = attachDuplicateInfo(faqs, existingRows);
     return { url, faqs: faqsWithDuplicate, productMeta };
   } catch (err) {
@@ -367,7 +398,10 @@ export async function generateScrapeFaqPreview(
   const existingQuestions = existingRows.map((r) => r.question);
   const results: ScrapeUrlResult[] = [];
   for (const url of urls) {
-    results.push(await scrapeUrlToFaqs(url, categoryOverride, existingRows, existingQuestions));
+    // requestId は textToFaqs 内部で URL ごとに一意生成される(D-06: 二重計上させない)。
+    results.push(
+      await scrapeUrlToFaqs(url, categoryOverride, existingRows, existingQuestions, { tenantId })
+    );
   }
   return results;
 }

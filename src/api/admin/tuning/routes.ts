@@ -318,7 +318,15 @@ export function registerTuningRoutes(app: Express): void {
           : Promise.resolve([]),
         getCrossTenantContext().catch(() => ({ avgScores: null, topPsychologyPrinciples: [], commonGapPatterns: [], effectiveRulePatterns: [], totalTenants: 0, dataAsOf: new Date().toISOString() })),
         deepResearchEnabled
-          ? (getResearchProvider()?.search(buildResearchQuery({ userMessage: anchorText }), 'ja') ?? Promise.resolve(null)).catch(() => null)
+          ? (getResearchProvider()?.search(
+              buildResearchQuery({ userMessage: anchorText }),
+              'ja',
+              // PR-1(2026-08-25収益監査): billingContext を渡していなかったため
+              // perplexityProvider.ts:83 の trackUsage が呼ばれず、Perplexity($3/$15 per 1M token、
+              // 単価表で最高値)の計上が完全に漏れていた。gapRecommender.ts / ai-assist/routes.ts の
+              // 既存パターンに合わせる。
+              tenantId ? { tenantId, requestId: `admin-tuning-research:${tenantId}:${Date.now()}` } : undefined,
+            ) ?? Promise.resolve(null)).catch(() => null)
           : Promise.resolve(null),
       ]);
 
