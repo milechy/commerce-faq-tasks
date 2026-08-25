@@ -14,7 +14,30 @@ jest.mock("../../../lib/db", () => ({
   getPool: () => ({ query: (...args: unknown[]) => mockQuery(...args) }),
 }));
 
-import { checkAlreadyEvaluated, getDetailedStats } from "./evaluationsRepository";
+import {
+  checkAlreadyEvaluated,
+  getDetailedStats,
+  getKpiStats,
+  listEvaluations,
+} from "./evaluationsRepository";
+
+/**
+ * GID 1217815155462294: listEvaluations/getDetailedStats/getKpiStats に
+ * userSourceExistsForTable("conversation_evaluations", ...) を追加した回帰テスト。
+ *
+ * SQL文字列に対して EXISTS と metadata->>'source' = 'user' の両方を固定する
+ * (結合列(第3引数)を固定しないと、誤った結合列を渡しても検知できないため。
+ * PR #958 の教訓: userSourceExists() の呼び出しは間違えると本番で500になる)。
+ */
+function assertUserSourceFilter(sql: string): void {
+  expect(sql).toMatch(/EXISTS/);
+  expect(sql).toMatch(/metadata->>'source'\s*=\s*'user'/);
+  // 結合列(第3引数)も固定する。conversation_evaluations.session_id は TEXT で
+  // chat_sessions.session_id (TEXT) と対応する。誤って id (UUID) を渡すと
+  // TEXT=UUID の暗黙キャスト不可で本番500になるため、cs.id が混入していないことも見る。
+  expect(sql).toMatch(/cs\.session_id\s*=\s*conversation_evaluations\.session_id/);
+  expect(sql).not.toMatch(/cs\.id\s*=\s*conversation_evaluations\.session_id/);
+}
 
 /** 呼ばれた全SQLを1本の文字列に連結する（何本目かに依存せず検査するため） */
 function allSql(): string {
@@ -73,6 +96,77 @@ describe("getDetailedStats", () => {
   it("DBが例外を投げた場合はそのまま伝播する（呼び出し元が500へ変換する既存挙動を維持）", async () => {
     mockQuery.mockRejectedValueOnce(new Error("connection terminated"));
     await expect(getDetailedStats("carnation", 7)).rejects.toThrow();
+  });
+
+  it("GID 1217815155462294: 全クエリに source='user' フィルタ(EXISTS + metadata->>'source')が含まれる", async () => {
+    await getDetailedStats("carnation", 7);
+
+    const calls = mockQuery.mock.calls.map((c) => String(c[0]));
+    // avg / reaction / stage / usage / effective / trend の6クエリ全部
+    expect(calls.length).toBe(6);
+    for (const sql of calls) {
+      assertUserSourceFilter(sql);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// listEvaluations — GID 1217815155462294: source='user' フィルタの新設テスト
+// ---------------------------------------------------------------------------
+
+describe("listEvaluations: source='user' フィルタ", () => {
+  it("countクエリ・listクエリの両方に EXISTS + metadata->>'source' = 'user' が含まれる", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ count: "0", avg_score: "0" }] });
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+
+    await listEvaluations({ tenantId: "carnation" });
+
+    const calls = mockQuery.mock.calls.map((c) => String(c[0]));
+    expect(calls.length).toBe(2);
+    for (const sql of calls) {
+      assertUserSourceFilter(sql);
+    }
+  });
+
+  it("tenantId未指定(super_adminの横断ビュー)でも source='user' フィルタは残る", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ count: "0", avg_score: "0" }] });
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+
+    await listEvaluations({});
+
+    const calls = mockQuery.mock.calls.map((c) => String(c[0]));
+    for (const sql of calls) {
+      assertUserSourceFilter(sql);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getKpiStats — GID 1217815155462294: source='user' フィルタの新設テスト
+// ---------------------------------------------------------------------------
+
+describe("getKpiStats: source='user' フィルタ", () => {
+  it("当期(where)・前期(prevWhere)の全クエリに EXISTS + metadata->>'source' = 'user' が含まれる", async () => {
+    await getKpiStats("carnation", 7);
+
+    const calls = mockQuery.mock.calls.map((c) => String(c[0]));
+    // total / outcome / avgByOutcome (当期) + prevTotal / prevOutcome (前期) の5クエリ全部
+    expect(calls.length).toBe(5);
+    for (const sql of calls) {
+      assertUserSourceFilter(sql);
+    }
+  });
+
+  it("prevWhere は where とは別配列(prevConditions)から組み立てられるため、前期クエリだけが漏れていないことを確認する", async () => {
+    await getKpiStats("carnation", 7);
+
+    const calls = mockQuery.mock.calls.map((c) => String(c[0]));
+    // 4本目(prevTotalResult)・5本目(prevOutcomeResult)が前期クエリ
+    const prevCalls = calls.slice(3);
+    expect(prevCalls.length).toBe(2);
+    for (const sql of prevCalls) {
+      assertUserSourceFilter(sql);
+    }
   });
 });
 
