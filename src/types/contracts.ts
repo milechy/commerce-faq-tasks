@@ -47,6 +47,13 @@ export interface ChatMessage {
     image_url: string;
     cta_url: string;
   };
+  /**
+   * S6(共有学習プールの参加モデル・fail-open是正): 開示バナーのバックストップ。
+   * /api/widget/features の取得が失敗した場合でも、会話が成立する限り
+   * 必ず届く /api/chat の応答経由でウィジェットが開示バナーを出せるようにする。
+   * assistant ロールのメッセージにのみ載せる(userメッセージには不要)。
+   */
+  data_shared_externally?: boolean;
 }
 
 export interface ChatAction {

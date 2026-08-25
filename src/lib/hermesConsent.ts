@@ -170,3 +170,44 @@ export async function listHermesConsentingTenantIds(): Promise<string[]> {
     return [];
   }
 }
+
+// ---------------------------------------------------------------------------
+// S6(共有学習プールの参加モデル・fail-open是正): 開示バナーのバックストップ
+// ---------------------------------------------------------------------------
+//
+// 開示(ウィジェットの consent-banner)は /api/widget/features の応答に乗る。
+// この取得が失敗すると、テナントが実際に share=true でも開示が一切出ない
+// (fail-open)。/api/chat は会話が成立する限り必ず1往復あるため、その応答にも
+// 同じ判定を載せておけば、features取得が失敗した場合でも初回応答時に
+// バックストップとして開示できる。
+//
+// /api/chat はメッセージ毎に呼ばれ /api/widget/features より高頻度になりうるため、
+// getTenantPlan(src/lib/billing/planFeatures.ts)と同じ TTLキャッシュを適用する
+// (60秒: 同意フラグの反映が最大60秒遅延しうるが、開示の即時性より
+// DB負荷の抑制を優先する。フラグ変更自体が高頻度操作ではないため許容できる遅延)。
+
+const SHARE_CACHE_TTL_MS = 60 * 1000; // 60 seconds (getTenantPlanと同じ方針)
+
+interface ShareCacheEntry {
+  share: boolean;
+  expiresAt: number;
+}
+
+export const shareConsentCache: Map<string, ShareCacheEntry> = new Map();
+
+/**
+ * resolveLearningConsent(tenantId).share の結果をTTLキャッシュ付きで返す。
+ * 高頻度に呼ばれる経路(/api/chat 等)向け。即時反映が必要な経路
+ * (PATCH /v1/admin/tenants/:id 等の同意変更そのもの)では使わないこと。
+ */
+export async function getCachedShareConsent(tenantId: string): Promise<boolean> {
+  const cached = shareConsentCache.get(tenantId);
+  const now = Date.now();
+  if (cached && cached.expiresAt > now) {
+    return cached.share;
+  }
+
+  const { share } = await resolveLearningConsent(tenantId);
+  shareConsentCache.set(tenantId, { share, expiresAt: now + SHARE_CACHE_TTL_MS });
+  return share;
+}

@@ -20,6 +20,7 @@ import { checkTopic } from "../../middleware/topicGuard";
 import { guardOutput } from "../../middleware/outputGuard";
 import { detectPiiRoute } from "../../agent/avatar/piiRouteDetector";
 import { getTenantPlan } from "../../lib/billing/planFeatures";
+import { getCachedShareConsent } from "../../lib/hermesConsent";
 import { getMonthRangeJst, isFreeAdMonthlyQuotaExceeded } from "../../lib/billing/planQuota";
 import { getPool } from "../../lib/db";
 
@@ -377,6 +378,18 @@ export function createChatHandler(logger: Logger) {
       const salesStage = getSalesSessionMeta({ tenantId, sessionId })?.currentStage;
       const flowState = salesStage !== "ended" ? salesStage : undefined;
 
+      // S6: 開示バナーのバックストップ。/api/widget/features が失敗しても、
+      // 会話が成立する限りこちらで開示できるようにする。この判定自体が失敗しても
+      // チャット応答は絶対に止めない(fail-safe: undefinedのままにする。
+      // widget側は data_shared_externally が無ければ何もしない=バナーを出さない側に
+      // 倒れるため、通信障害時に「共有していない」と誤表示することはない)。
+      let dataSharedExternally: boolean | undefined;
+      try {
+        dataSharedExternally = await getCachedShareConsent(tenantId);
+      } catch {
+        dataSharedExternally = undefined;
+      }
+
       const chatMessage: ChatMessage = {
         id: requestId,
         role: "assistant",
@@ -389,6 +402,7 @@ export function createChatHandler(logger: Logger) {
         ragCategory: result.meta?.ragCategory,
         // Phase73: recommend ステージで productCard が設定されていれば転送
         ...(result.productCard ? { productCard: result.productCard } : {}),
+        data_shared_externally: dataSharedExternally,
       };
 
       logger.info(

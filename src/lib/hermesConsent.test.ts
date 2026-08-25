@@ -2,9 +2,11 @@
 // Phase75 / S2(共有学習プール参加モデル: 同意の2軸化) hermesConsent テスト
 
 import {
+  getCachedShareConsent,
   isHermesDataConsentGranted,
   listHermesConsentingTenantIds,
   resolveLearningConsent,
+  shareConsentCache,
 } from "./hermesConsent";
 
 jest.mock("./db", () => ({
@@ -168,5 +170,96 @@ describe("listHermesConsentingTenantIds", () => {
   it("DB障害時は空配列", async () => {
     mockQuery(jest.fn().mockRejectedValue(new Error("db down")));
     expect(await listHermesConsentingTenantIds()).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S6(共有学習プールの参加モデル・fail-open是正): getCachedShareConsent
+// ---------------------------------------------------------------------------
+//
+// /api/chat はメッセージ毎に呼ばれるため、resolveLearningConsent を毎回叩くと
+// チャット1往復ごとにDBラウンドトリップが増える。getTenantPlan(planFeatures.ts)
+// と同じ60秒TTLキャッシュを適用しているが、この「キャッシュしている」という
+// 挙動自体が2つの相反する要求を持つ:
+//   - 生きている: 同意フラグを変更してから最大60秒、古い値が使われうる
+//     (影響範囲は開示バナーの表示タイミングのみ。実際のexport可否や
+//     globalルール読み取り権にはこのキャッシュは使われていないため、
+//     「共有される/されない」という実挙動そのものは遅延しない)
+//   - 死んでいる: 高頻度呼び出しでDBに負荷をかけない
+// この境界(TTL内は再クエリしない・TTL超過後は再クエリする)を固定する。
+describe("getCachedShareConsent(S6: /api/chatバックストップ用キャッシュ)", () => {
+  const REAL_NOW = Date.now;
+
+  afterEach(() => {
+    Date.now = REAL_NOW;
+    shareConsentCache.clear();
+  });
+
+  it("TTL内(60秒未満)は2回目の呼び出しでDBを再クエリしない", async () => {
+    const query = jest.fn().mockResolvedValue({ rows: [{ features: { learning: { learn: true, share: true } } }] });
+    mockQuery(query);
+
+    const first = await getCachedShareConsent("carnation");
+    const second = await getCachedShareConsent("carnation");
+
+    expect(first).toBe(true);
+    expect(second).toBe(true);
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+
+  it("TTL直前(59999ms)まではキャッシュを使い、ちょうど60000msで再クエリする(実装は expiresAt > now の厳密不等号)", async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [{ features: { learning: { learn: true, share: false } } }] })
+      .mockResolvedValueOnce({ rows: [{ features: { learning: { learn: true, share: true } } }] });
+    mockQuery(query);
+
+    const base = 1_000_000;
+    Date.now = () => base;
+    const first = await getCachedShareConsent("carnation");
+
+    // TTL直前: まだキャッシュ内(59999 < 60000)。
+    Date.now = () => base + 59_999;
+    const justBeforeTtl = await getCachedShareConsent("carnation");
+
+    // ちょうど60000ms: expiresAt(=base+60000) > now(=base+60000) は false なので期限切れ扱い。
+    // ここが実装のTTLの実際の境界(切り上げではなく、ちょうどで既に失効する)。
+    Date.now = () => base + 60_000;
+    const atTtl = await getCachedShareConsent("carnation");
+
+    expect(first).toBe(false);
+    expect(justBeforeTtl).toBe(false); // キャッシュヒット。まだ古い値のまま
+    expect(atTtl).toBe(true); // 再クエリされ、新しい値に切り替わる
+    expect(query).toHaveBeenCalledTimes(2);
+  });
+
+  it("テナントごとに別々にキャッシュする(他テナントの結果を混同しない)", async () => {
+    const query = jest.fn((_sql: string, params: unknown[]) => {
+      const tenantId = (params as [string])[0];
+      const share = tenantId === "carnation";
+      return Promise.resolve({ rows: [{ features: { learning: { learn: true, share } } }] });
+    });
+    mockQuery(query);
+
+    const carnation = await getCachedShareConsent("carnation");
+    const rDefault = await getCachedShareConsent("r2c_default");
+
+    expect(carnation).toBe(true);
+    expect(rDefault).toBe(false);
+    expect(query).toHaveBeenCalledTimes(2);
+  });
+
+  it("DB障害時はresolveLearningConsentのfail-safe(false)を返し、キャッシュにも書き込む(次回も同じfalseが返る)", async () => {
+    const query = jest.fn().mockRejectedValue(new Error("connection refused"));
+    mockQuery(query);
+
+    const first = await getCachedShareConsent("carnation");
+    const second = await getCachedShareConsent("carnation");
+
+    expect(first).toBe(false);
+    expect(second).toBe(false);
+    // fail-safe結果もキャッシュされるため、障害中は毎回DBを叩き直さない
+    // (障害時にリトライが集中してDBをさらに痛めることを避ける設計)。
+    expect(query).toHaveBeenCalledTimes(1);
   });
 });
