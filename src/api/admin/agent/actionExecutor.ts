@@ -9,6 +9,7 @@ import {
   upsertToEsAsync,
 } from '../knowledge/faqCrudRoutes';
 import { deleteFaqFromEs } from '../../../lib/knowledge/faqIndexSync';
+import { isValidOriginPattern } from '../../middleware/originCheck';
 import { FAQ_CATEGORY_IDS } from '../../../lib/knowledge/faqCategories';
 import { callGroq8bSuggestFromText, callGroq8bSuggest } from '../tuning/routes';
 import { listRules, createRule, updateRule, deleteRule, type ApprovedResponse, type RuleEvidence } from '../tuning/tuningRulesRepository';
@@ -540,7 +541,7 @@ export async function executeToolCall(
     case 'get_tenant_settings': {
       try {
         const result = await db.query(
-          'SELECT ga4_measurement_id, posthog_host, widget_theme FROM tenants WHERE id = $1',
+          'SELECT ga4_measurement_id, posthog_host, widget_theme, allowed_origins FROM tenants WHERE id = $1',
           [tenantId]
         );
         if (result.rows.length === 0) {
@@ -550,12 +551,15 @@ export async function executeToolCall(
           ga4_measurement_id: string | null;
           posthog_host: string | null;
           widget_theme: Record<string, unknown> | null;
+          allowed_origins: string[] | null;
         };
+        const origins = row.allowed_origins ?? [];
         return truncate(
           `現在の設定:\n` +
           `• GA4 Measurement ID: ${row.ga4_measurement_id ?? '未設定'}\n` +
           `• PostHog ホスト: ${row.posthog_host ?? '未設定'}\n` +
-          `• ウィジェットテーマ: ${JSON.stringify(row.widget_theme ?? {})}`
+          `• ウィジェットテーマ: ${JSON.stringify(row.widget_theme ?? {})}\n` +
+          `• Widget埋め込み許可ドメイン: ${origins.length > 0 ? origins.join(', ') : '未登録（全ドメインから埋め込み可能）'}`
         );
       } catch (err) {
         logger.warn('[actionExecutor] get_tenant_settings failed', err);
@@ -596,6 +600,80 @@ export async function executeToolCall(
       } catch (err) {
         logger.warn('[actionExecutor] set_posthog failed', err);
         return truncate('PostHog ホストの設定に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // set_faq_published と同じ理由(reversibleだが顧客への露出・セキュリティ境界に
+    // 直接影響する)で confirmed を要求する。add_faq のような単純な設定値追加より
+    // 一段重い扱い。
+    case 'update_allowed_origins': {
+      const action = args['action'];
+      const origin = typeof args['origin'] === 'string' ? args['origin'].trim() : '';
+      const confirmed = isConfirmed(args['confirmed']);
+
+      if (action !== 'add' && action !== 'remove') {
+        return truncate('action には add または remove を指定してください');
+      }
+      if (!origin) {
+        return truncate('origin を指定してください');
+      }
+      if (!confirmed) {
+        return truncate(
+          `この変更には確認が必要です。「${origin}」を${action === 'add' ? '追加' : '削除'}してよいか、` +
+          '変更後にどうなるかを含めてユーザーに提示し、同意を得てから実行してください'
+        );
+      }
+      if (action === 'add' && !isValidOriginPattern(origin)) {
+        return truncate(
+          `「${origin}」は登録できない形式です。https:// で始まり、ワイルドカードを使う場合は ` +
+          'https://*.example.com の形式(サブドメイン全体)のみ使用できます'
+        );
+      }
+
+      try {
+        const result = await db.query<{ allowed_origins: string[] | null }>(
+          'SELECT allowed_origins FROM tenants WHERE id = $1',
+          [tenantId]
+        );
+        if (result.rows.length === 0) {
+          return truncate('テナントが見つかりません');
+        }
+        const existing = result.rows[0]!.allowed_origins ?? [];
+
+        if (action === 'add') {
+          if (existing.includes(origin)) {
+            return truncate(
+              `「${origin}」は既に登録されています。現在の登録(${existing.length}件): ${existing.join(', ')}`
+            );
+          }
+          if (existing.length >= 20) {
+            return truncate('登録できるドメインは最大20件です。不要なものを削除してから追加してください');
+          }
+          const next = [...existing, origin];
+          await db.query('UPDATE tenants SET allowed_origins = $1, updated_at = NOW() WHERE id = $2', [next, tenantId]);
+          return truncate(`「${origin}」を追加しました。現在の登録(${next.length}件): ${next.join(', ')}`);
+        }
+
+        // action === 'remove'
+        if (!existing.includes(origin)) {
+          return truncate(
+            `「${origin}」は登録されていません。現在の登録: ${existing.length > 0 ? existing.join(', ') : '(登録なし)'}`
+          );
+        }
+        const next = existing.filter((o) => o !== origin);
+        await db.query('UPDATE tenants SET allowed_origins = $1, updated_at = NOW() WHERE id = $2', [next, tenantId]);
+        if (next.length === 0) {
+          // R3: 空配列は fail-open(全ドメイン許可)。実行結果として必ずこの文言を返す
+          // (モデルが事前に警告し忘れても、結果としては必ず伝わるようにする)。
+          return truncate(
+            `「${origin}」を削除しました。登録が0件になったため、現在は全ドメインからの埋め込みが許可されています(制限なし)`
+          );
+        }
+        return truncate(`「${origin}」を削除しました。現在の登録(${next.length}件): ${next.join(', ')}`);
+      } catch (err) {
+        logger.warn('[actionExecutor] update_allowed_origins failed', err);
+        return truncate('許可ドメインの更新に失敗しました');
       }
     }
 

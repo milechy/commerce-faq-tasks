@@ -58,6 +58,11 @@ export const WRITE_TOOL_RISK_TIERS: Record<string, RiskTier> = {
   // 顧客の目に触れる内容の公開状態を変える点で publish_faq_drafts と同じ階層。
   // is_published を戻せば元に戻る(delete_faq のような不可逆ではない)。
   set_faq_published: 'medium',
+  // 追加・削除いずれも1件戻せば元に戻る点はlowの定義を満たすが、Widget埋め込みの
+  // セキュリティ境界(CORS/オリジン許可)を直接変える操作であり、かつ最後の1件を
+  // 削除すると fail-open(全ドメイン許可)に倒れる非対称性がある(originCheck.ts)。
+  // set_faq_published と同じ「reversibleだが顧客への露出に影響する」理由でmedium。
+  update_allowed_origins: 'medium',
   save_tuning_rule: 'medium',
   update_tuning_rule: 'medium',
   save_engagement_rule: 'medium',

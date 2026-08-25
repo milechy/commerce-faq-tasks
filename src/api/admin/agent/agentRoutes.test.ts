@@ -3918,6 +3918,176 @@ describe('POST /v1/admin/agent/chat', () => {
   });
 
   // -------------------------------------------------------------------------
+  // W1-1: update_allowed_origins(docs/COPILOT_UI_PARITY.md §3.1 #1)
+  describe('update_allowed_origins', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    it('未登録の状態に1件追加できる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-uao-1', 'update_allowed_origins', {
+          action: 'add', origin: 'https://shop.example.com', confirmed: true,
+        }))
+        .mockResolvedValueOnce(makeGroqResponse('追加しました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ allowed_origins: null }] }) // SELECT
+        .mockResolvedValueOnce({ rows: [] }); // UPDATE
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'https://shop.example.com を許可ドメインに追加して', sessionId: 'sess-uao-01' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining('UPDATE tenants SET allowed_origins = $1'),
+        [['https://shop.example.com'], 'tenant-abc'],
+      );
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('追加しました');
+      expect(result).toContain('https://shop.example.com');
+      expect(result).not.toContain('確認が必要');
+    });
+
+    it('確認(confirmed)なしでは実行されずDBが無変更', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-uao-2', 'update_allowed_origins', {
+          action: 'add', origin: 'https://shop.example.com', confirmed: false,
+        }))
+        .mockResolvedValueOnce(makeGroqResponse('確認しました。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'https://shop.example.com を追加して', sessionId: 'sess-uao-02' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('確認が必要');
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    // 2026-08-25 実装確認で見つかった穴(Asana 1217807178083536, PR #925で修正済み)の
+    // 回帰防止。origin_check.ts 側だけでなく、このツール経由の書き込みでも弾かれること。
+    it('単一ラベルTLD直下のワイルドカード(https://*.com)を拒否しDBに到達しない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-uao-3', 'update_allowed_origins', {
+          action: 'add', origin: 'https://*.com', confirmed: true,
+        }))
+        .mockResolvedValueOnce(makeGroqResponse('確認しました。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'https://*.com を追加して', sessionId: 'sess-uao-03' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('登録できない形式');
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    it('既に登録済みのオリジンを追加しようとすると案内しUPDATEに到達しない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-uao-4', 'update_allowed_origins', {
+          action: 'add', origin: 'https://shop.example.com', confirmed: true,
+        }))
+        .mockResolvedValueOnce(makeGroqResponse('確認しました。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ allowed_origins: ['https://shop.example.com'] }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'https://shop.example.com を追加して', sessionId: 'sess-uao-04' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('既に登録されています');
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+    });
+
+    it('複数登録済みのうち1件を削除できる(残り件数を提示)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-uao-5', 'update_allowed_origins', {
+          action: 'remove', origin: 'https://old.example.com', confirmed: true,
+        }))
+        .mockResolvedValueOnce(makeGroqResponse('削除しました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ allowed_origins: ['https://old.example.com', 'https://shop.example.com'] }] })
+        .mockResolvedValueOnce({ rows: [] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'https://old.example.com を削除して', sessionId: 'sess-uao-05' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining('UPDATE tenants SET allowed_origins = $1'),
+        [['https://shop.example.com'], 'tenant-abc'],
+      );
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('削除しました');
+      expect(result).toContain('現在の登録(1件)');
+    });
+
+    // R3(docs/COPILOT_UI_PARITY.md §6): 最後の1件を削除すると fail-open(全ドメイン許可)
+    // になる。この結果は実行後の文言として必ず明示され、通常の削除完了メッセージと
+    // 混同されないこと(AC-T1-3の機械的な保証)。
+    it('最後の1件を削除すると全ドメイン許可に戻ることを明示する', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-uao-6', 'update_allowed_origins', {
+          action: 'remove', origin: 'https://shop.example.com', confirmed: true,
+        }))
+        .mockResolvedValueOnce(makeGroqResponse('削除しました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ allowed_origins: ['https://shop.example.com'] }] })
+        .mockResolvedValueOnce({ rows: [] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'https://shop.example.com を削除して', sessionId: 'sess-uao-06' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining('UPDATE tenants SET allowed_origins = $1'),
+        [[], 'tenant-abc'],
+      );
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('全ドメインからの埋め込みが許可されています');
+    });
+
+    it('登録されていないオリジンの削除を試みるとDBに到達しない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-uao-7', 'update_allowed_origins', {
+          action: 'remove', origin: 'https://notfound.example.com', confirmed: true,
+        }))
+        .mockResolvedValueOnce(makeGroqResponse('確認しました。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ allowed_origins: ['https://shop.example.com'] }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'https://notfound.example.com を削除して', sessionId: 'sess-uao-07' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('登録されていません');
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // チャット版 FAQ一括取り込み: suggest_faq_import_from_text / suggest_faq_import_from_urls
   // / commit_faq_import / discard_faq_import（プロセス内ステージング経由）
   // -------------------------------------------------------------------------
