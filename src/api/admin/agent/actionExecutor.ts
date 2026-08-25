@@ -809,6 +809,8 @@ export async function executeToolCall(
         return truncate(categoryResult.error);
       }
       const category = categoryResult.category;
+      // W1-2: 未指定(undefined)なら COALESCE で既存値を保持する(category と同じ作法)。
+      const excludedFromSearch = parseBooleanArg(args['excluded_from_search']);
 
       try {
         // テナント確認
@@ -824,15 +826,18 @@ export async function executeToolCall(
           return truncate('この FAQ へのアクセス権限がありません');
         }
 
-        // category は未指定(null)なら COALESCE で既存値を保持する(指定時のみ更新)。
+        // category / excludedFromSearch は未指定(null)なら COALESCE で既存値を保持する
+        // (指定時のみ更新)。
         const updateResult = await db.query(
-          `UPDATE faq_docs SET question = $1, answer = $2, category = COALESCE($3, category), updated_at = NOW()
-           WHERE id = $4 AND tenant_id = $5
-           RETURNING id, question, answer, is_published`,
-          [question, answer, category, id, tenantId]
+          `UPDATE faq_docs SET question = $1, answer = $2, category = COALESCE($3, category),
+             is_excluded_from_search = COALESCE($4, is_excluded_from_search), updated_at = NOW()
+           WHERE id = $5 AND tenant_id = $6
+           RETURNING id, question, answer, is_published, is_excluded_from_search`,
+          [question, answer, category, excludedFromSearch ?? null, id, tenantId]
         );
         const updated = updateResult.rows[0] as {
           id: number; question: string; answer: string; is_published: boolean;
+          is_excluded_from_search: boolean | null;
         };
 
         // 古い embedding 削除 → 再挿入（best-effort）
@@ -844,9 +849,24 @@ export async function executeToolCall(
           source: 'admin_agent',
           faq_id: updated.id,
         });
-        upsertToEsAsync(tenantId, updated.id, updated.question, updated.answer, updated.is_published);
+        // 2026-08-25: is_excluded_from_search を渡さずに5引数で呼んでいたため、質問/回答文
+        // を編集するだけの通常の更新でも、ESドキュメントの is_excluded_from_search が
+        // 常にfalseへ黙って巻き戻っていた(set_faq_publishedは既に正しく引き継いでいる。
+        // W1-2実装中に既存バグとして発見。DB側の値は正しいままだったため実害はES検索結果
+        // のみに限定される)。set_faq_published と同じ理由で引き継ぐ。
+        upsertToEsAsync(
+          tenantId,
+          updated.id,
+          updated.question,
+          updated.answer,
+          updated.is_published,
+          updated.is_excluded_from_search ?? false
+        );
 
-        return truncate(`FAQ（ID: ${id}）を更新しました: ${updated.question}`);
+        const excludedNote = excludedFromSearch !== undefined
+          ? `（検索対象: ${updated.is_excluded_from_search ? '除外中' : '含める'}）`
+          : '';
+        return truncate(`FAQ（ID: ${id}）を更新しました: ${updated.question}${excludedNote}`);
       } catch (err) {
         logger.warn('[actionExecutor] update_faq failed', err);
         return truncate('FAQ の更新に失敗しました');

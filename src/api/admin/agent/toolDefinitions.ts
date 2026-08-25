@@ -207,6 +207,12 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
             description: `カテゴリ（${FAQ_CATEGORY_IDS.join(' / ')} のいずれか、任意。未指定なら既存のカテゴリを維持する）`,
             enum: FAQ_CATEGORY_IDS,
           },
+          excluded_from_search: {
+            type: 'boolean',
+            description:
+              'true にするとAIの検索（RAG）対象から除外する。false で通常どおり検索対象に含める。' +
+              '未指定なら既存の設定を維持する（他の項目を編集しただけで検索除外が解除されることはない）',
+          },
         },
         required: ['id', 'question', 'answer'],
       },
