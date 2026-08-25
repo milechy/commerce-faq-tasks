@@ -93,7 +93,7 @@ handoff は出るが、店主はチャットを離れる。離れた先で「何
 | 3 | FAQ入力例 (`faq_question_hint` / `faq_answer_hint`) | T1 | tool化(2026-08-25, `set_faq_hints`) | `FaqHintSettings.tsx` |
 | 4 | アバター設定の削除 | T1 | tool化(2026-08-25, `delete_avatar_config`) | `avatar/index.tsx:227` |
 | 5 | FAQ一括非公開・一括削除 | T2 | tool化(2026-08-25, `bulk_unpublish_faqs`/`bulk_delete_faqs`)。旧`faq_bulk_ops` handoffキーは計測窓のため残置 | `KnowledgeListTab.tsx:238,260` |
-| 6 | FAQ一覧のカテゴリ絞り込み | T2 | 不可視 | `KnowledgeListTab.tsx:118` |
+| 6 | FAQ一覧のカテゴリ絞り込み | T2 | tool化(2026-08-25, `get_faq_list`拡張) | `KnowledgeListTab.tsx:118` |
 | 7 | FAQ のタグ | T2 | handoff無し | `KnowledgeFaqEditModal.tsx:69` |
 | 8 | アバター画像「写真をアップロード」 | T3 | 不可視 | `StudioImageSection.tsx:87` |
 | 9 | 音声クローン | T3 | `avatar_studio` | `StudioVoiceCloneSection.tsx` |
@@ -103,7 +103,7 @@ handoff は出るが、店主はチャットを離れる。離れた先で「何
 | 13 | ABテスト結果・改善提案 | T4 | `conversion` | `conversion/index.tsx:258,292` |
 | 14 | ナレッジ別の成約貢献度 | T4 | `knowledge_attribution` | `KnowledgeAttributionTab.tsx` |
 | 15 | ご利用状況・お支払い (閲覧一式) | T4 | `billing` | `billing/index.tsx` |
-| 16 | 集計期間 90 日 | T4 | 語彙欠落 | `analytics/utils.ts:3` |
+| 16 | 集計期間 90 日 | T4 | tool化(2026-08-25, enum拡張) | `analytics/utils.ts:3` |
 
 ### 3.2 handoff の位置づけ
 
@@ -508,7 +508,7 @@ handoff は出るが、店主はチャットを離れる。離れた先で「何
 | 3 | FAQ入力例(faq_question_hint/faq_answer_hint) | `tool:set_faq_hints` |
 | 4 | アバター設定の削除 | `tool:delete_avatar_config` |
 | 5 | FAQ一括非公開・一括削除 | `tool:bulk_unpublish_faqs,bulk_delete_faqs` |
-| 6 | FAQ一覧のカテゴリ絞り込み | `pending` |
+| 6 | FAQ一覧のカテゴリ絞り込み | `tool:get_faq_list` |
 | 7 | FAQのタグ | `pending` |
 | 8 | アバター画像「写真をアップロード」 | `pending` |
 | 9 | 音声クローン | `handoff:avatar_studio` |
@@ -518,6 +518,6 @@ handoff は出るが、店主はチャットを離れる。離れた先で「何
 | 13 | ABテスト結果・改善提案 | `handoff:conversion` |
 | 14 | ナレッジ別の成約貢献度 | `handoff:knowledge_attribution` |
 | 15 | ご利用状況・お支払い | `handoff:billing` |
-| 16 | 集計期間90日 | `pending` |
+| 16 | 集計期間90日 | `tool:get_analytics_summary,get_conversion_summary` |
 
-現在地（2026-08-25、W2-1着手時点）: `tool:` 5 / `handoff:` 7 / `pending` 4。W1完了。W2-1(#5)tool化。S0 の完了は `pending` が 0 になった時点（`tool:` か `handoff:` のどちらかに必ず分類されている状態）。
+現在地（2026-08-25、W2-2/W2-8着手時点）: `tool:` 7 / `handoff:` 7 / `pending` 2。W1完了。W2-1(#5)/W2-2(#6)/W2-8(#16)tool化。S0 の完了は `pending` が 0 になった時点（`tool:` か `handoff:` のどちらかに必ず分類されている状態）。

@@ -156,8 +156,9 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
     function: {
       name: 'get_faq_list',
       description:
-        'テナントの FAQ 一覧を取得する読み取り専用ツール。公開状態・並び順・キーワード検索・ページ送りで絞り込める。' +
-        '（絞り込み適用後の総件数も併記されるため、表示件数が上限に達していても総数は正しく分かる）',
+        'テナントの FAQ 一覧を取得する読み取り専用ツール。公開状態・カテゴリ・並び順・キーワード検索・' +
+        'ページ送りで絞り込める。（絞り込み適用後の総件数も併記されるため、表示件数が上限に達していても' +
+        '総数は正しく分かる）。bulk_unpublish_faqs / bulk_delete_faqs に渡す ID はこのツールで確認したものだけを使うこと。',
       parameters: {
         type: 'object',
         properties: {
@@ -168,6 +169,11 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
             type: 'string',
             enum: ['all', 'published', 'draft'],
             description: '公開状態での絞り込み（任意、省略時は全件）。published=公開中のみ、draft=下書きのみ',
+          },
+          category: {
+            type: 'string',
+            description: `カテゴリでの絞り込み（${FAQ_CATEGORY_IDS.join(' / ')} のいずれか、任意、省略時は全カテゴリ）`,
+            enum: FAQ_CATEGORY_IDS,
           },
           sort_by: {
             type: 'string',
@@ -1573,7 +1579,7 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
           period: {
             type: 'string',
             description: '集計期間（既定は30d）',
-            enum: ['7d', '30d'],
+            enum: ['7d', '30d', '90d'],
           },
         },
         required: [],
@@ -1595,7 +1601,7 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
           period: {
             type: 'string',
             description: '集計期間（既定は30d）',
-            enum: ['7d', '30d'],
+            enum: ['7d', '30d', '90d'],
           },
         },
         required: [],
