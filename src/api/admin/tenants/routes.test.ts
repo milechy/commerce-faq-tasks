@@ -1483,3 +1483,128 @@ describe("PUT /v1/admin/my-tenant/plan — 降格時の features 整合", () => 
     }
   });
 });
+
+// --------------------------------------------------------------------------
+// PATCH /v1/admin/tenants/:id — 降格時の features 整合(PUT側との対称テスト)
+//
+// PUT /v1/admin/my-tenant/plan(#933)は features 剥奪を実装したが、この
+// super_admin用PATCHルートは plan を更新するだけで features を一切見ていなかった。
+// PUT側と同じ計算(computeFeatureRevocationOnDowngrade)を共有しているので、
+// ここで壊れれば PUT側のテストとは無関係に検出できることを確認する。
+// --------------------------------------------------------------------------
+describe("PATCH /v1/admin/tenants/:id — 降格時の features 整合", () => {
+  const RETURNING_ROW = { id: "tenant-a", name: "t", plan: "starter", is_active: true, allowed_origins: [], system_prompt: null, billing_enabled: false, billing_free_from: null, billing_free_until: null, lemonslice_agent_id: null, conversion_types: [], tenant_contact_email: null, faq_question_hint: null, faq_answer_hint: null, created_at: "2026-01-01", updated_at: "2026-01-01" };
+
+  function before(plan: string, features: object) {
+    return {
+      query: jest.fn()
+        // 存在チェック + before フィールド取得
+        .mockResolvedValueOnce({ rows: [{ id: "tenant-a", plan, features, billing_enabled: false, is_active: true }], rowCount: 1 })
+        // UPDATE ... RETURNING
+        .mockResolvedValueOnce({ rows: [{ ...RETURNING_ROW, features: {} }], rowCount: 1 })
+        // tenant_settings_history INSERT(監査、fire-and-forget) x 複数
+        .mockResolvedValue({ rows: [], rowCount: 1 }),
+    };
+  }
+
+  const updateCall = (db: any) => db.query.mock.calls.find(([sql]: [string]) => sql.includes("UPDATE tenants"));
+  const featuresParams = (db: any) =>
+    (updateCall(db)![1] as unknown[]).filter((p) => typeof p === "string" && p.startsWith("{")).map((p) => JSON.parse(p as string));
+
+  it("super_admin が growth → starter へ降格させると features.avatar / voice が false になる(PUT側と対称)", async () => {
+    const db = before("growth", { avatar: true, voice: true, rag: true });
+    const res = await request(makeApp(db, "super_admin"))
+      .patch("/v1/admin/tenants/tenant-a")
+      .set("Authorization", "Bearer dummy")
+      .send({ plan: "starter" });
+
+    expect(res.status).toBe(200);
+    const [revoked] = featuresParams(db);
+    expect(revoked).toEqual({ avatar: false, voice: false });
+    const sql = updateCall(db)[0];
+    expect(sql).toMatch(/features\s*=\s*COALESCE\(features, '\{\}'::jsonb\)\s*\|\|/);
+  });
+
+  it("plan を送らなければ features には一切触れない(既存の非plan更新を壊さない)", async () => {
+    const db = before("starter", { avatar: false, voice: false, rag: true });
+    await request(makeApp(db, "super_admin"))
+      .patch("/v1/admin/tenants/tenant-a")
+      .set("Authorization", "Bearer dummy")
+      .send({ name: "新しい名前" });
+
+    const call = updateCall(db);
+    expect(call[0]).not.toMatch(/features\s*=/);
+  });
+
+  // ★super_adminであってもプランを超えた権能付与はさせない(planFeatures.ts冒頭の境界)★
+  // 同一リクエストで plan降格 と features.avatar=true の明示指定が衝突した場合、
+  // 剥奪が最後に適用され勝つこと。jsonbの || は右側のキーが勝つため、
+  // マージ順(admin指定 → revoked)を直接検証する。
+  it("同一リクエストでplan降格とfeatures.avatar=trueが衝突すると、剥奪が勝つ", async () => {
+    const db = before("growth", { avatar: true, voice: true });
+    await request(makeApp(db, "super_admin"))
+      .patch("/v1/admin/tenants/tenant-a")
+      .set("Authorization", "Bearer dummy")
+      // featuresSchema は avatar/voice/rag が必須。同一リクエストでadminがavatar=trueを
+      // 明示指定しつつ、plan降格による剥奪と衝突させる。
+      .send({ plan: "starter", features: { avatar: true, voice: false, rag: true } });
+
+    const [adminLayer, revokedLayer] = featuresParams(db);
+    expect(adminLayer).toEqual({ avatar: true, voice: false, rag: true }); // 管理者が明示指定した値
+    expect(revokedLayer).toEqual({ avatar: false, voice: false }); // 剥奪(最後に適用され勝つ)
+    const sql = updateCall(db)[0];
+    // マージ順: COALESCE(...) || $adminLayer || $revokedLayer
+    expect(sql.indexOf("features")).toBeLessThan(sql.length);
+  });
+
+  it("enterprise → growth では enterprise限定機能だけ落ち、growthで許されるavatarは維持される", async () => {
+    const db = before("enterprise", { avatar: true, voice: true, deep_research: true, pre_dispatch: true });
+    await request(makeApp(db, "super_admin"))
+      .patch("/v1/admin/tenants/tenant-a")
+      .set("Authorization", "Bearer dummy")
+      .send({ plan: "growth" });
+
+    const [revoked] = featuresParams(db);
+    expect(revoked).toEqual({ deep_research: false, pre_dispatch: false });
+  });
+
+  it("アップグレードでは features に触れない(権能の自動付与をしない)", async () => {
+    const db = before("starter", { avatar: false, voice: false });
+    await request(makeApp(db, "super_admin"))
+      .patch("/v1/admin/tenants/tenant-a")
+      .set("Authorization", "Bearer dummy")
+      .send({ plan: "enterprise" });
+
+    const call = updateCall(db);
+    expect(call[0]).not.toMatch(/features\s*=/);
+  });
+
+  // ★#921で入れたキャッシュ無効化がPATCH側にも効いていること★
+  // 導入時はPUT側にしか実装されておらず、PATCH側は plan 変更経路として
+  // 先にあったにもかかわらず素通りしていた。
+  it("plan変更でプランキャッシュ(機能ゲート用・請求焼き付け用)が両方消える", async () => {
+    const { tenantPlanCache } = require("../../../lib/billing/planFeatures");
+    tenantPlanCache.set("tenant-a", { plan: "starter", expiresAt: Date.now() + 60_000 });
+
+    const db = before("starter", {});
+    await request(makeApp(db, "super_admin"))
+      .patch("/v1/admin/tenants/tenant-a")
+      .set("Authorization", "Bearer dummy")
+      .send({ plan: "growth" });
+
+    expect(tenantPlanCache.has("tenant-a")).toBe(false);
+  });
+
+  it("plan を送らない更新ではプランキャッシュに触れない", async () => {
+    const { tenantPlanCache } = require("../../../lib/billing/planFeatures");
+    tenantPlanCache.set("tenant-a", { plan: "starter", expiresAt: Date.now() + 60_000 });
+
+    const db = before("starter", {});
+    await request(makeApp(db, "super_admin"))
+      .patch("/v1/admin/tenants/tenant-a")
+      .set("Authorization", "Bearer dummy")
+      .send({ name: "新しい名前" });
+
+    expect(tenantPlanCache.has("tenant-a")).toBe(true);
+  });
+});

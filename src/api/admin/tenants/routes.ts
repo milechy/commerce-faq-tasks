@@ -33,17 +33,51 @@ const planValues = ["free_ad", "starter", "growth", "enterprise"] as const;
 //
 // 撤去する際は、この関数の呼び出し元をすべて外すのではなく、この関数の中身だけを
 // 変えれば全経路に効く。撤去の前提だったバナー実装(S5a・PR #919)は完了済み。
+
 // tenants.features のフラグと、それを許可する最小プラン(planFeatures の GatedFeature)の対応。
 // プラン降格時にどのフラグを落とすかの唯一の出どころ。
 // 新しいプラン依存フラグを features に足すときは、ここにも足すこと
 // (足し忘れると、降格しても権能が残り原価だけ当社負担になる)。
-const FEATURE_FLAG_GATES: ReadonlyArray<[string, "avatar" | "voice_clone" | "deep_research" | "pre_dispatch"]> = [
+// voice_clone は features フラグとして持たず planHasFeature() で都度ライブ判定するため
+// (actionExecutor.ts 等)、ここには含めない。
+const FEATURE_FLAG_GATES: ReadonlyArray<[string, "avatar" | "deep_research" | "pre_dispatch"]> = [
   ["avatar", "avatar"],
   // voice は PATCH /my-tenant の既存ゲートと揃えて avatar と同じ段(growth)で判定する。
   ["voice", "avatar"],
   ["deep_research", "deep_research"],
   ["pre_dispatch", "pre_dispatch"],
 ];
+
+/**
+ * プラン降格時に落とすべき features フラグを計算する。
+ *
+ * ★この関数を経由しない plan 更新経路を作らないこと★
+ * アバターのランタイム認可は plan ではなく features.avatar だけを見ている
+ * (anamRoutes.ts / livekitTokenRoutes.ts / api/widget/routes.ts)。plan だけ下げると
+ * 最も原価の重い Anam/LiveKit が動いたまま倍率だけ下がる。
+ *
+ * 導入時(PR #933)は PUT /v1/admin/my-tenant/plan にしか実装しておらず、
+ * super_admin 用の PATCH /v1/admin/tenants/:id は plan を更新するだけで
+ * features を一切見ていなかった(#933 自身が繰り返し警告していた「経路ごとに
+ * 書き写すと新しい経路が素通りする」パターンを、この関数自身がやっていた)。
+ * PUT/PATCH 両方からこの純粋関数を呼ぶことで、3件目の経路が増えても
+ * ここを直せば全経路に効く形にする。
+ *
+ * 落とすだけで、昇格時に勝手に有効化はしない(権能の自動付与をしない)。
+ */
+function computeFeatureRevocationOnDowngrade(
+  beforeFeatures: Record<string, unknown> | null | undefined,
+  nextPlan: string
+): Record<string, false> {
+  const features = beforeFeatures ?? {};
+  const revoked: Record<string, false> = {};
+  for (const [flag, gate] of FEATURE_FLAG_GATES) {
+    if (features[flag] === true && !planHasFeature(nextPlan, gate)) {
+      revoked[flag] = false;
+    }
+  }
+  return revoked;
+}
 
 function blockFreeAdTransition(plan: string | undefined, res: Response): boolean {
   if (plan !== "free_ad") return false;
@@ -452,20 +486,9 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       }
 
       // ★降格時は新プランで許されない features を落とす★
-      // アバターのランタイム認可は plan ではなく features.avatar だけを見ている
-      // (anamRoutes.ts / livekitTokenRoutes.ts / api/widget/routes.ts)。plan だけ下げると
-      // 最も原価の重い Anam/LiveKit が動いたまま倍率だけ下がる。UI の
-      // 「使えなくなる機能」表示とも食い違う。
-      //
-      // 落とすだけで、昇格時に勝手に有効化はしない(権能の自動付与はしない。
-      // 有効化は従来どおりテナントが明示的に PATCH /my-tenant で行う)。
-      const beforeFeatures = beforeResult.rows[0].features ?? {};
-      const revoked: Record<string, false> = {};
-      for (const [flag, gate] of FEATURE_FLAG_GATES) {
-        if (beforeFeatures[flag] === true && !planHasFeature(nextPlan, gate)) {
-          revoked[flag] = false;
-        }
-      }
+      // UI の「使えなくなる機能」表示と実挙動を一致させる。有効化は従来どおり
+      // テナントが明示的に PATCH /my-tenant で行う(ここでは自動付与しない)。
+      const revoked = computeFeatureRevocationOnDowngrade(beforeResult.rows[0].features, nextPlan);
       const hasRevocation = Object.keys(revoked).length > 0;
 
       const result = hasRevocation
@@ -794,6 +817,20 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
           });
         }
       }
+      // ★降格時は新プランで許されない features を落とす★
+      // PUT /v1/admin/my-tenant/plan（テナント自己申告）は #933 でこの計算を
+      // 実装したが、super_admin用のこのPATCHルートは plan を更新するだけで
+      // features を一切見ていなかった(#933 が繰り返し警告していた「経路ごとに
+      // 書き写すと新しい経路が素通りする」パターンをこの関数自身がやっていた)。
+      // super_admin であってもプランを超えた権能付与はさせない方針
+      // (planFeatures.ts 冒頭のバイパス境界コメント参照)なので、同一リクエストで
+      // fields.features により明示的に再度trueへ戻そうとしても剥奪が勝つ
+      // (下のjsonbマージで revoked を最後に適用する)。
+      const revoked = fields.plan !== undefined
+        ? computeFeatureRevocationOnDowngrade(beforeRow.features as Record<string, unknown> | null, fields.plan)
+        : {};
+      const hasRevocation = Object.keys(revoked).length > 0;
+
       const setClauses: string[] = [];
       const params: unknown[] = [];
       if (fields.name !== undefined) { params.push(fields.name); setClauses.push(`name = $${params.length}`); }
@@ -806,8 +843,21 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       if (fields.billing_enabled !== undefined) { params.push(fields.billing_enabled); setClauses.push(`billing_enabled = $${params.length}`); }
       if ('billing_free_from' in fields) { params.push(fields.billing_free_from ?? null); setClauses.push(`billing_free_from = $${params.length}`); }
       if ('billing_free_until' in fields) { params.push(fields.billing_free_until ?? null); setClauses.push(`billing_free_until = $${params.length}`); }
-      // Phase40: アバター機能フラグ
-      if (fields.features !== undefined) { params.push(JSON.stringify(fields.features)); setClauses.push(`features = COALESCE(features, '{}'::jsonb) || $${params.length}::jsonb`); }
+      // Phase40: アバター機能フラグ。fields.features(管理者の明示指定) → revoked(降格による
+      // 剥奪)の順で jsonb を || 連結する。Postgres の jsonb || は右側のキーが勝つため、
+      // 同一キーを両方が触っていても剥奪が最終的に勝つ。
+      if (fields.features !== undefined || hasRevocation) {
+        const layers: string[] = [`COALESCE(features, '{}'::jsonb)`];
+        if (fields.features !== undefined) {
+          params.push(JSON.stringify(fields.features));
+          layers.push(`$${params.length}::jsonb`);
+        }
+        if (hasRevocation) {
+          params.push(JSON.stringify(revoked));
+          layers.push(`$${params.length}::jsonb`);
+        }
+        setClauses.push(`features = ${layers.join(" || ")}`);
+      }
       if ('lemonslice_agent_id' in fields) { params.push(fields.lemonslice_agent_id ?? null); setClauses.push(`lemonslice_agent_id = $${params.length}`); }
       if (fields.conversion_types !== undefined) { params.push(JSON.stringify(fields.conversion_types)); setClauses.push(`conversion_types = $${params.length}::jsonb`); }
       if ('tenant_contact_email' in fields) { params.push(fields.tenant_contact_email ?? null); setClauses.push(`tenant_contact_email = $${params.length}`); }
@@ -819,6 +869,15 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
         `UPDATE tenants SET ${setClauses.join(", ")} WHERE id = $${params.length} RETURNING id, name, plan, is_active, allowed_origins, system_prompt, billing_enabled, billing_free_from, billing_free_until, features, lemonslice_agent_id, conversion_types, tenant_contact_email, faq_question_hint, faq_answer_hint, created_at, updated_at`,
         params
       );
+      // プラン判定のキャッシュは2系統ある（機能ゲート用・請求焼き付け用）。両方消す。
+      // PUT /v1/admin/my-tenant/plan は #921 で無効化していたが、このPATCHルートは
+      // plan 変更経路として先にあったにもかかわらず素通りしていた(features剥奪と
+      // 同じ「新しい経路だけ直して既存経路を見落とす」パターン)。片方だけだと、
+      // 機能は開いたのに請求だけ旧倍率、といったズレが最大60秒残る。
+      if (fields.plan !== undefined) {
+        invalidateTenantPlanCache(id);
+        invalidateBillingPlanCache(id);
+      }
       // in-memory store を即時同期 (is_active 変更が次リクエストから有効になる)
       if (fields.is_active !== undefined) {
         updateTenantEnabled(id, fields.is_active);
