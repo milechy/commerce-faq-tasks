@@ -40,6 +40,10 @@ CLIは新セッション開始時に以下を確認・報告する（省略禁�
 - **追加した機能に到達する経路がある。** API を足したなら呼ぶUI/ツールが、ツールを足したなら
   呼ばせる導線が、同じPRに入っている。「後続PRでUIを繋ぐ」は**到達しないコードを本番に置くことと同義**
   （上の5項目は到達しないコードでも全て通る。実例は「絶対にやってはいけないこと」15）。
+- **課金・請求に関わる変更は、本番（またはテストモード）で1周させるまで完了ではない。**
+  `stripe_usage_reports.status='sent'` / `stripe_webhook_events.completed_at IS NOT NULL` /
+  `usage_logs.billing_status='paid'` が**それぞれ1件以上**になることを確認する。
+  「テストが緑」「デプロイ済み」は請求が成立したことを意味しない（→ 42・51）。
 
 ## Anti-Slop
 - ragExcerpt.slice(0, 200) 必須
@@ -106,6 +110,12 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
   **「どれだけ邪魔しないか」**。会話完了率の悪化は、施策の成否以前にプロダクトの毀損とみなす。
 - **広告枠はテナントの資産であって R2C の資産ではない。** インプレッションが発生するのは
   テナントのサイト、見るのはテナントが集客した顧客。第三者広告は許諾と収益分配なしに出さない。
+- **事業として成立する地点は「計上 → 倍率 → 請求 → 決済」が一周したときであって、機能が動いたときではない。**
+  外部API利用は従量課金でテナントに請求される設計だが、2026-08-25 の実測では Stripe への請求送信が
+  **サービス開始以来 0 件**、webhook 受信も 0 件、全テナントが `billing_enabled=false` だった。
+  会話がいくら改善しても、この一周が繋がっていなければ収益は 0 のまま**無言で**推移する。
+  課金に関わる変更は「計上を入れた」で完了とせず、**請求書が立ち決済されるところまで**を到達点とする
+  （不変ルールは `.claude/rules/billing.md`、経緯と実測値は MEMORY.md の収益監査）。
 
 ## 管理UIの構造（チャット・ファースト移行中の不変ルール）
 
@@ -155,7 +165,10 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
 | LLM 由来の改善提案の着地先 | 既存 `tuning_rules`（`source='judge' \| 'hermes'`、`is_active=false`）。提案元ごとにテーブルを増やさない |
 | ページ行動・訪問者の文脈 | 既存 `behavioral_events`。**第2のイベント送信経路・第2の訪問者 ID を作らない**（`/api/chat` は `visitor_id` を受信済み） |
 | テスト流量の除外 | `src/api/admin/analytics/summaryQueries.ts` の `userSourceClause` / `userSourceExists` のみ。`metadata->>'source'` の判定文字列を各所に書かない |
-| プラン段の追加・変更 | **3点セット**。①`src/lib/billing/planFeatures.ts`（`TenantPlan` / `PLAN_RANK` / `FEATURE_MIN_PLAN`）②`admin-ui/src/pages/admin/tenants/types.ts` の `PLAN_OPTIONS` ③`src/lib/billing/stripeSync.ts` の `PLAN_MULTIPLIERS`。**1つでも漏れると型は通るのに請求または表示が割れる**（`PLAN_MULTIPLIERS` の欠落は `?? 1.0` に落ちて満額請求になる） |
+| プラン段の追加・変更 | **4点セット**。①`src/lib/billing/planFeatures.ts`（`TenantPlan` / `PLAN_RANK` / `FEATURE_MIN_PLAN`）②`admin-ui/src/pages/admin/tenants/types.ts` の `PLAN_OPTIONS` ③`src/lib/billing/planPricing.ts` の `PLAN_MULTIPLIERS`（**`stripeSync.ts` にはもう無い。re-export も置かない**）④`tenants.plan` の CHECK 制約 migration と**その本番適用**。**1つでも漏れると型は通るのに請求・表示・INSERT のいずれかが割れる**（`PLAN_MULTIPLIERS` の欠落は `?? 1.0` に落ちて満額請求、CHECK 未適用は本番だけ DB エラー） |
+| 請求数量・請求予定額の算出 | `src/lib/billing/stripeSync.ts` の `computeExpectedBilling`（**唯一の集計式**。Stripe送信も突合ジョブも画面も同じ関数を通す。集計SQLを書き写すと、突合が「両方とも同じバグを踏んでいるだけ」になる） |
+| 1リクエストの単価・プラン倍率 | `src/lib/billing/planPricing.ts`（純粋な値と純粋関数のみ。`usageTracker` が最高トラフィックの書き込み経路から参照するため、Stripe連携モジュールに依存させない） |
+| 金額の表示整形 | `admin-ui/src/pages/admin/billing/utils.ts`。**単位ごとに別関数**（USDセント用と JPY 用を同じ関数で扱わない → 48） |
 | ウィジェットの表示物（バッジ・ブランディング・告知） | `src/api/widget/widgetGenerator.ts` の設定注入 + `public/widget.js` の既存 Shadow DOM 構築部。**第2の埋め込み経路・第2のウィジェット実装を作らない**。`innerHTML` 禁止（`textContent` / `createElement` のみ） |
 | ウィジェット由来の外部遷移・クリックの計測 | 既存 `behavioral_events`（`/api/chat` は `visitor_id` を受信済み）。`chat_sessions.metadata.source`（`trafficSource.ts`）は**会話の分類契約**であり、クリック計測の置き場所ではない。lane-plans と共有のため変更は team-lead に相談 |
 
@@ -458,6 +471,31 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
     `resolveShareForPlan` / `queryTenantPlanResult` 参照。判定不能時は強制しない）。
     ガード: `tests/phase38/globalRuleGate.test.ts`（S3で追加予定。本ブランチ時点では未存在）。
     根拠: 要件のX1/X2。
+48. **原価と請求額を、同じ語・同じ単位・同じ関数で扱う。**
+    `usage_logs.cost_total_cents` は **USD セント建ての原価×マージン**であって請求額ではない。
+    Stripe の実請求は「件数 × プラン倍率 × Stripe price」で、円は**ゼロデシマル**（`amount_due` はそのまま円）。
+    管理画面はこの2つを混ぜ、USD セント値に `¥` を付けて表示し、請求書は 100 で割って表示していた
+    （同じ請求書がチャットカードと 100 倍違う）。**変数名に単位を含め**（`cost_total_cents` / `amount_jpy`）、
+    整形関数も単位ごとに分ける。原価を「請求額」というラベルで画面に出さない。
+49. **請求数量の定義を変える。**
+    請求数量は **`billable=true` の `usage_logs` 行数**（`anam_session` のみ秒→分換算）× 行ごとの `plan_multiplier`。
+    したがって ①同一リクエストで行を増やす（追加の LLM 呼び出しは `extraLlmUsages` に内包する）
+    ②`billing_status` を集計のフィルタに戻す ③絶対値送信を増分方式に戻す
+    ④冪等キー `billing:<tenant>:<period>:<quantity>` の形式を変える — のいずれも、
+    請求額を静かに水増し・過少にする（詳細: `.claude/rules/billing.md`）。
+50. **監視の対象が 0 件のときに「異常なし」と報告する。**
+    月次突合は `stripe_usage_reports` に行があるテナントだけを見るため、
+    **請求送信が一度も走っていない状態では「乖離 0 件」を毎日報告し続ける**。
+    `billingHealthCheck` も `billing_enabled=true` が 0 件なら沈黙する。
+    「壊れているときこそ何も言わない」構造を新しく作らない。監視を足すときは
+    **対象が 0 件であること自体を異常として鳴らす**条件を必ず併記する
+    （`SLACK_WEBHOOK_URL` 未設定でサイレント return する経路も同じ穴 → 41）。
+51. **書かれない列に依存した更新を「修正した」ことにする。**
+    `invoice.payment_succeeded` は `usage_logs.stripe_subscription_id` を条件に UPDATE するが、
+    この列への書き込みはリポジトリ全体で 0 件で、**常に 0 行更新**
+    （`billing_status` は永久に `reported` 止まり）。テストが `mockDb.query` に渡された
+    **SQL 文字列の一致だけ**を見ているため、恒久 no-op のまま緑だった。
+    更新系は**更新行数**か**更新後の実値**をアサートする（→ テストの最低ライン）。
 
 ## テストの最低ライン
 
@@ -548,6 +586,14 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
 - **母数の境界を 0 / 1 / 下限ちょうど / 下限−1 で書く。** 比率・矢印・「効果あり」を出さず
   `0` も描画しないことを固定する。会話長は Judge 下限が 4 通なので **0 / 1 / 3 / 4 通**で書き、
   **下限未満が「エラー」ではなく「対象外」として扱われること**まで見る。
+- **金額と更新系は「文字列」ではなく「値」でアサートする。** SQL 文字列の一致で緑にしない。
+  UPDATE は更新行数、金額は実値（単位付き）を見る。この規律が無かったため
+  `payment_succeeded` の恒久 no-op が緑のまま通った（→ 51）。
+- **単位が混ざらないことを1本で固定する。**「USD セントの原価」と「円の請求額」を
+  同じ画面・同じ CSV に出すなら、両方の実値を1本のテストで検証する（→ 48）。
+- **請求の境界を書く。** 月末 23:59 の降格が遡及しないこと／月をまたぐセッションの帰属／
+  当月 0 件で送信しないこと／`plan_multiplier` が NULL と 0 で別扱いになること。
+  「正しいプランで正しく請求される」だけのテストは、遡及も過少請求も検出できない。
 
 ## 命名・エラーハンドリング
 
@@ -569,6 +615,11 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
   なお現在 admin-ui には ja/en のキー対応テストも「日本語直書き禁止」テストも無い。先例は
   `KnowledgeListTab.test.tsx` 等の**実 `ja.ts` を通す辞書モック**（キーをそのまま返すモックでは
   誤ったキーを検出できない、という理由が明記されている）。
+- **金額の変数名・列名には単位を含める**（`*_cents` は USD セント、`*_jpy` は円）。
+  単位を持たない `amount` / `cost` を新設しない（→ 48）。
+- **`request_id` はリトライ・二重クリックで同じ値になる形式にする。**
+  `usage_logs` は `ON CONFLICT (request_id) DO NOTHING` で重複を弾くため、時刻や乱数を含めると
+  同一処理が2行になり原価が二重に見える（`sai_agent` が実際に2行立っている）。
 
 **エラーハンドリング**
 
@@ -603,6 +654,10 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
   （→ 21、および「空状態とエラー状態で語彙を分ける」）。赤帯にしない、`0` を描画しない、
   代わりに**次の行動**（プラン変更・翌月リセット日）を出す。
   プラン制限の案内は 1 会話 1 回（→ 11）。
+- **fail-safe の向きは用途ごとに逆であり、統合しない。**
+  機能ゲート（`planFeatures.ts`）は「取得失敗 → 最も制限の強い段」、
+  請求（`planPricing.ts`）は「未知 → `starter` 1.0」。取り違えると、DB 障害時に
+  **請求が 0 円で固着する**か**プラン外機能が開く**かのどちらかが起きる（→ 37）。
 
 ## Security Middleware Order (src/index.ts)
 1. requestIdMiddleware (global)
