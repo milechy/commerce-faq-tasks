@@ -61,17 +61,31 @@ echo "=== VPS Integrity Guards ==="
 # Guard 4-B: Abort if VPS has modified tracked files (VPS should be a clean deploy target)
 # NOTE: Only checks modified tracked files (grep -v '^??'). Untracked files (rsync-transferred
 # local-only dirs like docs/investigation/) are intentionally excluded to prevent false positives.
-UNCOMMITTED=$(ssh "${VPS}" "cd ${REMOTE_DIR} && git status --porcelain 2>/dev/null | grep -v '^\?\?' | wc -l | tr -d ' '" || echo "0")
-if [ "${UNCOMMITTED}" -gt 0 ]; then
-    echo "⚠️  WARNING: Modified tracked files on VPS (${UNCOMMITTED} files):"
-    ssh "${VPS}" "cd ${REMOTE_DIR} && git status --short" || true
-    echo ""
-    echo "🛑 Aborting deploy. VPS has local modifications that may be overwritten."
-    echo "   To clean up VPS and retry:"
-    echo "     ssh ${VPS} \"cd ${REMOTE_DIR} && git stash push -u -m 'backup-$(date +%Y%m%d)-before-reset' && git fetch origin && git reset --hard origin/main\""
-    exit 1
+#
+# Asana 1217807146778609: この判定は git が使えることが前提。VPS の /opt/rajiuce/.git は
+# 2026-07-30 と 2026-08-01 の2回、中核(objects/HEAD/config/refs)だけが消えて壊れている。
+# 壊れていると git status が失敗するが、旧実装ではパイプの最後の tr が成功するため
+# UNCOMMITTED="0" となり、「✅ clean」という嘘の緑を毎回出していた(ガードが無いより悪い:
+# 「確認した」という誤った安心を与える)。そのため fail closed にする — git が使えないときは
+# 緑を出さず、何が検証できていないかを明示する。
+# 削除される差分の実質的な検知は [2/5] 直前の rsync --dry-run が担う(git に依存しない)。
+if ssh "${VPS}" "cd ${REMOTE_DIR} && git rev-parse --git-dir" >/dev/null 2>&1; then
+    UNCOMMITTED=$(ssh "${VPS}" "cd ${REMOTE_DIR} && git status --porcelain | grep -v '^\?\?' | wc -l | tr -d ' '")
+    if [ "${UNCOMMITTED}" -gt 0 ]; then
+        echo "⚠️  WARNING: Modified tracked files on VPS (${UNCOMMITTED} files):"
+        ssh "${VPS}" "cd ${REMOTE_DIR} && git status --short" || true
+        echo ""
+        echo "🛑 Aborting deploy. VPS has local modifications that may be overwritten."
+        echo "   To clean up VPS and retry:"
+        echo "     ssh ${VPS} \"cd ${REMOTE_DIR} && git stash push -u -m 'backup-$(date +%Y%m%d)-before-reset' && git fetch origin && git reset --hard origin/main\""
+        exit 1
+    fi
+    echo "  ✅ Guard 4-B: VPS git status clean (tracked files)"
+else
+    echo "  ⚠️  Guard 4-B: SKIPPED — ${REMOTE_DIR} is not a usable git repository on the VPS"
+    echo "      VPS 側の手動変更は検知できていません(緑ではありません)。Asana 1217807146778609"
+    echo "      削除される差分は [2/5] 直前の rsync --dry-run プレビューで確認してください。"
 fi
-echo "  ✅ Guard 4-B: VPS git status clean (tracked files)"
 
 # Pre-deploy VPS cleanup: remove known local-only dirs that rsync may have transferred previously
 # Protects: avatar-agent/venv/ (excluded by rsync), models/ (not transferred)
@@ -121,30 +135,58 @@ echo "  ✅ Local build complete: dist/ ready"
 echo "[2/5] Syncing repository to VPS..."
 # NOTE: --exclude '.env*' prevents rsync --delete from wiping VPS env files.
 # VPS holds the authoritative .env with production secrets.
-rsync -avz --delete \
-  --exclude 'node_modules/' \
-  --exclude '.pnpm-store/' \
-  --exclude 'admin-ui/node_modules/' \
-  --exclude 'admin-ui/dist/' \
-  --exclude '.env' \
-  --exclude '.env.*' \
-  --exclude '.git/' \
-  --exclude 'logs/' \
-  --exclude '*.log' \
-  --exclude '*.zip' \
-  --exclude '_bundle/' \
-  --exclude '.DS_Store' \
-  --exclude '.vscode/' \
-  --exclude '.devcontainer/' \
-  --exclude '__pycache__/' \
-  --exclude 'avatar-agent/venv/' \
-  --exclude 'docs/investigation/' \
-  --exclude '.wolf/' \
-  --exclude 'slack-listener/' \
-  --exclude 'coverage/' \
-  --exclude '.claude/agent-memory/' \
-  --exclude '.claude/worktrees/' \
-  ./ "${VPS}:${REMOTE_DIR}/"
+#
+# 除外リストは配列に切り出してある。下の --dry-run プレビューと本番転送で同一の
+# ルールを使うため(片方だけ書き換えると、プレビューが嘘になる)。
+RSYNC_EXCLUDES=(
+  --exclude 'node_modules/'
+  --exclude '.pnpm-store/'
+  --exclude 'admin-ui/node_modules/'
+  --exclude 'admin-ui/dist/'
+  --exclude '.env'
+  --exclude '.env.*'
+  --exclude '.git/'
+  --exclude 'logs/'
+  --exclude '*.log'
+  --exclude '*.zip'
+  --exclude '_bundle/'
+  --exclude '.DS_Store'
+  --exclude '.vscode/'
+  --exclude '.devcontainer/'
+  --exclude '__pycache__/'
+  --exclude 'avatar-agent/venv/'
+  --exclude 'docs/investigation/'
+  --exclude '.wolf/'
+  --exclude 'slack-listener/'
+  --exclude 'coverage/'
+  --exclude '.claude/agent-memory/'
+  --exclude '.claude/worktrees/'
+)
+
+# Guard 4-B の代替(git非依存): --delete で VPS から消えるものを事前に列挙する。
+# Guard 4-B が git 破損で機能しない状況でも、「VPS 側にしか無いファイルが黙って消える」
+# という最も実害のある事象だけは確実に可視化できる。
+# 想定を超える件数(=除外設定ミス等)のときは中断する。意図的なら DEPLOY_ALLOW_DELETIONS=1。
+echo "  Previewing deletions (rsync --dry-run)..."
+DELETION_LIST=$(rsync -az --delete --dry-run --itemize-changes "${RSYNC_EXCLUDES[@]}" \
+  ./ "${VPS}:${REMOTE_DIR}/" 2>/dev/null | grep '^\*deleting' || true)
+DELETION_COUNT=$(printf '%s' "${DELETION_LIST}" | grep -c . || true)
+
+if [ "${DELETION_COUNT}" -gt 0 ]; then
+    echo "  ⚠️  ${DELETION_COUNT} path(s) on the VPS will be DELETED by this deploy:"
+    printf '%s\n' "${DELETION_LIST}" | sed 's/^/      /'
+    if [ "${DELETION_COUNT}" -gt "${DEPLOY_MAX_DELETIONS:-30}" ] && [ "${DEPLOY_ALLOW_DELETIONS:-0}" != "1" ]; then
+        echo ""
+        echo "🛑 Aborting: deletion count exceeds ${DEPLOY_MAX_DELETIONS:-30}."
+        echo "   想定外の量です。除外設定の誤りか、VPS 側に大量の独自ファイルがある可能性があります。"
+        echo "   内容を確認のうえ意図通りなら: DEPLOY_ALLOW_DELETIONS=1 bash SCRIPTS/deploy-vps.sh"
+        exit 1
+    fi
+else
+    echo "  ✅ No files will be deleted from the VPS"
+fi
+
+rsync -avz --delete "${RSYNC_EXCLUDES[@]}" ./ "${VPS}:${REMOTE_DIR}/"
 
 # rsync後の所有者正規化: Mac側UID(501)がrsync -a で転送されてもroot:rootに上書き
 ssh "${VPS}" "chown -R root:root ${REMOTE_DIR} 2>/dev/null || true"
