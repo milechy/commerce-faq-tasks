@@ -22,20 +22,20 @@ function resolve(pathname: string) {
 describe("ADMIN_ROUTES — /admin/knowledge/*", () => {
   it("/admin/knowledge は KnowledgeIndexPage(テナント選択)に解決される", () => {
     const match = resolve("/admin/knowledge");
-    const inner = (match?.route.element as ReactElement)?.props?.children;
+    const inner = (match?.route.element as ReactElement<{ children?: ReactElement }>)?.props?.children;
     expect(inner?.type).toBe(KnowledgeIndexPage);
   });
 
   it("/admin/knowledge/global は TenantKnowledgePage(グローバル)に解決される", () => {
     const match = resolve("/admin/knowledge/global");
-    const inner = (match?.route.element as ReactElement)?.props?.children;
+    const inner = (match?.route.element as ReactElement<{ children?: ReactElement }>)?.props?.children;
     expect(inner?.type).toBe(TenantKnowledgePage);
   });
 
   it("/admin/knowledge/:tenantId は動的セグメントとして TenantKnowledgePage に解決される", () => {
     const match = resolve("/admin/knowledge/carnation");
     expect(match?.route.path).toBe("/admin/knowledge/:tenantId");
-    const inner = (match?.route.element as ReactElement)?.props?.children;
+    const inner = (match?.route.element as ReactElement<{ children?: ReactElement }>)?.props?.children;
     expect(inner?.type).toBe(TenantKnowledgePage);
   });
 
