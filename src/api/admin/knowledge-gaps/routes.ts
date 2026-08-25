@@ -131,7 +131,7 @@ export function registerKnowledgeGapPhase46Routes(app: Express): void {
       const sortOrder = sortOrderParam === 'asc' ? 'ASC' : 'DESC';
 
       const triggerTypeParam = req.query['trigger_type'] as string | undefined;
-      const validTriggerTypes = ['no_rag', 'low_confidence', 'fallback', 'judge_low'];
+      const validTriggerTypes = ['user_negative', 'no_rag', 'low_confidence', 'fallback', 'judge_low'];
       const triggerType = triggerTypeParam && validTriggerTypes.includes(triggerTypeParam) ? triggerTypeParam : undefined;
 
       const periodParam = req.query['period'] as string | undefined;

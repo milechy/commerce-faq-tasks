@@ -16,6 +16,7 @@ import {
   getSessionOutcome,
   recordOutcome,
 } from '../admin/chat-history/chatHistoryRepository';
+import { detectGap } from '../../agent/gap/gapDetector';
 
 const VALID_EVENT_TYPES = [
   'page_view', 'scroll_depth', 'idle_time', 'product_view',
@@ -129,6 +130,9 @@ export function registerEventRoutes(
 
       // Phase65: chat_conversion イベントを conversion_attributions にブリッジ (best-effort)
       await bridgeConversionEvents(db, tenantId, { chatSessionId: chat_session_id, visitorId: visitor_id }, events);
+
+      // ナレッジ配線是正P14: answer_feedback(👎)をギャップ検出に橋渡しする (best-effort)
+      await bridgeAnswerFeedbackToGaps(db, tenantId, { chatSessionId: chat_session_id, visitorId: visitor_id }, events);
 
       return res.status(202).json({ accepted: events.length });
     } catch (err) {
@@ -279,5 +283,62 @@ export async function bridgeConversionEvents(
     } catch (err) {
       logger.error({ msg: '[events→conversion bridge] insert failed', error: (err as Error).message, tenantId, conversionType });
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// ナレッジ配線是正P14: answer_feedback(👎) → knowledge_gaps ブリッジ
+// behavioral_events INSERT 後に best-effort で呼び出す。失敗しても202維持。
+//
+// widget の message_ref はクライアント側で生成される乱数ID
+// (generateMsgId、'msg-<timestamp>-<random>')で、サーバ側の chat_messages と
+// 直接ひも付く仕組みが無い。そのため「どの回答への評価か」を厳密に特定できず、
+// 近似としてそのセッションで直前にあった実ユーザーの発話を対象質問とする
+// (会話を遡って過去の回答に👎を付けるケースでは不正確になりうるが、
+// 唯一機能する消費者品質信号を起票に繋げることを優先する)。
+// ---------------------------------------------------------------------------
+
+export async function bridgeAnswerFeedbackToGaps(
+  db: Pool,
+  tenantId: string,
+  sessionRef: ConversionSessionRef,
+  events: EventInput[],
+): Promise<void> {
+  const negativeFeedbacks = events.filter(
+    (e) => e.event_type === 'answer_feedback' && (e.event_data as Record<string, unknown>)?.['rating'] === 'down',
+  );
+  if (negativeFeedbacks.length === 0) return;
+
+  const sessionDbId = await resolveChatSessionUuid(db, tenantId, sessionRef).catch((err) => {
+    logger.warn({ msg: '[events→gap bridge] session resolve failed', error: (err as Error).message, tenantId });
+    return null;
+  });
+  if (!sessionDbId) return;
+
+  try {
+    const lastUserMessage = await db.query<{ content: string }>(
+      `SELECT content FROM chat_messages
+       WHERE session_id = $1 AND role = 'user'
+       ORDER BY created_at DESC LIMIT 1`,
+      [sessionDbId],
+    );
+    const userMessage = lastUserMessage.rows[0]?.content;
+    if (!userMessage) return;
+
+    // 1回のイベントバッチに複数の👎が含まれても、同一セッション・同一質問の
+    // 起票は detectGap 内の7日以内ILIKE一致で1件に集約される(重複起票にならない)。
+    for (const _feedback of negativeFeedbacks) {
+      await detectGap({
+        tenantId,
+        sessionId: sessionDbId,
+        userMessage,
+        ragResultCount: 0, // user_negative は最優先で判定されるためこの値は使われない
+        userNegativeFeedback: true,
+      }).catch((err) => {
+        logger.warn({ msg: '[events→gap bridge] detectGap failed', error: (err as Error).message, tenantId });
+      });
+    }
+  } catch (err) {
+    logger.warn({ msg: '[events→gap bridge] message lookup failed', error: (err as Error).message, tenantId });
   }
 }

@@ -123,3 +123,42 @@ describe('detectGap — 4トリガーそれぞれの発火', () => {
     expect(result.source).toBe('no_rag');
   });
 });
+
+describe('detectGap — user_negative トリガー(ナレッジ配線是正P14)', () => {
+  it('userNegativeFeedback=true で発火する(ヒット・スコアとも十分でも)', async () => {
+    const result = await detectGap({
+      tenantId: TENANT,
+      sessionId: SESSION,
+      userMessage: '質問H',
+      ragResultCount: 5,
+      topRerankScore: 0.9,
+      userNegativeFeedback: true,
+    });
+    expect(result.detected).toBe(true);
+    expect(result.source).toBe('user_negative');
+  });
+
+  it('優先順位: user_negative が no_rag より先に判定される', async () => {
+    const result = await detectGap({
+      tenantId: TENANT,
+      sessionId: SESSION,
+      userMessage: '質問I',
+      ragResultCount: 0, // no_ragの条件も満たすが、user_negativeが最優先
+      userNegativeFeedback: true,
+    });
+    expect(result.source).toBe('user_negative');
+  });
+
+  it('userNegativeFeedback=false/未指定なら user_negative は発火しない', async () => {
+    const result = await detectGap({
+      tenantId: TENANT,
+      sessionId: SESSION,
+      userMessage: '質問J',
+      ragResultCount: 5,
+      topRerankScore: 0.9,
+      userNegativeFeedback: false,
+    });
+    expect(result.detected).toBe(false);
+    expect(result.source).toBeNull();
+  });
+});

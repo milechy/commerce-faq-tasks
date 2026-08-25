@@ -161,6 +161,58 @@ describe("fetchMeasurementHealth", () => {
   });
 });
 
+// ナレッジ配線是正P14: 消費者の回答評価(👍👎)は率ではなく生の件数で返す
+// (母数が小さくても、生の件数自体は禁止34が問題にする「誤った自信」を生まない)。
+describe("fetchMeasurementHealth — answerFeedback", () => {
+  it("up/downそれぞれのFILTER集計をそのまま返す", async () => {
+    const query = jest.fn().mockImplementation((sql: string) => {
+      if (/FROM behavioral_events b\s+WHERE b\.event_type = 'answer_feedback'/.test(sql)) {
+        return Promise.resolve({ rows: [{ up: "7", down: "3" }] });
+      }
+      return Promise.resolve({ rows: [] });
+    });
+    const db = { query };
+
+    const result = await fetchMeasurementHealth(db, "tenant-a", "30d");
+
+    expect(result.answerFeedback).toEqual({ upCount: 7, downCount: 3 });
+  });
+
+  it("行が返らない異常時でも落ちず0/0を返す", async () => {
+    const db = makeDb([
+      { rows: [] },
+      { rows: [{ count: "0" }] },
+      { rows: [{ linked: "0", total: "0" }] },
+      { rows: [{ recorded: "0", auto_recorded: "0", total: "0" }] },
+      { rows: [{ count: "0" }] },
+    ]);
+
+    const result = await fetchMeasurementHealth(db, null, "30d");
+
+    expect(result.answerFeedback).toEqual({ upCount: 0, downCount: 0 });
+  });
+
+  it("tenantId指定時はbehavioral_eventsのクエリにもtenant_id絞り込みが入る", async () => {
+    const query = jest.fn().mockImplementation((sql: string) => {
+      if (/FROM behavioral_events b\s+WHERE b\.event_type = 'answer_feedback'/.test(sql)) {
+        return Promise.resolve({ rows: [{ up: "1", down: "1" }] });
+      }
+      return Promise.resolve({ rows: [] });
+    });
+    const db = { query };
+
+    await fetchMeasurementHealth(db, "tenant-a", "30d");
+
+    const feedbackCall = db.query.mock.calls.find(([sql]: [string]) =>
+      /FROM behavioral_events b\s+WHERE b\.event_type = 'answer_feedback'/.test(sql),
+    );
+    expect(feedbackCall).toBeDefined();
+    const [sql, params] = feedbackCall as [string, unknown[]];
+    expect(sql).toContain("b.tenant_id = $2");
+    expect(params).toEqual(["30 days", "tenant-a"]);
+  });
+});
+
 // D2 / G5: 「チャットを開いたのに会話しなかった」割合。
 // visitor_id の記録開始前は結合しようがないため、期間全体で率を出すと
 // 「0%が話した」という誤った数字になる。母数の開始点を切る設計を固定する。
