@@ -118,23 +118,76 @@ export function insertFaqEmbeddingAsync(
     );
 }
 
+export interface FaqIndexMismatchResult {
+  /** faq_docs のうち is_published=true の件数 */
+  dbCount: number;
+  /**
+   * 公開FAQのうち、対応する faq_embeddings 行が無い件数(embedding欠落)。
+   * この状態のFAQは pgvector 検索に一切ヒットしない。
+   */
+  embeddingMissingCount: number;
+  /**
+   * 数値 faq_id を持つ(=FAQ由来と識別できる) faq_embeddings のうち、
+   * 対応する faq_docs 行が存在しない件数(孤児embedding)。
+   * FAQ_VISIBILITY_WHERE により検索結果には出ないため実害は無いが、
+   * 削除時にembeddingだけ消し忘れた・親行が消えた等のドリフトの兆候。
+   * faq_id を持たない book/OCR 由来チャンクはここに含めない(意図的な設計)。
+   */
+  orphanEmbeddingCount: number;
+  /** ES 側のドキュメント件数。ES_URL未設定時・クエリ失敗時は -1 */
+  esCount: number;
+}
+
 /**
- * DB(faq_docs, is_published=true)とES(同条件)の件数を突き合わせる。
- * 索引の不整合を検知するためのヘルパー。呼び出し元・定期実行(cron化)は
- * このタスクのスコープ外。件数を返すだけで自動修復はしない。
+ * faq_docs / faq_embeddings / ES の3ストアを突き合わせる。
+ * 索引の不整合を検知するためのヘルパー。件数（および孤児/欠落の内訳）を
+ * 返すだけで自動修復はしない。
+ *
+ * ES側は件数比較のみ(doc単位の突合はscroll APIが必要で本ジョブの
+ * 定期実行コストに見合わないため対象外。DB側2種は同一Postgres内の
+ * LEFT JOIN/NOT EXISTS で安価かつ正確に取れるため行単位で検査する)。
  */
 export async function countFaqIndexMismatch(
   pool: Pool,
   tenantId: string
-): Promise<{ dbCount: number; esCount: number }> {
+): Promise<FaqIndexMismatchResult> {
   const dbResult = await pool.query(
     "SELECT COUNT(*)::int AS c FROM faq_docs WHERE tenant_id = $1 AND is_published = true",
     [tenantId]
   );
   const dbCount = (dbResult.rows[0] as { c: number }).c;
 
+  const embeddingMissingResult = await pool.query(
+    `SELECT COUNT(*)::int AS c
+     FROM faq_docs fd
+     WHERE fd.tenant_id = $1 AND fd.is_published = true
+       AND NOT EXISTS (
+         SELECT 1 FROM faq_embeddings fe
+         WHERE fe.tenant_id = fd.tenant_id
+           AND fe.metadata->>'faq_id' = fd.id::text
+       )`,
+    [tenantId]
+  );
+  const embeddingMissingCount = (embeddingMissingResult.rows[0] as { c: number }).c;
+
+  const orphanEmbeddingResult = await pool.query(
+    `SELECT COUNT(*)::int AS c
+     FROM faq_embeddings fe
+     WHERE fe.tenant_id = $1
+       AND fe.metadata->>'faq_id' ~ '^[0-9]+$'
+       AND NOT EXISTS (
+         SELECT 1 FROM faq_docs fd
+         WHERE fd.id = (fe.metadata->>'faq_id')::bigint
+           AND fd.tenant_id = fe.tenant_id
+       )`,
+    [tenantId]
+  );
+  const orphanEmbeddingCount = (orphanEmbeddingResult.rows[0] as { c: number }).c;
+
   const esUrl = process.env.ES_URL;
-  if (!esUrl) return { dbCount, esCount: -1 };
+  if (!esUrl) {
+    return { dbCount, embeddingMissingCount, orphanEmbeddingCount, esCount: -1 };
+  }
   const index = resolveFaqWriteIndex(tenantId);
   try {
     const res = await fetch(`${esUrl.replace(/\/$/, "")}/${index}/_count`, {
@@ -151,11 +204,13 @@ export async function countFaqIndexMismatch(
         },
       }),
     });
-    if (!res.ok) return { dbCount, esCount: -1 };
+    if (!res.ok) {
+      return { dbCount, embeddingMissingCount, orphanEmbeddingCount, esCount: -1 };
+    }
     const body = (await res.json()) as { count: number };
-    return { dbCount, esCount: body.count };
+    return { dbCount, embeddingMissingCount, orphanEmbeddingCount, esCount: body.count };
   } catch (e) {
     logger.error("[faqIndexSync] countFaqIndexMismatch ES query failed", { tenantId, err: e });
-    return { dbCount, esCount: -1 };
+    return { dbCount, embeddingMissingCount, orphanEmbeddingCount, esCount: -1 };
   }
 }

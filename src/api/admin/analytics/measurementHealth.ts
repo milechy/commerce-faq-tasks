@@ -12,6 +12,7 @@
 import type { Pool } from "pg";
 import { periodToInterval, userSourceClause } from "./summaryQueries";
 import { AUTO_OUTCOME_RECORDED_BY } from "../chat-history/chatHistoryRepository";
+import { countFaqIndexMismatch } from "../../../lib/knowledge/faqIndexSync";
 
 type Db = Pick<Pool, "query">;
 
@@ -41,6 +42,20 @@ export interface MeasurementHealthResponse {
   validUserSessionCount: number;
   /** チャットを開いたのに会話しなかった割合。G5(1,516回開かれて13会話)の解明用。 */
   chatOpenDropoff: ChatOpenDropoff;
+  /**
+   * faq_docs / faq_embeddings / ES の3ストア突合(2026-08-25 ナレッジ配線是正P7)。
+   * テナント指定が無い(cross-tenant view)ときは対象を特定できないため null。
+   * 新テーブルは作らず、毎回ライブ計算する(CLAUDE.md 禁止32)。
+   */
+  knowledgeIndexDrift: KnowledgeIndexDrift | null;
+}
+
+export interface KnowledgeIndexDrift {
+  dbPublishedCount: number;
+  embeddingMissingCount: number;
+  orphanEmbeddingCount: number;
+  /** ES_URL未設定・クエリ失敗時は null(「ズレ0」と誤読されないようにする) */
+  esCount: number | null;
 }
 
 /**
@@ -208,6 +223,17 @@ export async function fetchMeasurementHealth(
     sessionCoverage,
   };
 
+  const knowledgeIndexDrift = tenantId
+    ? await countFaqIndexMismatch(db as unknown as Pool, tenantId)
+        .then((r) => ({
+          dbPublishedCount: r.dbCount,
+          embeddingMissingCount: r.embeddingMissingCount,
+          orphanEmbeddingCount: r.orphanEmbeddingCount,
+          esCount: r.esCount === -1 ? null : r.esCount,
+        }))
+        .catch(() => null)
+    : null;
+
   return {
     sourceBreakdown,
     emptySessionCount,
@@ -215,5 +241,6 @@ export async function fetchMeasurementHealth(
     outcomeRecordRate,
     validUserSessionCount,
     chatOpenDropoff,
+    knowledgeIndexDrift,
   };
 }

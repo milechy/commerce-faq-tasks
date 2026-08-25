@@ -187,13 +187,39 @@ describe("insertFaqEmbeddingAsync", () => {
 });
 
 describe("countFaqIndexMismatch", () => {
-  it("DB件数とES件数を両方返す", async () => {
+  it("DB件数・embedding欠落・孤児embedding・ES件数を返す", async () => {
     installFetchSpy();
-    const pool = {
-      query: jest.fn().mockResolvedValue({ rows: [{ c: 5 }] }),
-    } as unknown as Pool;
+    const query = jest.fn().mockImplementation((sql: string) => {
+      if (/FROM faq_docs fd\s+WHERE fd\.tenant_id/.test(sql)) return Promise.resolve({ rows: [{ c: 1 }] });
+      if (/FROM faq_embeddings fe/.test(sql)) return Promise.resolve({ rows: [{ c: 2 }] });
+      return Promise.resolve({ rows: [{ c: 5 }] });
+    });
+    const pool = { query } as unknown as Pool;
     const result = await countFaqIndexMismatch(pool, "acme");
-    expect(result).toEqual({ dbCount: 5, esCount: 3 });
+    expect(result).toEqual({ dbCount: 5, embeddingMissingCount: 1, orphanEmbeddingCount: 2, esCount: 3 });
+  });
+
+  it("孤児embeddingの判定は数値faq_idに限定する(book/OCR等の非FAQチャンクを誤検知しない)", async () => {
+    installFetchSpy();
+    const query = jest.fn().mockResolvedValue({ rows: [{ c: 0 }] });
+    const pool = { query } as unknown as Pool;
+    await countFaqIndexMismatch(pool, "acme");
+
+    const orphanCall = query.mock.calls.find(
+      ([sql]: [string]) => /^\s*SELECT COUNT\(\*\)::int AS c\s+FROM faq_embeddings fe/.test(sql),
+    );
+    expect(orphanCall![0]).toContain("faq_id' ~ '^[0-9]+$'");
+  });
+
+  it("embedding欠落の判定はテナント一致した faq_id 参照の有無で行う", async () => {
+    installFetchSpy();
+    const query = jest.fn().mockResolvedValue({ rows: [{ c: 0 }] });
+    const pool = { query } as unknown as Pool;
+    await countFaqIndexMismatch(pool, "acme");
+
+    const missingCall = query.mock.calls.find(([sql]: [string]) => /FROM faq_docs fd/.test(sql));
+    expect(missingCall![0]).toContain("fe.tenant_id = fd.tenant_id");
+    expect(missingCall![0]).toContain("fe.metadata->>'faq_id' = fd.id::text");
   });
 
   it("ES_URL未設定ならesCount=-1を返し、fetchしない", async () => {
@@ -203,7 +229,7 @@ describe("countFaqIndexMismatch", () => {
       query: jest.fn().mockResolvedValue({ rows: [{ c: 5 }] }),
     } as unknown as Pool;
     const result = await countFaqIndexMismatch(pool, "acme");
-    expect(result).toEqual({ dbCount: 5, esCount: -1 });
+    expect(result).toEqual({ dbCount: 5, embeddingMissingCount: 5, orphanEmbeddingCount: 5, esCount: -1 });
     expect(captured).toHaveLength(0);
   });
 
@@ -213,6 +239,6 @@ describe("countFaqIndexMismatch", () => {
       query: jest.fn().mockResolvedValue({ rows: [{ c: 5 }] }),
     } as unknown as Pool;
     const result = await countFaqIndexMismatch(pool, "acme");
-    expect(result).toEqual({ dbCount: 5, esCount: -1 });
+    expect(result).toEqual({ dbCount: 5, embeddingMissingCount: 5, orphanEmbeddingCount: 5, esCount: -1 });
   });
 });
