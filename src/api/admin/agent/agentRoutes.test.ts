@@ -10523,6 +10523,122 @@ describe('POST /v1/admin/agent/chat', () => {
   });
 
   // -------------------------------------------------------------------------
+  // W1-4: delete_avatar_config(docs/COPILOT_UI_PARITY.md §3.1 #4)
+  describe('delete_avatar_config', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    it('稼働していない設定を削除できる(削除後も稼働中の設定が残る)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-dac-1', 'delete_avatar_config', { id: 'cfg-old', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('削除しました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ name: '旧アバター', is_active: false }] }) // 所有権+稼働状況確認
+        .mockResolvedValueOnce({ rows: [] }) // DELETE
+        .mockResolvedValueOnce({ rows: [{ count: '1' }] }); // 残り稼働数(0件ではない)
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '旧アバターを削除して', sessionId: 'sess-dac-01' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining('DELETE FROM avatar_configs WHERE id = $1 AND tenant_id = $2'),
+        ['cfg-old', 'tenant-abc'],
+      );
+      // 残り稼働数が0件ではないため features.avatar の同期UPDATEは呼ばれない
+      expect(mockQuery).toHaveBeenCalledTimes(3);
+      expect(res.body.actions[0].result).toContain('「旧アバター」を削除しました');
+    });
+
+    it('稼働中(is_active=true)の設定は削除できず、DELETEに到達しない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-dac-2', 'delete_avatar_config', { id: 'cfg-active', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('確認しました。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ name: '稼働中アバター', is_active: true }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '稼働中アバターを削除して', sessionId: 'sess-dac-02' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('稼働中のため削除できません');
+      // 所有権確認のSELECTのみ呼ばれ、DELETEには到達しない
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+    });
+
+    it('confirmedなしでは実行されずDBが無変更', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-dac-3', 'delete_avatar_config', { id: 'cfg-old', confirmed: false }))
+        .mockResolvedValueOnce(makeGroqResponse('確認しました。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '旧アバターを削除して', sessionId: 'sess-dac-03' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('確認が必要');
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    it('存在しないID・他テナントの設定は「見つかりません」で返りDELETEに到達しない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-dac-4', 'delete_avatar_config', { id: 'cfg-other', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('確認しました。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [] }); // tenant_id条件で該当なし(他テナント/不存在の両方)
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'cfg-other を削除して', sessionId: 'sess-dac-04' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('見つかりません');
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+    });
+
+    // 削除後、稼働中の設定が0件になった場合は features.avatar を false に同期する
+    // (admin/avatar/routes.ts の DELETE ハンドラと同じ後処理)。
+    it('削除後に稼働中の設定が0件になると features.avatar を false に同期する', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-dac-5', 'delete_avatar_config', { id: 'cfg-last', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('削除しました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ name: '最後のアバター', is_active: false }] })
+        .mockResolvedValueOnce({ rows: [] }) // DELETE
+        .mockResolvedValueOnce({ rows: [{ count: '0' }] }) // 残り稼働数0件
+        .mockResolvedValueOnce({ rows: [] }); // features.avatar 同期UPDATE
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '最後のアバターを削除して', sessionId: 'sess-dac-05' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        4,
+        expect.stringContaining("jsonb_set(COALESCE(features, '{}'), '{avatar}', 'false')"),
+        ['tenant-abc'],
+      );
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // GID 1216978677372391(PR-16, D1) / 共有学習プールの参加モデル S4:
   // set_hermes_consent — tenants.features.learning = {learn, share} をチャットから
   // 2軸で操作できるようにする。learn=自社内学習(外に出ない)、
