@@ -64,6 +64,8 @@ const MUTATION_PATTERNS: RegExp[] = [
   /\bactivateAvatarConfig\(/,
   /\bcommitTextFaqs\(/,
   /\bcommitScrapeFaqs\(/,
+  /\bapproveGapRecommendation\(/,
+  /\baddKnowledgeFromGap\(/,
 ];
 
 /** executeToolCall の switch を case ごとに切り、書き込みを行っているツール名を返す。 */

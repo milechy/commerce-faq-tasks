@@ -71,6 +71,8 @@ const GAP_ROW = {
   tenant_id: 't1',
   user_question: 'この商品は返品できますか',
   recommendation_status: 'approved',
+  detection_source: 'no_rag',
+  frequency: 2,
 };
 
 beforeEach(() => {
@@ -79,7 +81,7 @@ beforeEach(() => {
   installFetchSpy();
   process.env['ES_URL'] = 'http://es.test:9200';
   mockQuery.mockImplementation((sql: string) => {
-    if (/SELECT id, tenant_id, user_question, recommendation_status\s+FROM knowledge_gaps/.test(sql)) {
+    if (/SELECT id, tenant_id, user_question, recommendation_status, detection_source, frequency\s+FROM knowledge_gaps/.test(sql)) {
       return Promise.resolve({ rows: [GAP_ROW] });
     }
     if (/INSERT INTO faq_docs/.test(sql)) {

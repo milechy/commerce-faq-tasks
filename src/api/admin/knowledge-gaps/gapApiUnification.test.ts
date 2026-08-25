@@ -80,7 +80,12 @@ describe('GET /v1/admin/knowledge-gaps/count', () => {
 
 describe('PATCH /v1/admin/knowledge-gaps/:id — 2つの関心事を1エンドポイントで受ける', () => {
   it('{action} は recommendation_status を更新する(既存動作の回帰)', async () => {
-    mockQuery.mockResolvedValue({ rowCount: 1 });
+    // approveGapRecommendation() は RETURNING で承認の根拠(質問文・検出源・頻度)を
+    // 取得するため、rows も返すモックにする(ナレッジ配線是正「チャット完結」タスク)。
+    mockQuery.mockResolvedValue({
+      rowCount: 1,
+      rows: [{ user_question: 'q', detection_source: 'no_rag', frequency: 3 }],
+    });
     const app = makeApp(CLIENT_ADMIN);
 
     const res = await request(app)

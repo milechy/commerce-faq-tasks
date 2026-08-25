@@ -103,6 +103,135 @@ interface KnowledgeGapRow {
 }
 
 // ---------------------------------------------------------------------------
+// 書き込みロジック(HTTPルートとチャットツール actionExecutor.ts の両方から
+// 呼ぶ唯一の実装。ナレッジ配線是正「チャット完結」タスク、Asana GID
+// 1217811043900566)。FAQ書き込みの6本目を新設しない(CLAUDE.md 禁止6)ため、
+// POST /v1/admin/knowledge-gaps/:id/add-knowledge の元の内部ロジックを
+// そのままここに切り出し、ルートハンドラ側は薄いラッパーにする。
+// ---------------------------------------------------------------------------
+
+export type ApproveGapRecommendationResult =
+  | { ok: true; userQuestion: string; detectionSource: string | null; frequency: number | null }
+  | { ok: false; reason: 'not_found' };
+
+/**
+ * ギャップのAI推薦を承認する(recommendation_status → 'approved')。
+ * PATCH /v1/admin/knowledge-gaps/:id の action='approve' 分岐と、
+ * チャットツール approve_gap_recommendation の両方から呼ばれる。
+ *
+ * 呼び出し元がその場で承認の根拠(質問文・検出源・頻度)を提示できるよう、
+ * UPDATE と同時に RETURNING で返す(禁止29/33の趣旨: 出所を示さずに承認させない)。
+ */
+export async function approveGapRecommendation(
+  gapId: number,
+  tenantId: string,
+  isSuperAdmin: boolean,
+): Promise<ApproveGapRecommendationResult> {
+  const pool = getPool();
+  const tenantCondition = isSuperAdmin ? '' : ' AND tenant_id = $3';
+  const args: unknown[] = ['approved', gapId];
+  if (!isSuperAdmin) args.push(tenantId);
+
+  const result = await pool.query<{ user_question: string; detection_source: string | null; frequency: number | null }>(
+    `UPDATE knowledge_gaps SET recommendation_status = $1 WHERE id = $2${tenantCondition}
+     RETURNING user_question, detection_source, frequency`,
+    args,
+  );
+
+  if ((result.rowCount ?? 0) === 0) return { ok: false, reason: 'not_found' };
+  const row = result.rows[0]!;
+  return {
+    ok: true,
+    userQuestion: row.user_question,
+    detectionSource: row.detection_source,
+    frequency: row.frequency,
+  };
+}
+
+export type AddKnowledgeFromGapResult =
+  | { ok: true; faqDocId: number; gapQuestion: string; detectionSource: string | null; frequency: number | null }
+  | { ok: false; reason: 'not_found' | 'forbidden' | 'not_approved' };
+
+/**
+ * 承認済みギャップから FAQ を作成する(faq_docs INSERT + embedding + ES同期 +
+ * ギャップを resolved に更新)。POST /v1/admin/knowledge-gaps/:id/add-knowledge
+ * と、チャットツール add_knowledge_from_gap の両方から呼ばれる唯一の実装。
+ */
+export async function addKnowledgeFromGap(
+  gapId: number,
+  answerText: string,
+  category: string | null,
+  tenantId: string,
+  isSuperAdmin: boolean,
+): Promise<AddKnowledgeFromGapResult> {
+  const pool = getPool();
+
+  const gapResult = await pool.query<{
+    id: number;
+    tenant_id: string;
+    user_question: string;
+    recommendation_status: string;
+    detection_source: string | null;
+    frequency: number | null;
+  }>(
+    `SELECT id, tenant_id, user_question, recommendation_status, detection_source, frequency
+     FROM knowledge_gaps
+     WHERE id = $1`,
+    [gapId],
+  );
+
+  if (gapResult.rows.length === 0) return { ok: false, reason: 'not_found' };
+  const gap = gapResult.rows[0]!;
+
+  // テナント検証: JWTのテナントとGapのテナントが一致すること（super_adminは免除）
+  if (!isSuperAdmin && gap.tenant_id !== tenantId) return { ok: false, reason: 'forbidden' };
+
+  if (gap.recommendation_status !== 'approved') return { ok: false, reason: 'not_approved' };
+
+  // faq_docs に INSERT
+  const faqResult = await pool.query<{ id: number }>(
+    `INSERT INTO faq_docs (tenant_id, question, answer, category, is_published)
+     VALUES ($1, $2, $3, $4, true)
+     RETURNING id`,
+    [gap.tenant_id, gap.user_question.slice(0, 500), answerText.slice(0, 2000), category ?? null],
+  );
+  const faqDocId = faqResult.rows[0]!.id;
+
+  // embedding を非同期生成（fire-and-forget）。質問文も埋め込む
+  // (以前は answer_text のみで、このFAQが答えるべき質問自体がベクトルに
+  // 入っておらず検索精度が劣化していた。2026-08-25 是正)。
+  insertEmbeddingAsync(
+    pool,
+    gap.tenant_id,
+    `${gap.user_question}\n${answerText}`.slice(0, 2000),
+    faqDocId,
+    { source: 'knowledge_gap_resolution', faq_id: faqDocId },
+  );
+
+  // ES に非同期 upsert（fire-and-forget）。新規作成のため is_excluded_from_search
+  // を引き継ぐ必要はない(既定 false で正しい)
+  upsertToEsAsync(gap.tenant_id, faqDocId, gap.user_question, answerText, true);
+
+  // Gap のステータスを resolved に更新
+  await pool.query(
+    `UPDATE knowledge_gaps
+     SET status = 'resolved',
+         recommendation_status = 'resolved',
+         resolved_faq_id = $1
+     WHERE id = $2`,
+    [faqDocId, gapId],
+  );
+
+  return {
+    ok: true,
+    faqDocId,
+    gapQuestion: gap.user_question,
+    detectionSource: gap.detection_source,
+    frequency: gap.frequency,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Route registration
 // ---------------------------------------------------------------------------
 
@@ -290,10 +419,20 @@ export function registerKnowledgeGapPhase46Routes(app: Express): void {
         const pool = getPool();
         const tenantCondition = isSuperAdmin ? '' : ' AND tenant_id = $3';
 
+        // 'approve' は approveGapRecommendation() を共有する
+        // (チャットツール approve_gap_recommendation と同じ実装)。
+        if (actionParsed.success && actionParsed.data.action === 'approve') {
+          const approveResult = await approveGapRecommendation(id, jwtTenantId, isSuperAdmin);
+          if (!approveResult.ok) {
+            return res.status(404).json({ error: 'ギャップが見つかりません' });
+          }
+          return res.json({ ok: true });
+        }
+
         let result;
         if (actionParsed.success) {
-          const newRecommendationStatus = actionParsed.data.action === 'approve' ? 'approved' : 'dismissed';
-          const args: unknown[] = [newRecommendationStatus, id];
+          // 'dismiss'
+          const args: unknown[] = ['dismissed', id];
           if (!isSuperAdmin) args.push(jwtTenantId);
           result = await pool.query(
             `UPDATE knowledge_gaps SET recommendation_status = $1 WHERE id = $2${tenantCondition}`,
@@ -369,74 +508,20 @@ export function registerKnowledgeGapPhase46Routes(app: Express): void {
       }
 
       try {
-        const pool = getPool();
+        const { answer_text, category } = parsed.data;
+        const result = await addKnowledgeFromGap(id, answer_text, category ?? null, jwtTenantId, isSuperAdmin);
 
-        // Gapを取得（recommendation_status='approved'かつテナント一致）
-        const gapResult = await pool.query<{ id: number; tenant_id: string; user_question: string; recommendation_status: string }>(
-          `SELECT id, tenant_id, user_question, recommendation_status
-           FROM knowledge_gaps
-           WHERE id = $1`,
-          [id],
-        );
-
-        if (gapResult.rows.length === 0) {
-          return res.status(404).json({ error: 'ギャップが見つかりません' });
-        }
-
-        const gap = gapResult.rows[0]!;
-
-        // テナント検証: JWTのテナントとGapのテナントが一致すること（super_adminは免除）
-        if (!isSuperAdmin && gap.tenant_id !== jwtTenantId) {
-          return res.status(403).json({ error: 'forbidden' });
-        }
-
-        if (gap.recommendation_status !== 'approved') {
+        if (!result.ok) {
+          if (result.reason === 'not_found') {
+            return res.status(404).json({ error: 'ギャップが見つかりません' });
+          }
+          if (result.reason === 'forbidden') {
+            return res.status(403).json({ error: 'forbidden' });
+          }
           return res.status(409).json({ error: 'approved 状態のギャップのみナレッジを追加できます' });
         }
 
-        const { answer_text, category } = parsed.data;
-
-        // faq_docs に INSERT
-        const faqResult = await pool.query<{ id: number }>(
-          `INSERT INTO faq_docs (tenant_id, question, answer, category, is_published)
-           VALUES ($1, $2, $3, $4, true)
-           RETURNING id`,
-          [
-            gap.tenant_id,
-            gap.user_question.slice(0, 500),
-            answer_text.slice(0, 2000),
-            category ?? null,
-          ],
-        );
-
-        const faqDocId = faqResult.rows[0]!.id;
-
-        // embedding を非同期生成（fire-and-forget）。質問文も埋め込む
-        // (以前は answer_text のみで、このFAQが答えるべき質問自体がベクトルに
-        // 入っておらず検索精度が劣化していた。2026-08-25 是正)。
-        insertEmbeddingAsync(
-          getPool(),
-          gap.tenant_id,
-          `${gap.user_question}\n${answer_text}`.slice(0, 2000),
-          faqDocId,
-          { source: 'knowledge_gap_resolution', faq_id: faqDocId },
-        );
-
-        // ES に非同期 upsert（fire-and-forget）。新規作成のため is_excluded_from_search
-        // を引き継ぐ必要はない(既定 false で正しい)
-        upsertToEsAsync(gap.tenant_id, faqDocId, gap.user_question, answer_text, true);
-
-        // Gap のステータスを resolved に更新
-        await pool.query(
-          `UPDATE knowledge_gaps
-           SET status = 'resolved',
-               recommendation_status = 'resolved',
-               resolved_faq_id = $1
-           WHERE id = $2`,
-          [faqDocId, id],
-        );
-
-        return res.json({ success: true, faq_doc_id: faqDocId });
+        return res.json({ success: true, faq_doc_id: result.faqDocId });
       } catch (err) {
         logger.warn({ err, id }, 'POST /knowledge-gaps/:id/add-knowledge failed');
         return res.status(500).json({ error: 'ナレッジ追加に失敗しました' });

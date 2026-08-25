@@ -1093,6 +1093,40 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
   {
     type: 'function',
     function: {
+      name: 'approve_gap_recommendation',
+      description:
+        '未対応の知識ギャップに対する推薦を承認する（このツール自体はFAQを作らない。承認後に add_knowledge_from_gap でFAQ化できるようになるだけ）。応答には元の質問文・検出源・出現頻度を必ず含めるので、そのままユーザーに提示すること。必ず先にどの質問を承認するか提示し、明確な同意を得たターンでのみ confirmed=true を指定して呼び出すこと。',
+      parameters: {
+        type: 'object',
+        properties: {
+          gap_id: { type: 'number', description: 'get_knowledge_gapsの結果に含まれるギャップID' },
+          confirmed: { type: 'boolean', description: '確認フラグ（true でのみ実行される）' },
+        },
+        required: ['gap_id', 'confirmed'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'add_knowledge_from_gap',
+      description:
+        '承認済み（approve_gap_recommendation 済み）の知識ギャップから新しいFAQを作成し、そのギャップを解決済みにする。作成したFAQは公開状態になり、以降の顧客対応にそのまま使われる。未承認のギャップに対して呼ぶとエラーになる。必ず先に質問文・回答案をユーザーに提示して明確な同意を得たターンでのみ confirmed=true を指定して呼び出すこと。',
+      parameters: {
+        type: 'object',
+        properties: {
+          gap_id: { type: 'number', description: 'get_knowledge_gapsの結果に含まれ、approve_gap_recommendationで承認済みのギャップID' },
+          answer_text: { type: 'string', description: 'このギャップの質問に対する回答文（そのままFAQのanswerとして公開される）' },
+          category: { type: 'string', description: 'FAQのカテゴリ（任意）' },
+          confirmed: { type: 'boolean', description: '確認フラグ（true でのみ実行される）' },
+        },
+        required: ['gap_id', 'answer_text', 'confirmed'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'suggest_faq',
       description:
         '店舗管理者の自然な言葉による指示から、FAQ（質問・回答・分類）の下書きを生成する。書き込みは行わない読み取り専用ツール。提案内容は必ずユーザーに提示して明確な同意を得てから save_faq で保存すること。',
