@@ -16,7 +16,10 @@ interface EscalationSummary {
   last_message_at: string;
   message_count: number;
   first_message_preview: string;
+  source: string | null;
 }
+
+type SourceFilter = "user" | "all";
 
 const POLL_INTERVAL_MS = 8000;
 
@@ -28,6 +31,9 @@ export default function EscalationsPage() {
   const [escalations, setEscalations] = useState<EscalationSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // GID 1217808492496192: e2e等のテストトラフィックを既定で除外する。
+  // chat-history画面の source バッジ/絞り込みと同じ語彙に揃える。
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>("user");
 
   const locale = lang === "en" ? "en-US" : "ja-JP";
 
@@ -38,6 +44,8 @@ export default function EscalationsPage() {
       // ?tenant= を渡さない限り全テナントを返してしまう（GID 1216277595663810 と同パターン）。
       const params = new URLSearchParams();
       if (previewMode && previewTenantId) params.set("tenant", previewTenantId);
+      // 既定(user)はサーバー側の既定値と一致するため送らない(chat-history の period と同じ作法)。
+      if (sourceFilter === "all") params.set("source", "all");
       const qs = params.toString();
       const res = await authFetch(`${API_BASE}/v1/admin/chat-history/escalations${qs ? `?${qs}` : ""}`);
       if (!res.ok) throw new Error();
@@ -49,7 +57,7 @@ export default function EscalationsPage() {
     } finally {
       setLoading(false);
     }
-  }, [previewMode, previewTenantId]);
+  }, [previewMode, previewTenantId, sourceFilter]);
 
   useEffect(() => {
     void loadEscalations();
@@ -102,6 +110,22 @@ export default function EscalationsPage() {
         </div>
       )}
 
+      {/* Filter bar: chat-history画面の絞り込みセレクトと同じ見た目 */}
+      <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+        <select
+          value={sourceFilter}
+          onChange={(e) => setSourceFilter(e.target.value as SourceFilter)}
+          style={{
+            padding: "8px 12px", minHeight: 38, borderRadius: 10,
+            border: "1px solid var(--border)", background: "var(--card)",
+            color: "var(--foreground)", fontSize: 13, cursor: "pointer",
+          }}
+        >
+          <option value="user">実ユーザーのみ</option>
+          <option value="all">すべて（テスト含む）</option>
+        </select>
+      </div>
+
       {loading ? (
         <div style={{ padding: 40, textAlign: "center", color: "var(--muted-foreground)" }}>
           <span style={{ display: "block", fontSize: 32, marginBottom: 8 }}>⏳</span>
@@ -144,6 +168,22 @@ export default function EscalationsPage() {
                   <span style={{ padding: "3px 10px", borderRadius: 999, background: "rgba(234,179,8,0.18)", border: "1px solid rgba(234,179,8,0.4)", color: "#fbbf24", fontSize: 12, fontWeight: 700 }}>
                     🔔 対応待ち
                   </span>
+                  {esc.source && esc.source !== "user" && (
+                    <span
+                      title="E2E/内部テストなど実ユーザー以外の会話"
+                      style={{
+                        padding: "3px 10px",
+                        borderRadius: 999,
+                        background: "rgba(148,163,184,0.15)",
+                        border: "1px solid rgba(148,163,184,0.3)",
+                        color: "#94a3b8",
+                        fontSize: 12,
+                        fontWeight: 600,
+                      }}
+                    >
+                      {esc.source}
+                    </span>
+                  )}
                 </div>
                 {esc.first_message_preview && (
                   <span style={{ fontSize: 15, color: "var(--foreground)", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>

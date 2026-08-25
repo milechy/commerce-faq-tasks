@@ -46,7 +46,7 @@ describe("Chat History Escalation API", () => {
     it("super_admin → 全テナントの一覧 200", async () => {
       mockGetActiveEscalations.mockResolvedValueOnce({
         escalations: [
-          { id: "s1", tenant_id: "tenant-a", session_id: "sess-1", escalated_at: "2026-01-01T00:00:00Z", last_message_at: "2026-01-01T00:00:00Z", message_count: 3, first_message_preview: "help" },
+          { id: "s1", tenant_id: "tenant-a", session_id: "sess-1", escalated_at: "2026-01-01T00:00:00Z", last_message_at: "2026-01-01T00:00:00Z", message_count: 3, first_message_preview: "help", source: "user" },
         ],
         total: 1,
       });
@@ -55,7 +55,8 @@ describe("Chat History Escalation API", () => {
         .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`);
       expect(res.status).toBe(200);
       expect(res.body.escalations).toHaveLength(1);
-      expect(mockGetActiveEscalations).toHaveBeenCalledWith(undefined);
+      // GID 1217808492496192: source未指定は既定で'user'(e2e等を除外)をrepositoryに渡す
+      expect(mockGetActiveEscalations).toHaveBeenCalledWith(undefined, undefined, "user");
     });
 
     it("client_admin → 自テナントのみ 200", async () => {
@@ -64,7 +65,7 @@ describe("Chat History Escalation API", () => {
         .get("/v1/admin/chat-history/escalations")
         .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`);
       expect(res.status).toBe(200);
-      expect(mockGetActiveEscalations).toHaveBeenCalledWith("tenant-a");
+      expect(mockGetActiveEscalations).toHaveBeenCalledWith("tenant-a", undefined, "user");
     });
 
     it("認証なし → 401", async () => {

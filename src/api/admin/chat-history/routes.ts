@@ -321,10 +321,12 @@ export function registerChatHistoryRoutes(app: Express): void {
         return res.status(403).json({ error: "この操作を実行する権限がありません" });
       }
       const tenantFilter = resolveTenantFilter(req, jwtTenantId, isSuperAdmin);
+      // 未指定/不正値は既定の 'user' にフォールバックする(安全側)。'all' のときだけ全件。
+      const source = req.query["source"] === "all" ? "all" : "user";
 
       try {
         // limit を渡さないため従来どおり全件。レスポンスの形も従来と同一。
-        const { escalations, total } = await getActiveEscalations(tenantFilter);
+        const { escalations, total } = await getActiveEscalations(tenantFilter, undefined, source);
         return res.json({ escalations, total });
       } catch (err) {
         logger.warn("[GET /v1/admin/chat-history/escalations]", err);
