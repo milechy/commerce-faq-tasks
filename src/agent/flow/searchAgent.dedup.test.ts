@@ -105,4 +105,40 @@ describe("runSearchAgent — pgvector 重複検索の解消", () => {
 
     expect(result.ragSources).toEqual([]);
   });
+
+  it("ナレッジ配線是正P9: source='book:pdf:qwen-ocr'(OCR由来)もragSourcesでbook扱いになる(faqへの誤ラベル防止)", async () => {
+    mockedSearchPgVector.mockResolvedValue({
+      items: [
+        {
+          id: "ocr-1",
+          text: "OCRチャンク",
+          score: 0.9,
+          source: "pgvector" as const,
+          metadata: { source: "book:pdf:qwen-ocr", page: 3 },
+        },
+      ],
+      ms: 5,
+    });
+
+    const result = await runSearchAgent({ q: "書籍の質問", tenantId: "tenant-1" });
+
+    const ocrSource = (result.ragSources ?? []).find((s) => s.chunk_id === "ocr-1");
+    expect(ocrSource?.source).toBe("book");
+  });
+
+  it("回帰: source='faq'や未設定はfaq扱いのまま(startsWith緩和で誤って全てbookにならない)", async () => {
+    mockedSearchPgVector.mockResolvedValue({
+      items: [
+        { id: "faq-1", text: "FAQチャンク", score: 0.9, source: "pgvector" as const, metadata: { source: "faq" } },
+        { id: "faq-2", text: "旧データ", score: 0.8, source: "pgvector" as const },
+      ],
+      ms: 5,
+    });
+
+    const result = await runSearchAgent({ q: "普通の質問", tenantId: "tenant-1" });
+
+    const sources = result.ragSources ?? [];
+    expect(sources.find((s) => s.chunk_id === "faq-1")?.source).toBe("faq");
+    expect(sources.find((s) => s.chunk_id === "faq-2")?.source).toBe("faq");
+  });
 });

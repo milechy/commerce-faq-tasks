@@ -4,6 +4,7 @@
 
 import { pool } from '../../lib/db';
 import { createNotification, notificationExists } from '../../lib/notifications';
+import { userSourceExistsForTable } from '../admin/analytics/summaryQueries';
 
 export interface AutoTuningCandidate {
   type: 'judge_repeated' | 'ab_winner' | 'effectiveness_top';
@@ -30,6 +31,7 @@ export async function detectRepeatedJudgeSuggestions(
        WHERE tenant_id = $1
          AND created_at >= NOW() - INTERVAL '30 days'
          AND suggested_rules IS NOT NULL
+         ${userSourceExistsForTable("conversation_evaluations", "conversation_evaluations")}
        GROUP BY rule
        HAVING COUNT(*) >= 3
        ORDER BY cnt DESC
@@ -108,6 +110,7 @@ export async function detectTopPrinciples(
        FROM conversion_attributions
        WHERE tenant_id = $1
          AND created_at >= NOW() - INTERVAL '30 days'
+         ${userSourceExistsForTable("conversion_attributions", "conversion_attributions")}
        GROUP BY principle
        HAVING COUNT(*) >= 5
        ORDER BY total DESC

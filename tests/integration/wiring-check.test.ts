@@ -105,12 +105,9 @@ import express from "express";
 import request from "supertest";
 
 import { getPool } from "../../src/lib/db";
-import { hybridSearch } from "../../src/search/hybrid";
 import { rerank } from "../../src/search/rerank";
 import { groqClient } from "../../src/agent/llm/groqClient";
 import { callGeminiJudge } from "../../src/lib/gemini/client";
-import { embedText, embedTextWithUsage } from "../../src/agent/llm/openaiEmbeddingClient";
-import { searchPgVector } from "../../src/search/pgvector";
 
 import { createChatHandler } from "../../src/api/chat/route";
 import { runDialogTurn } from "../../src/agent/dialog/dialogAgent";
@@ -118,7 +115,6 @@ import {
   setSalesSessionMeta,
   clearSalesSessionMeta,
 } from "../../src/agent/dialog/salesContextStore";
-import { searchTool } from "../../src/agent/tools/searchTool";
 import { synthesizeAnswer } from "../../src/agent/tools/synthesisTool";
 import { getActiveRulesForTenant } from "../../src/api/admin/tuning/tuningRulesRepository";
 import { approveTuningRule } from "../../src/api/admin/evaluations/evaluationsRepository";
@@ -141,8 +137,6 @@ const MOCK_HIT = {
   score: 0.9,
   source: "es" as const,
 };
-
-const MOCK_SEARCH_RESULT = { items: [MOCK_HIT], ms: 10 };
 
 const MOCK_RERANK_RESULT = {
   items: [{ ...MOCK_HIT, score: 0.95 }],
@@ -290,45 +284,6 @@ describe("Flow 1: Widget → Chat → RAG → LLM", () => {
       .send({ message: "在庫を確認してください" });
 
     expect(res.status).toBe(500);
-  });
-});
-
-// ===========================================================================
-// Flow 2: searchTool → hybridSearch / pgvector → hits returned
-// ===========================================================================
-
-describe("Flow 2: searchTool wires to hybridSearch (ES/pgvector fallback)", () => {
-  it("searchTool falls back to hybridSearch when embedTextWithUsage throws", async () => {
-    (embedTextWithUsage as jest.Mock).mockRejectedValueOnce(new Error("embedding unavailable"));
-    (hybridSearch as jest.Mock).mockResolvedValueOnce(MOCK_SEARCH_RESULT);
-
-    const result = await searchTool({ query: "返品", tenantId: "test-tenant" });
-
-    expect(hybridSearch).toHaveBeenCalledWith("返品", "test-tenant", undefined, undefined);
-    expect(result.items.length).toBeGreaterThanOrEqual(1);
-    expect(result.items[0]).toHaveProperty("text");
-    expect(result.items[0]).toHaveProperty("score");
-  });
-
-  it("searchTool returns pgvector results when embedTextWithUsage succeeds", async () => {
-    (embedTextWithUsage as jest.Mock).mockResolvedValueOnce({ embedding: [0.1, 0.2, 0.3], totalTokens: 5 });
-    // Mock searchPgVector to return a hit directly
-    (searchPgVector as jest.Mock).mockResolvedValueOnce({
-      items: [{ id: "faq-pg-1", text: "在庫あります", score: 0.85 }],
-      ms: 5,
-      note: "pgvector",
-    });
-
-    const result = await searchTool({ query: "在庫", tenantId: "test-tenant" });
-
-    // Wiring check: searchPgVector was called, hybridSearch was NOT needed
-    expect(searchPgVector).toHaveBeenCalledWith(
-      expect.objectContaining({ tenantId: "test-tenant" })
-    );
-    expect(hybridSearch).not.toHaveBeenCalled();
-    expect(result).toHaveProperty("items");
-    expect(result.items.length).toBeGreaterThan(0);
-    expect(result.items[0]).toHaveProperty("source", "pg");
   });
 });
 

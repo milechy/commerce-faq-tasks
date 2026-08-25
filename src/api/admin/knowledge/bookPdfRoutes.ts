@@ -11,6 +11,7 @@ import AdmZip from "adm-zip";
 import type { Pool } from "pg";
 import { supabaseAdmin } from "../../../auth/supabaseClient";
 import { pipelineQueue } from "../../../lib/book-pipeline/pipelineQueue";
+import { deleteBookChunkFromEs } from "../../../lib/book-pipeline/embedAndStore";
 import { decryptText } from "../../../lib/crypto/textEncrypt";
 import { logger } from '../../../lib/logger';
 
@@ -224,6 +225,16 @@ async function handleZipUpload(
 }
 
 // ── ルート登録 ─────────────────────────────────────────────────────────────
+// 2026-08-25 是正時に調査した結果、_requireKnowledgeTenant は意図的に未使用のまま
+// 残す。理由: この関数のミドルウェアは req.query.tenant / tenant_id からの
+// テナント一致判定であり、本ファイルの全7ルートは :id / :chunkId というパス
+// パラメータでリソースを特定する(query.tenant は送られない)。適用しても
+// requestedTenant が常に空のため実質的に何も検証せず通過するだけで、
+// 「多層防御が効いている」という誤った安心感だけを与える。実際の所有者検証は
+// 各ルート内のDBルックアップ+tenant_id比較(:412,:461,:534,:661,:740,:809)が
+// 唯一の実装であり、これを2箇所目の実装に複製しない(CLAUDE.md 禁止6)。
+// POST /book-pdf(アップロード)は別途 super_admin 限定のインライン判定を持つため
+// なおさら不要(requireKnowledgeTenant は super_admin を無条件通過させる)。
 export function registerBookPdfRoutes(
   app: Express,
   db: Pool,
@@ -477,12 +488,32 @@ export function registerBookPdfRoutes(
           }
         }
 
+        // ES ドキュメントIDを先に確認しておく(削除後には計算できないため)。
+        // 2026-08-25 是正: 以前は faq_embeddings のみ削除し ES を残していたため、
+        // 削除した書籍が BM25 検索で引け続けていた。
+        const chunkRows = await db.query<{ chunk_index: number }>(
+          `SELECT (metadata->>'chunk_index')::int AS chunk_index
+           FROM faq_embeddings
+           WHERE metadata->>'source' = 'book' AND metadata->>'book_id' = $1::text`,
+          [id]
+        );
+
         // 関連 faq_embeddings 削除
         await db.query(
           `DELETE FROM faq_embeddings
            WHERE metadata->>'source' = 'book' AND metadata->>'book_id' = $1::text`,
           [id]
         );
+
+        // ES ドキュメント削除(best-effort)
+        const esUrl = process.env.ES_URL;
+        if (esUrl) {
+          await Promise.all(
+            chunkRows.rows.map((r) =>
+              deleteBookChunkFromEs(esUrl, book.tenant_id, `book_${id}_chunk_${r.chunk_index}`)
+            )
+          );
+        }
 
         // book_uploads レコード削除
         await db.query("DELETE FROM book_uploads WHERE id = $1", [id]);
