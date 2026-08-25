@@ -12,7 +12,12 @@ jest.mock('stripe', () => {
   }));
 }, { virtual: true });
 
-import { PLAN_MULTIPLIERS, planMultiplier, lemonsliceShareJpy, monthlyShareJpy, getLemonsliceMonthlyFeeJpy, getLivekitMonthlyFeeJpy, getPlatformMonthlyFeeJpy, chargeOneOffJpy, anamSessionBillableUnits, reportUsageToStripe } from './stripeSync';
+import { lemonsliceShareJpy, monthlyShareJpy, getLemonsliceMonthlyFeeJpy, getLivekitMonthlyFeeJpy, getPlatformMonthlyFeeJpy, chargeOneOffJpy, anamSessionBillableUnits, reportUsageToStripe } from './stripeSync';
+// PLAN_MULTIPLIERS/planMultiplier の定義自体は planPricing.ts にある。stripeSync.ts の
+// re-export は本番コードのどこからも使われておらず(usageTracker.ts は直接 './planPricing'
+// から import している)、テストの都合だけで生き残っていた「後方互換」名目の二重管理
+// だったため、ここも定義元から直接importする形に揃えた。
+import { PLAN_MULTIPLIERS, planMultiplier } from './planPricing';
 
 describe('planMultiplier', () => {
   it('プラン別の倍率を返す（Free(広告表示) 0 / Starter 1.0 / Growth 1.5 / Enterprise 2.5）', () => {

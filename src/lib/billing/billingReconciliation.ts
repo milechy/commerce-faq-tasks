@@ -21,6 +21,13 @@
  * 今日のバッチがまだ走っていない)ため、突合の対象にすると常にノイズが出る。
  * 過去に閉じた月(created_at の範囲がすべて過去)は、C-2 の累積set方式のもとでは
  * 二度と新しい行が増えないため、再計算値は安定する。乖離があれば必ず異常。
+ *
+ * ★この監視も「有効化されるまで沈黙する」★
+ * 対象は stripe_usage_reports に行があるテナントのみ(listTenantsToReconcile参照)。
+ * billing_enabled=true のテナントが1つも無い、または実際に請求送信を試みていない
+ * 環境では対象0件のまま常に「乖離なし」と等価な結果になる。この監視が拾えるのは
+ * 送信が実際に試みられて初めてであり、billingHealthCheck.ts と同じ理由・同じ設計
+ * (詳細はそちらのファイル冒頭コメント参照)。
  */
 import type pino from "pino";
 import { computeExpectedBilling, periodToDateRange, getPeriodYyyyMm } from "./stripeSync";

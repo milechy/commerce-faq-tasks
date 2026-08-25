@@ -48,11 +48,19 @@ export const REQUIRED_COLUMNS: Record<string, readonly string[]> = {
   feedback_messages: ["content", "sender_email", "sender_role", "tenant_id"],
   knowledge_gaps: ["detection_source", "frequency", "last_detected_at", "message_id", "rag_hit_count", "rag_top_score", "recommendation_status", "session_id", "tenant_id", "user_question"],
   learned_memory: ["answer", "embedding", "judge_score", "metadata", "question", "source_session_id", "tenant_id"],
+  // 月額固定費の按分課金・冪等性テーブル(migration_lemonslice_monthly.sql)。
+  // 未適用のまま _chargeMonthlyFixedShare が動くと INSERT が失敗し、按分請求が送れない。
+  lemonslice_monthly_charges: ["amount_jpy", "period_yyyymm", "tenant_count", "tenant_id"],
+  // LiveKit(Shipプラン)月額固定費の按分・冪等性テーブル(migration_livekit_monthly.sql)。
+  livekit_monthly_charges: ["amount_jpy", "period_yyyymm", "tenant_count", "tenant_id"],
   metrics_snapshots: ["labels", "metric_name", "tenant_id", "value"],
   notification_preferences: ["email_enabled", "in_app_enabled", "notification_type", "tenant_id", "threshold"],
   notifications: ["link", "message", "metadata", "recipient_role", "recipient_tenant_id", "title", "type"],
   objection_patterns: ["principle_used", "response_strategy", "sample_count", "source", "success_rate", "tenant_id", "trigger_phrase", "updated_at"],
   option_orders: ["chat_session_id", "description", "llm_estimate_amount", "status", "tenant_id", "type"],
+  // プラットフォーム共通費(Supabase/Cloudflare/Hetzner/ES)の按分・冪等性テーブル
+  // (migration_platform_monthly.sql)。
+  platform_monthly_charges: ["amount_jpy", "period_yyyymm", "tenant_count", "tenant_id"],
   sai_task_rules: ["created_by", "evidence", "expected_behavior", "priority", "source", "tenant_id", "trigger_pattern"],
   sai_tasks: ["description", "order_id", "requested_by", "task_id", "tenant_id"],
   // billed_quantity は migration_stripe_usage_reports_billed_quantity.sql で追加。
