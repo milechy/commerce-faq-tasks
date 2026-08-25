@@ -23,12 +23,31 @@
  */
 import { Pool } from "pg";
 import { computeExpectedBilling } from "./stripeSync";
+import { findMissingColumns, REQUIRED_COLUMNS } from "../../api/admin/analytics/schemaHealth";
 
 const DB_URL = process.env.BILLING_SQL_TEST_DATABASE_URL;
 
 // env未設定時はスキップする(describe.skip ではなく it.skip 相当にするため
 // describe 自体を切り替える。CIのPostgresジョブでのみ実行される)。
 const d = DB_URL ? describe : describe.skip;
+
+// schemaHealth.ts の REQUIRED_COLUMNS のうち、SCRIPTS/ci-billing-schema.sh が
+// 対象とする billing 関連テーブルだけを抜き出す。REQUIRED_COLUMNS には
+// chat_messages 等の非billingテーブルも含まれており、ci-billing-schema.sh は
+// それらを作らないため全件チェックはできない(2026-08-25 収益監査で
+// stripe_webhook_events がこの2つの間で食い違っていたことが発覚した本人)。
+const BILLING_TABLES = [
+  "billing_adjustments",
+  "lemonslice_monthly_charges",
+  "livekit_monthly_charges",
+  "platform_monthly_charges",
+  "stripe_usage_reports",
+  "stripe_webhook_events",
+  "usage_logs",
+] as const;
+const BILLING_REQUIRED_COLUMNS = Object.fromEntries(
+  BILLING_TABLES.map((t) => [t, REQUIRED_COLUMNS[t]])
+);
 
 d("computeExpectedBilling（実 Postgres に対する集計SQL実行）", () => {
   let db: Pool;
@@ -144,5 +163,27 @@ d("computeExpectedBilling（実 Postgres に対する集計SQL実行）", () => 
     `);
     const result = await computeExpectedBilling(db, "t1", "2026-03-01", "2026-04-01", "growth");
     expect(result.billedQuantity).toBe(5);
+  });
+
+  // PR-6(2026-08-25 収益監査): SCRIPTS/ci-billing-schema.sh の FILES 配列と
+  // schemaHealth.ts の REQUIRED_COLUMNS が食い違うと、CI は緑のまま本番だけ
+  // 列が欠落する事故が起きる(stripe_webhook_events で実際に発生していた)。
+  // ci-billing-schema.sh が作った実DBに対して REQUIRED_COLUMNS を直接照合し、
+  // 2つの情報源が同期していることを実行時に固定する。
+  it("ci-billing-schema.sh が作るテーブルは schemaHealth.ts の REQUIRED_COLUMNS を全て満たす", async () => {
+    const rows = await db.query<{ table_name: string; column_name: string }>(
+      `SELECT table_name, column_name
+         FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = ANY($1)`,
+      [Object.keys(BILLING_REQUIRED_COLUMNS)]
+    );
+    const actual = new Map<string, Set<string>>();
+    for (const r of rows.rows) {
+      const set = actual.get(r.table_name) ?? new Set<string>();
+      set.add(r.column_name);
+      actual.set(r.table_name, set);
+    }
+    const missing = findMissingColumns(actual, BILLING_REQUIRED_COLUMNS);
+    expect(missing).toEqual([]);
   });
 });
