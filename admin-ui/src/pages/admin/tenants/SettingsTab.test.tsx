@@ -153,3 +153,89 @@ describe("SettingsTab — allowed_origins バリデーション", () => {
     });
   });
 });
+
+describe("SettingsTab — 許可ドメインの警告表示(保存はブロックしない)", () => {
+  let onSave: (data: {
+    name: string;
+    status: "active" | "inactive";
+    allowed_origins: string[];
+    system_prompt?: string;
+    tenant_contact_email?: string | null;
+  }) => Promise<void>;
+  let onBillingUpdate: (updated: TenantDetail) => void;
+  let updateBilling: (
+    tenantId: string,
+    billing_enabled: boolean,
+    billing_free_from: string | null,
+    billing_free_until: string | null
+  ) => Promise<TenantDetail>;
+  let onSaveMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    onSaveMock = vi.fn().mockResolvedValue(undefined);
+    onSave = onSaveMock as unknown as typeof onSave;
+    onBillingUpdate = vi.fn();
+    updateBilling = vi.fn() as unknown as typeof updateBilling;
+  });
+
+  function renderTab(tenant = makeTenant()) {
+    return render(
+      <SettingsTab
+        tenant={tenant}
+        isSuperAdmin={true}
+        onSave={onSave}
+        onBillingUpdate={onBillingUpdate}
+        updateBilling={updateBilling}
+      />
+    );
+  }
+
+  function getOriginsTextarea(): HTMLTextAreaElement {
+    const textareas = screen.getAllByRole("textbox") as HTMLTextAreaElement[];
+    const el = textareas.find((t) => t.tagName === "TEXTAREA" && t.value !== undefined);
+    return (el ?? textareas[0]) as HTMLTextAreaElement;
+  }
+
+  function submit() {
+    const button = screen.getByText("tenant_detail.save_settings");
+    fireEvent.click(button);
+  }
+
+  it("許可ドメインが空のまま保存すると警告が出るが、保存は実行される", async () => {
+    renderTab();
+    // originsText は初期状態で空(makeTenant の allowed_origins: [])
+    submit();
+
+    expect(screen.getByText(/許可ドメインが空です/)).toBeTruthy();
+    await waitFor(() => {
+      expect(onSaveMock).toHaveBeenCalledWith(expect.objectContaining({ allowed_origins: [] }));
+    });
+  });
+
+  it("R2C自身のドメインのみで保存すると警告が出るが、保存は実行される", async () => {
+    renderTab();
+    const textarea = getOriginsTextarea();
+    fireEvent.change(textarea, { target: { value: "https://admin.r2c.biz" } });
+    submit();
+
+    expect(screen.getByText(/管理画面のURLしか入っていません/)).toBeTruthy();
+    await waitFor(() => {
+      expect(onSaveMock).toHaveBeenCalledWith(
+        expect.objectContaining({ allowed_origins: ["https://admin.r2c.biz"] })
+      );
+    });
+  });
+
+  it("テナントの実ドメインが入っていれば警告は出ない", async () => {
+    renderTab();
+    const textarea = getOriginsTextarea();
+    fireEvent.change(textarea, { target: { value: "https://shop.example.com" } });
+    submit();
+
+    await waitFor(() => {
+      expect(onSaveMock).toHaveBeenCalled();
+    });
+    expect(screen.queryByText(/許可ドメインが空です/)).toBeNull();
+    expect(screen.queryByText(/管理画面のURLしか入っていません/)).toBeNull();
+  });
+});

@@ -3,6 +3,7 @@ import { useLang } from "../../../i18n/LangContext";
 import { BillingSection } from "./BillingSection";
 import type { TenantDetail } from "./types";
 import { CARD_STYLE, INPUT_STYLE, LABEL_STYLE } from "./types";
+import { buildOriginWarning } from "../../../lib/tenantOriginWarning";
 
 // ─── タブ: 設定 ───────────────────────────────────────────────────────────────
 
@@ -32,6 +33,8 @@ export function SettingsTab({
   const [contactEmail, setContactEmail] = useState(tenant.tenant_contact_email ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 保存をブロックしない警告(意図的に空にする運用があるため)。null なら非表示。
+  const [warning, setWarning] = useState<string | null>(null);
 
   const parseOrigins = (raw: string): string[] =>
     raw.split("\n").map((s) => s.trim()).filter((s) => s.length > 0);
@@ -56,6 +59,8 @@ export function SettingsTab({
       );
       return;
     }
+    // 保存はブロックしない警告。意図的に空にする運用がありうるため表示のみ。
+    setWarning(buildOriginWarning(allowed_origins));
     setSaving(true);
     setError(null);
     try {
@@ -82,6 +87,24 @@ export function SettingsTab({
           }}
         >
           {error}
+        </div>
+      )}
+
+      {warning && (
+        <div
+          role="alert"
+          style={{
+            marginBottom: 16,
+            padding: "12px 16px",
+            borderRadius: 10,
+            background: "rgba(120,53,15,0.35)",
+            border: "1px solid rgba(251,191,36,0.4)",
+            color: "#fbbf24",
+            fontSize: 14,
+            lineHeight: 1.6,
+          }}
+        >
+          ⚠️ {warning}
         </div>
       )}
 
