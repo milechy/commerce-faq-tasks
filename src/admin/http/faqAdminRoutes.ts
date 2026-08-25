@@ -9,7 +9,8 @@ import { upsertFaqToEs, deleteFaqFromEs } from "../../lib/knowledge/faqIndexSync
 // es_doc_id 列は使用しない: 非NULL値を書き込む箇所がコードベース全体に無く、
 // 索引同期は src/lib/knowledge/faqIndexSync.ts の `${faqId}_${tenantId}` 規約に
 // 一本化されている（faqCrudRoutes.ts / actionExecutor.ts / faqImport.ts と共通）。
-// 列自体はDBに残るがコードからは参照しない。
+// 列自体はDBに残るが、2026-08-25(ナレッジ配線是正P4)時点でSQL文字列からも
+// 参照を外した(DROP migrationは別途用意し適用は運用作業とする)。
 
 type FaqRow = {
   id: number;
@@ -120,7 +121,7 @@ export function registerFaqAdminRoutes(app: Express) {
       const result = tenantId
         ? await db.query<FaqRow>(
             `
-            SELECT id, tenant_id, question, answer, category, es_doc_id,
+            SELECT id, tenant_id, question, answer, category,
                    tags, is_published, created_at, updated_at
             FROM faq_docs
             WHERE tenant_id = $1
@@ -131,7 +132,7 @@ export function registerFaqAdminRoutes(app: Express) {
           )
         : await db.query<FaqRow>(
             `
-            SELECT id, tenant_id, question, answer, category, es_doc_id,
+            SELECT id, tenant_id, question, answer, category,
                    tags, is_published, created_at, updated_at
             FROM faq_docs
             ORDER BY id DESC
@@ -176,7 +177,6 @@ export function registerFaqAdminRoutes(app: Express) {
           question,
           answer,
           category,
-          es_doc_id,
           tags,
           is_published,
           created_at,
@@ -227,17 +227,15 @@ export function registerFaqAdminRoutes(app: Express) {
           answer,
           category,
           tags,
-          is_published,
-          es_doc_id
+          is_published
         )
-        VALUES ($1, $2, $3, $4, $5, COALESCE($6, true), NULL)
+        VALUES ($1, $2, $3, $4, $5, COALESCE($6, true))
         RETURNING
           id,
           tenant_id,
           question,
           answer,
           category,
-          es_doc_id,
           tags,
           is_published,
           created_at,
@@ -322,7 +320,6 @@ export function registerFaqAdminRoutes(app: Express) {
           question,
           answer,
           category,
-          es_doc_id,
           tags,
           is_published,
           created_at,

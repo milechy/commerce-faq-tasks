@@ -147,6 +147,7 @@ VITE_SUPABASE_ANON_KEY=YOUR_ANON_KEY
 | `src/lib/billing/migration_stripe_webhook_events.sql` | 同ファイル: `completed_at` カラム追加（2状態管理。ハンドラ失敗後の再送で副作用が永久にスキップされる問題の解消）。**テーブル作成分を先に適用済みの環境でも、この列のために再実行が必要** | ⬜ 未適用 |
 | `src/migrations/phase75_conversation_evaluations_unique.sql` | 重複評価行の削除 + `UNIQUE(tenant_id, session_id)` 追加。judge の `ON CONFLICT` がターゲット無しで実質no-opだったため同一セッションの評価が重複し、KPI平均が下振れしていた。**★migration → デプロイの順。逆順は評価INSERTが全件失敗** | ⬜ 未適用 |
 | `src/migrations/phase75_tuning_rules_unique.sql` | 重複ルールの削除 + `UNIQUE(tenant_id, trigger_pattern)` 追加。同上（`evaluationAnalyzer` がコメントで謳っていた一意性がDB側に無かった）。**★migration → デプロイの順** | ⬜ 未適用 |
+| `src/api/admin/knowledge/migration_drop_es_doc_id.sql` | ナレッジ配線是正P4: faq_docs.es_doc_id(常にNULLで一度も埋まらない死列)を削除。コード側の参照は先行PRで除去済み。**適用前に `SELECT COUNT(*) FROM faq_docs WHERE es_doc_id IS NOT NULL;` で0件確認** | ⬜ 未適用 |
 
 ### Phase A Day 2 migration 実行手順
 
