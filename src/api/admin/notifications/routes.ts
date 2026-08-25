@@ -68,6 +68,7 @@ export function registerNotificationRoutes(app: Express): void {
       return denyNotificationRole(req, res, su, role);
     }
     const isReadParam = req.query['is_read'] as string | undefined;
+    const typeParam = req.query['type'] as string | undefined;
     const limit = Math.min(parseInt((req.query['limit'] as string) ?? '20', 10), 100);
     const offset = Math.max(0, parseInt((req.query['offset'] as string) ?? '0', 10));
 
@@ -84,32 +85,39 @@ export function registerNotificationRoutes(app: Express): void {
         baseValues.push(tenantId);
       }
 
-      // Unread count (role-filtered only, no is_read filter)
+      // Unread count (role-filtered only, no is_read/type filter)
       const unreadResult = await pool.query(
         `SELECT COUNT(*) AS cnt FROM notifications WHERE ${roleClause} AND is_read = false`,
         baseValues,
       );
       const unread_count = parseInt(unreadResult.rows[0]?.cnt ?? '0', 10);
 
-      // is_read フィルタ
+      // is_read / type フィルタ（typeはbaseValuesの直後の位置番号を割り当てる）
       let isReadClause = '';
       if (isReadParam === 'false') isReadClause = ' AND is_read = false';
       else if (isReadParam === 'true') isReadClause = ' AND is_read = true';
 
+      let typeClause = '';
+      const filterValues = [...baseValues];
+      if (typeParam) {
+        filterValues.push(typeParam);
+        typeClause = ` AND type = $${filterValues.length}`;
+      }
+
       // Total
       const countResult = await pool.query(
-        `SELECT COUNT(*) AS cnt FROM notifications WHERE ${roleClause}${isReadClause}`,
-        baseValues,
+        `SELECT COUNT(*) AS cnt FROM notifications WHERE ${roleClause}${isReadClause}${typeClause}`,
+        filterValues,
       );
       const total = parseInt(countResult.rows[0]?.cnt ?? '0', 10);
 
-      const queryValues = [...baseValues, limit, offset];
+      const queryValues = [...filterValues, limit, offset];
       const limIdx = queryValues.length - 1; // limit の $n
       const offIdx = queryValues.length;     // offset の $n
 
       const itemsResult = await pool.query(
         `SELECT * FROM notifications
-         WHERE ${roleClause}${isReadClause}
+         WHERE ${roleClause}${isReadClause}${typeClause}
          ORDER BY created_at DESC
          LIMIT $${limIdx} OFFSET $${offIdx}`,
         queryValues,

@@ -110,6 +110,25 @@ describe("GET /v1/admin/notifications", () => {
     expect(itemsCall[0]).toContain("is_read = false");
   });
 
+  it("?type=auto_tuning_suggestion フィルタが適用される（conversion/index.tsxの改善提案セクションが依存）", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ cnt: "1" }] }); // unread
+    mockQuery.mockResolvedValueOnce({ rows: [{ cnt: "1" }] }); // total with filter
+    mockQuery.mockResolvedValueOnce({ rows: [
+      { id: 3, type: "auto_tuning_suggestion", title: "改善提案があります", message: "同じ質問が繰り返されています", is_read: false, created_at: new Date().toISOString() },
+    ] });
+
+    const res = await request(makeApp("client_admin", "tenant-b")).get(
+      "/v1/admin/notifications?type=auto_tuning_suggestion&is_read=false",
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.items).toHaveLength(1);
+    expect(res.body.items[0].type).toBe("auto_tuning_suggestion");
+
+    const itemsCall = mockQuery.mock.calls[2];
+    expect(itemsCall[0]).toContain("type = $2");
+    expect(itemsCall[1]).toContain("auto_tuning_suggestion");
+  });
+
   it("テーブル未作成時(42P01)は空配列を返す", async () => {
     const pgError = Object.assign(new Error("table not found"), { code: "42P01" });
     mockQuery.mockRejectedValueOnce(pgError);

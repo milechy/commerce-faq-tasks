@@ -196,6 +196,18 @@ jest.mock('../analytics/summaryQueries', () => ({
     `AND EXISTS (SELECT 1 FROM chat_sessions cs WHERE cs.${chatSessionsColumn} = ${sessionIdExpr} AND cs.tenant_id = ${tenantIdExpr} AND cs.metadata->>'source' = 'user')`,
 }));
 
+// get_ab_test_results が使う依存をモック
+const mockComputeAbExperimentResults = jest.fn();
+const mockFetchAbExperimentsOverview = jest.fn();
+jest.mock('../../conversion/abResultsQuery', () => ({
+  computeAbExperimentResults: (...args: any[]) => mockComputeAbExperimentResults(...args),
+  fetchAbExperimentsOverview: (...args: any[]) => mockFetchAbExperimentsOverview(...args),
+}));
+const mockFetchUnreadNotificationsByType = jest.fn();
+jest.mock('../../../lib/notifications', () => ({
+  fetchUnreadNotificationsByType: (...args: any[]) => mockFetchUnreadNotificationsByType(...args),
+}));
+
 // logger モック
 jest.mock('../../../lib/logger', () => ({
   logger: { warn: jest.fn(), info: jest.fn(), error: jest.fn() },
@@ -9219,6 +9231,181 @@ describe('POST /v1/admin/agent/chat', () => {
       const res = await request(makeApp(SUPER_ADMIN_USER))
         .post('/v1/admin/agent/chat')
         .send({ message: '推移を見せて', sessionId: 'sess-at-04' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('テナントが特定できません');
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('get_ab_test_results', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    const SUGGESTIONS = [
+      { id: 1, title: '改善提案があります', message: '同じ質問が繰り返されています', metadata: { suggested_action: '送料FAQを追加する' } },
+    ];
+
+    it('growthプランなら実施中experimentの結果と改善提案をcard付きで返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-ab-1', 'get_ab_test_results'))
+        .mockResolvedValueOnce(makeGroqResponse('結果をお伝えします。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'growth' }] });
+      mockFetchAbExperimentsOverview.mockResolvedValueOnce([
+        { id: 1, name: 'CTA文言テスト', status: 'running', min_sample_size: 100, traffic_split: 0.5, created_at: '2026-08-01T00:00:00.000Z' },
+      ]);
+      mockComputeAbExperimentResults.mockResolvedValueOnce({
+        experiment_id: 1,
+        min_sample_size: 100,
+        total_exposed: 200,
+        reliable: true,
+        variants: {
+          a: { exposed: 100, reached_two_plus: 60, reached_two_plus_rate: 60, converted: 30, conversion_rate: 30, avg_judge_score: 75 },
+          b: { exposed: 100, reached_two_plus: 40, reached_two_plus_rate: 40, converted: 20, conversion_rate: 20, avg_judge_score: 65 },
+        },
+      });
+      mockFetchUnreadNotificationsByType.mockResolvedValueOnce(SUGGESTIONS);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ABテストの結果を教えて', sessionId: 'sess-ab-01' });
+
+      expect(res.status).toBe(200);
+      expect(mockFetchAbExperimentsOverview).toHaveBeenCalledWith(mockDb, 'tenant-abc', 5);
+      expect(mockComputeAbExperimentResults).toHaveBeenCalledWith(mockDb, 1, 100, 'tenant-abc');
+      expect(mockFetchUnreadNotificationsByType).toHaveBeenCalledWith('auto_tuning_suggestion', 'tenant-abc', 5);
+
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('CTA文言テスト');
+      expect(result).toContain('継続率60%/成約率30%');
+      expect(result).toContain('同じ質問が繰り返されています');
+
+      expect(res.body.actions[0].card).toEqual({
+        kind: 'ab_test_results',
+        experiments: [{
+          id: 1,
+          name: 'CTA文言テスト',
+          status: 'running',
+          minSampleSize: 100,
+          results: {
+            totalExposed: 200,
+            reliable: true,
+            warning: undefined,
+            variants: {
+              a: { exposed: 100, reachedTwoPlusRate: 60, conversionRate: 30, avgJudgeScore: 75 },
+              b: { exposed: 100, reachedTwoPlusRate: 40, conversionRate: 20, avgJudgeScore: 65 },
+            },
+          },
+        }],
+        suggestions: [{ id: 1, description: '同じ質問が繰り返されています', suggestedAction: '送料FAQを追加する' }],
+      });
+    });
+
+    it('draft(未開始)のexperimentはresultsを取得せずresults=nullを返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-ab-2', 'get_ab_test_results'))
+        .mockResolvedValueOnce(makeGroqResponse('結果をお伝えします。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'growth' }] });
+      mockFetchAbExperimentsOverview.mockResolvedValueOnce([
+        { id: 2, name: '準備中のテスト', status: 'draft', min_sample_size: 100, traffic_split: 0.5, created_at: '2026-08-01T00:00:00.000Z' },
+      ]);
+      mockFetchUnreadNotificationsByType.mockResolvedValueOnce([]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ABテストの状況を教えて', sessionId: 'sess-ab-02' });
+
+      expect(res.status).toBe(200);
+      expect(mockComputeAbExperimentResults).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('未開始');
+      expect(res.body.actions[0].card.experiments[0].results).toBeNull();
+    });
+
+    it('サンプルサイズ未到達(reliable=false)のexperimentは警告文をそのまま返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-ab-3', 'get_ab_test_results'))
+        .mockResolvedValueOnce(makeGroqResponse('結果をお伝えします。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'growth' }] });
+      mockFetchAbExperimentsOverview.mockResolvedValueOnce([
+        { id: 3, name: '件数不足のテスト', status: 'running', min_sample_size: 1000, traffic_split: 0.5, created_at: '2026-08-01T00:00:00.000Z' },
+      ]);
+      mockComputeAbExperimentResults.mockResolvedValueOnce({
+        experiment_id: 3,
+        min_sample_size: 1000,
+        total_exposed: 10,
+        reliable: false,
+        warning: 'サンプルサイズが min_sample_size(1000) に未到達です（現在 10 件）。この結果を意思決定に使わないでください。',
+        variants: { a: { exposed: 10, reached_two_plus: 2, reached_two_plus_rate: 20, converted: 1, conversion_rate: 10, avg_judge_score: 80 } },
+      });
+      mockFetchUnreadNotificationsByType.mockResolvedValueOnce([]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ABテストの結果を教えて', sessionId: 'sess-ab-03' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('意思決定に使わないでください');
+      expect(res.body.actions[0].card.experiments[0].results.reliable).toBe(false);
+    });
+
+    it('experimentも改善提案も0件なら両方「ありません/なし」と案内する', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-ab-4', 'get_ab_test_results'))
+        .mockResolvedValueOnce(makeGroqResponse('現在はどちらもありません。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'growth' }] });
+      mockFetchAbExperimentsOverview.mockResolvedValueOnce([]);
+      mockFetchUnreadNotificationsByType.mockResolvedValueOnce([]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ABテストの結果を教えて', sessionId: 'sess-ab-04' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('実施中/直近のA/Bテストはありません');
+      expect(res.body.actions[0].result).toContain('改善提案: なし');
+      expect(res.body.actions[0].card).toEqual({ kind: 'ab_test_results', experiments: [], suggestions: [] });
+    });
+
+    it('growthプラン未契約(starter)は拒否され、fetchAbExperimentsOverviewに到達しない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-ab-5', 'get_ab_test_results'))
+        .mockResolvedValueOnce(makeGroqResponse('プラン制限のためお伝えしました。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'starter' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ABテストの結果を教えて', sessionId: 'sess-ab-05' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('Growthプラン以上');
+      expect(mockFetchAbExperimentsOverview).not.toHaveBeenCalled();
+    });
+
+    it('super_adminがテナント未特定の場合はプラン制限ではなく「テナントが特定できません」を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-ab-6', 'get_ab_test_results'))
+        .mockResolvedValueOnce(makeGroqResponse('テナントを指定してください。'));
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'ABテストの結果を教えて', sessionId: 'sess-ab-06' });
 
       expect(res.status).toBe(200);
       expect(res.body.actions[0].result).toContain('テナントが特定できません');

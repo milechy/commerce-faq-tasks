@@ -102,7 +102,7 @@ describe('ConversionDashboardPage — プラン制限(403)の表示', () => {
     const PLAN_MSG = 'CV計測はGrowthプラン以上でご利用いただけます';
     vi.mocked(authFetch).mockImplementation((url) => {
       const u = String(url);
-      if (u.includes('/v1/admin/notifications')) return mockStatus(200, { notifications: [] });
+      if (u.includes('/v1/admin/notifications')) return mockStatus(200, { items: [] });
       return mockStatus(403, { error: 'plan_upgrade_required', message: PLAN_MSG });
     });
 
@@ -120,7 +120,7 @@ describe('ConversionDashboardPage — プラン制限(403)の表示', () => {
   it('500など通常のエラーでは「読み込みに失敗しました」+再試行を出し、プラン制限メッセージは出さない', async () => {
     vi.mocked(authFetch).mockImplementation((url) => {
       const u = String(url);
-      if (u.includes('/v1/admin/notifications')) return mockStatus(200, { notifications: [] });
+      if (u.includes('/v1/admin/notifications')) return mockStatus(200, { items: [] });
       return mockStatus(500, { error: 'internal_error' });
     });
 
@@ -136,7 +136,7 @@ describe('ConversionDashboardPage — プラン制限(403)の表示', () => {
   it('一部だけ200・一部だけ403でも、200で取得できたデータは表示される(並列取得の分離)', async () => {
     vi.mocked(authFetch).mockImplementation((url) => {
       const u = String(url);
-      if (u.includes('/v1/admin/notifications')) return mockStatus(200, { notifications: [] });
+      if (u.includes('/v1/admin/notifications')) return mockStatus(200, { items: [] });
       if (u.includes('/v1/admin/conversion/attributions')) {
         return mockStatus(200, { summary: { total: 7, by_type: {}, by_principle: {}, avg_temp_score: 42 } });
       }
@@ -147,6 +147,44 @@ describe('ConversionDashboardPage — プラン制限(403)の表示', () => {
 
     await waitFor(() => {
       expect(screen.getByText('7')).toBeTruthy();
+    });
+  });
+});
+
+// 改善提案セクションが常に空表示になっていた回帰テスト
+// (実装が /v1/admin/notifications のレスポンスキー `items` ではなく存在しない `notifications`
+//  を読んでいたため、実際に未読の auto_tuning_suggestion があってもUIには一切出ていなかった)
+describe('ConversionDashboardPage — 改善提案セクション', () => {
+  beforeEach(() => {
+    vi.mocked(useAuth).mockReturnValue(SUPER_ADMIN_PREVIEWING);
+    vi.mocked(authFetch).mockReset();
+  });
+
+  it('/v1/admin/notifications が items で返す未読提案を描画する', async () => {
+    vi.mocked(authFetch).mockImplementation((url) => {
+      const u = String(url);
+      if (u.includes('/v1/admin/notifications')) {
+        return mockStatus(200, {
+          items: [
+            {
+              id: 1,
+              type: 'auto_tuning_suggestion',
+              message: '同じ質問が繰り返されています',
+              metadata: { suggested_action: '送料に関するFAQを追加する', candidate_type: 'judge_repeated' },
+            },
+          ],
+          unread_count: 1,
+          total: 1,
+        });
+      }
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('同じ質問が繰り返されています')).toBeTruthy();
+      expect(screen.getByText(/送料に関するFAQを追加する/)).toBeTruthy();
     });
   });
 });

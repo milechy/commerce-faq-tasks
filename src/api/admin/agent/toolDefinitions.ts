@@ -1540,9 +1540,9 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
         'エスカレーションへの有人返信と対応完了はチャットから reply_to_escalation / resolve_escalation で' +
         '直接実行できるため、feature="escalation_reply" は「旧画面で会話の履歴を見返したい」と' +
         'ユーザーが明示した場合にのみ案内すること。' +
-        'また会話分析・成約/効果分析の「数値サマリー」は get_analytics_summary / get_conversion_summary で' +
-        'チャット上に直接返せるため、まずそちらを使うこと。この2機能でこのツールを使うのは、' +
-        'グラフの詳細・個別の低評価セッション・ABテスト結果を旧UIで見たい場合に限る。' +
+        'また会話分析・成約/効果分析は get_analytics_summary / get_analytics_trend / get_conversion_summary / ' +
+        'get_ab_test_results でチャット上に直接返せるため、まずそちらを使うこと。この4つでこのツールを使うのは、' +
+        'ユーザーが明示的に旧UIの画面そのものを見たいと言った場合に限る。' +
         'FAQごとの公開/非公開切替は set_faq_published で直接実行できるため、まずそちらを使うこと。' +
         'feature="faq_publish_toggle" は set_faq_published で対応できない場合にのみ使うこと' +
         '（まとめて非公開・まとめて削除をしたい場合は feature="faq_bulk_ops" を使うこと）。' +
@@ -1629,7 +1629,7 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
         '成約・効果分析の数値サマリー（会話数・結果記録率・成約率の推移・成果につながった' +
         'セールステクニック・離脱ステージ）をチャット上に直接返す読み取り専用ツール。' +
         '「成約につながっている?」「どのくらい売れている?」のように数字で答えられる質問にはこのツールを使うこと。' +
-        'ABテスト結果や詳細グラフを見たい場合のみ get_legacy_ui_link(conversion) で旧UIへ案内する。',
+        'ABテスト結果や改善提案を見たい場合は get_ab_test_results を使うこと。',
       parameters: {
         type: 'object',
         properties: {
@@ -1639,6 +1639,24 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
             enum: ['7d', '30d', '90d'],
           },
         },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_ab_test_results',
+      description:
+        '実施中/直近のA/Bテスト一覧とその結果（variant別の継続率・成約率、サンプルサイズが' +
+        '足りているか）、およびAIが自動検知した改善提案（同じ質問の繰り返し・成績の良いvariant等）を' +
+        'チャット上に直接返す読み取り専用ツール。「ABテストの結果は?」「どっちのvariantがいい?」' +
+        '「改善提案ある?」のように聞かれたときに使うこと。改善提案を実際にルールとして採用したいと' +
+        'ユーザーが言った場合は、提案文をそのまま suggest_tuning_rule に渡して続けること' +
+        '（この結果自体を保存する専用ツールは無い — 既存の指示ルール機能で完結する）。',
+      parameters: {
+        type: 'object',
+        properties: {},
         required: [],
       },
     },
