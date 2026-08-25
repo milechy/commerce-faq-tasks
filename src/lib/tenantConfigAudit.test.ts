@@ -3,6 +3,7 @@
 // P0-5 (GID 1217808301788163): SCRIPTS/audit-tenant-config.ts が使う判定関数のユニットテスト。
 
 import {
+  findUnmatchableOrigins,
   hasEmptyOrigins,
   isR2cOwnDomainOnly,
   hasInvalidOriginPattern,
@@ -91,6 +92,7 @@ describe("auditTenantConfig / hasAnyIssue", () => {
       emptyOrigins: false,
       r2cOwnDomainOnly: true,
       invalidOriginPattern: false,
+      unmatchableOrigins: [],
       emptySystemPrompt: true,
     });
     expect(hasAnyIssue(issues)).toBe(true);
@@ -102,5 +104,114 @@ describe("auditTenantConfig / hasAnyIssue", () => {
       systemPrompt: "あなたは心理学に詳しい接客担当です。",
     });
     expect(hasAnyIssue(issues)).toBe(false);
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// 壊れやすい点を突くテスト（2026-08-25 テスト強化）
+//
+// この監査が守りたい失敗モードは「値は入っているのに、実サイトでウィジェットが
+// 無言で止まる」こと。originCheck.ts の matchesPattern は完全一致で照合するため、
+// 表記揺れの登録は一件も一致しない = 全ページで止まる。ここを重点的に突く。
+// ───────────────────────────────────────────────────────────────────────────
+describe("isR2cOwnDomainOnly — 表記揺れで検出を取りこぼさない", () => {
+  it.each([
+    ["末尾スラッシュ", "https://admin.r2c.biz/"],
+    ["大文字混じり", "HTTPS://ADMIN.R2C.BIZ"],
+    ["既定ポート明記", "https://admin.r2c.biz:443"],
+    ["前後空白", "  https://admin.r2c.biz  "],
+    ["末尾スラッシュ+大文字", "HTTPS://Admin.R2C.Biz/"],
+  ])("%s でも R2C 自身のドメインとして検出する", (_name, origin) => {
+    expect(isR2cOwnDomainOnly([origin])).toBe(true);
+  });
+
+  it("R2C自身のドメインに似せた別ホストは検出しない（部分一致で誤検出しない）", () => {
+    expect(isR2cOwnDomainOnly(["https://admin.r2c.biz.evil.com"])).toBe(false);
+    expect(isR2cOwnDomainOnly(["https://notr2c.biz"])).toBe(false);
+  });
+
+  it("R2C自身のドメインとテナントの実ドメインが混在していれば検出しない", () => {
+    expect(isR2cOwnDomainOnly(["https://admin.r2c.biz", "https://shop.example.com"])).toBe(false);
+  });
+
+  it("パス付きは R2C 自身のドメインとみなさない（照合には使えない別問題として扱う）", () => {
+    expect(isR2cOwnDomainOnly(["https://admin.r2c.biz/widget"])).toBe(false);
+  });
+});
+
+describe("hasEmptyOrigins — 実質空を空として扱う", () => {
+  it("空白のみの行だけなら空とみなす（1件登録済みと数えるとfail-openに気付けない）", () => {
+    expect(hasEmptyOrigins([""])).toBe(true);
+    expect(hasEmptyOrigins(["   "])).toBe(true);
+    expect(hasEmptyOrigins(["", "  ", "\t"])).toBe(true);
+  });
+
+  it("実値が1つでもあれば空ではない", () => {
+    expect(hasEmptyOrigins(["", "https://shop.example.com"])).toBe(false);
+  });
+});
+
+describe("findUnmatchableOrigins — ブラウザOriginと決して一致しない登録", () => {
+  // originCheck.ts の matchesPattern は `pattern === origin` の完全一致。
+  // ブラウザが送る Origin は 小文字・末尾スラッシュ無し・パス無し・既定ポート省略。
+  // ここに挙げた形は「登録されているのに全ページで弾かれる」= 無言の全滅になる。
+  it.each([
+    ["末尾スラッシュ", "https://shop.example.com/"],
+    ["パス付き", "https://shop.example.com/widget"],
+    ["大文字混じり", "https://Shop.Example.com"],
+    ["前後空白", " https://shop.example.com "],
+    ["既定ポート明記", "https://shop.example.com:443"],
+    ["空行", ""],
+    ["空白のみ", "   "],
+  ])("%s は一致し得ない登録として検出する", (_name, origin) => {
+    expect(findUnmatchableOrigins([origin])).toEqual([origin]);
+  });
+
+  it.each([
+    ["通常のhttps", "https://shop.example.com"],
+    ["サブドメインワイルドカード", "https://*.example.com"],
+    ["既定でないポート", "https://shop.example.com:8443"],
+  ])("%s は正常な登録として検出しない", (_name, origin) => {
+    expect(findUnmatchableOrigins([origin])).toEqual([]);
+  });
+
+  it("複数登録のうち壊れているものだけを返す", () => {
+    const list = ["https://ok.example.com", "https://bad.example.com/", "https://also-ok.example.com"];
+    expect(findUnmatchableOrigins(list)).toEqual(["https://bad.example.com/"]);
+  });
+
+  it("carnation の実測値(R2C自身のドメインのみ)は一致し得ない登録ではない", () => {
+    // 形としては正しいので findUnmatchableOrigins では出ない。
+    // 「テナントの実サイトが無い」ことは isR2cOwnDomainOnly が担当する。
+    const carnation = ["https://admin.r2c.biz", "https://api.r2c.biz"];
+    expect(findUnmatchableOrigins(carnation)).toEqual([]);
+    expect(isR2cOwnDomainOnly(carnation)).toBe(true);
+  });
+});
+
+describe("auditTenantConfig / hasAnyIssue — 一致し得ない登録の配線", () => {
+  it("表記揺れの登録が unmatchableOrigins に出て、hasAnyIssue が true になる", () => {
+    const issues = auditTenantConfig({
+      allowedOrigins: ["https://shop.example.com/"],
+      systemPrompt: "接客ルール",
+    });
+    expect(issues.unmatchableOrigins).toEqual(["https://shop.example.com/"]);
+    expect(hasAnyIssue(issues)).toBe(true);
+  });
+
+  it("正常なテナントでは unmatchableOrigins が空で hasAnyIssue が false", () => {
+    const issues = auditTenantConfig({
+      allowedOrigins: ["https://shop.example.com"],
+      systemPrompt: "接客ルール",
+    });
+    expect(issues.unmatchableOrigins).toEqual([]);
+    expect(hasAnyIssue(issues)).toBe(false);
+  });
+
+  it("空行だけの登録は emptyOrigins と unmatchableOrigins の両方で拾う(fail-openの見逃し防止)", () => {
+    const issues = auditTenantConfig({ allowedOrigins: [""], systemPrompt: "x" });
+    expect(issues.emptyOrigins).toBe(true);
+    expect(issues.unmatchableOrigins).toEqual([""]);
+    expect(hasAnyIssue(issues)).toBe(true);
   });
 });
