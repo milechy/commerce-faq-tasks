@@ -33,7 +33,8 @@ export interface SweepCandidateRow {
 
 const DEFAULT_IDLE_INTERVAL = "30 minutes";
 const DEFAULT_MAX_AGE_INTERVAL = "7 days";
-const DEFAULT_MIN_MESSAGE_COUNT = 4;
+/** analytics/ignitionStatus.ts の点火ゲート表示からも参照する(第2の定義を作らない)。 */
+export const DEFAULT_MIN_MESSAGE_COUNT = 4;
 const DEFAULT_LIMIT = 20;
 
 /**

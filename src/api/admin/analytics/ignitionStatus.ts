@@ -20,8 +20,11 @@ import type { Pool } from "pg";
 import {
   isLearnedMemoryWriteEnabled,
   isLearnedMemoryReadEnabled,
+  getLearnedMemoryThreshold,
 } from "../../../agent/memory/featureFlag";
 import { resolveSweepTenants } from "../../../agent/judge/judgeSweepRunner";
+import { DEFAULT_MIN_MESSAGE_COUNT } from "../../../agent/judge/sweepCandidates";
+import { userSourceClause, userSourceExistsForTable } from "./summaryQueries";
 
 type Db = Pick<Pool, "query">;
 
@@ -55,7 +58,38 @@ export interface IgnitionStatusResponse {
   envControlledFeatures: string[];
   /** 1つでも有効な機能があるか。全て false なら「有効な機能はありません」を描く。 */
   anyEnabled: boolean;
+  /**
+   * ナレッジ配線是正P15: 交差(judge_x_memory_intersection)が有効なテナントでも、
+   * learned_memory に届くまでには直列の4ゲートがある(score>=閾値、
+   * message_count>=最低件数、messages.length>=最低発話数、CV/outcomeを伴う)。
+   * DBアクセスが要るため buildIgnitionStatus(純関数)には含めず、
+   * fetchIgnitionStatus 経由でのみ埋まる(buildIgnitionStatus単体呼び出しでは省略可)。
+   */
+  seriesGates?: SeriesGateInfo[];
 }
+
+export interface SeriesGateInfo {
+  gate: string;
+  /** 画面表示用。内部語(env名・列名)をここに出さない。 */
+  label: string;
+  /** この条件を満たす件数。禁止34: 母数が小さくても率ではなく生の件数で出す。 */
+  currentCount: number;
+  /** 母集団件数(このゲートが対象とする候補の総数)。 */
+  ofTotal: number;
+  /** どこで判定しているか。運用者向けなので内部名でよい。 */
+  configKey: string;
+}
+
+/** テスト差し替え用。既定は実装の唯一の情報源をそのまま使う。 */
+export interface SeriesGateDeps {
+  learnedMemoryThreshold: () => number;
+  hasConvertingOutcome: (tenantId: string, sessionId: string) => Promise<boolean>;
+}
+
+/** 直近この期間のセッション/評価だけを対象にする(measurementHealth.ts の既定期間と揃える)。 */
+const SERIES_GATE_LOOKBACK = "30 days";
+/** hasConvertingOutcome はセッション毎にDB問い合わせが要るため、対象を上限で区切る。 */
+const CONVERTING_OUTCOME_SAMPLE_LIMIT = 100;
 
 /** テスト差し替え用。既定は実装の唯一の情報源をそのまま使う。 */
 export interface IgnitionDeps {
@@ -92,6 +126,11 @@ export function buildIgnitionStatus(
     const read = deps.learnedMemoryRead(t.id);
     const stage = featureFlagOn(t.features, "sales_stage_continuity");
     const consent = featureFlagOn(t.features, "hermes_raw_data_consent");
+    // ナレッジ配線是正P15: judge_sweep と learned_memory_write は独立したセルとして
+    // 両方 ON でも、対象テナントの集合(JUDGE_SWEEP_TENANTS ∩ LEARNED_MEMORY_TENANTS)が
+    // 交差していなければ実際には1件も学習データが生まれない(2026-08-25の実例:
+    // sweep={r2c_default}, memory={carnation} で交差ゼロ)。この交差を1セルとして出す。
+    const intersects = inSweep && write;
 
     const cells: IgnitionCell[] = [
       {
@@ -142,6 +181,20 @@ export function buildIgnitionStatus(
         configKey: "tenants.features.hermes_raw_data_consent",
         controlledBy: "tenants.features",
       },
+      {
+        feature: "judge_x_memory_intersection",
+        label: "評価される かつ 記録される（実際に学習データが増える条件）",
+        enabled: intersects,
+        reason: intersects
+          ? "定期評価の対象、かつ記録対象のどちらにも入っているため、学習データが増え得ます"
+          : inSweep && !write
+            ? "定期評価はされますが、記録対象テナントに入っていないため学習データは増えません"
+            : !inSweep && write
+              ? "記録対象テナントですが、定期評価の対象に入っていないため評価自体が生まれず、記録も起きません"
+              : "定期評価・記録のどちらの対象にも入っていません",
+        configKey: "JUDGE_SWEEP_TENANTS ∩ LEARNED_MEMORY_TENANTS",
+        controlledBy: "env",
+      },
     ];
 
     return { tenantId: t.id, cells };
@@ -159,10 +212,156 @@ export function buildIgnitionStatus(
   };
 }
 
+/**
+ * learned_memory に届くまでの直列4ゲートの到達件数を計算する。
+ * 交差テナントが1件も無ければ(2026-08-25時点の本番の実値)DBに問い合わせず全て0を返す
+ * (無駄なクエリを避ける。交差が空なら候補も必然的に0件のため)。
+ *
+ * ゲートごとの母集団は互いに独立(同一の絞り込み済み母集団を順番にふるうstrictな
+ * ファネルではない): message_count/messages.lengthはchat_sessionsのスナップショット、
+ * judgeScoreはconversation_evaluationsに記録済みの評価、hasConvertingOutcomeは
+ * judgeScore通過分のサンプルに対する実判定。各ゲートの定義そのものを正確に示すことを
+ * 優先する(第2の判定ロジックを作らない。既存のhasConvertingOutcome/
+ * getLearnedMemoryThresholdをそのままimportして使う)。
+ */
+export async function computeSeriesGates(
+  db: Db,
+  intersectionTenantIds: string[],
+  deps: SeriesGateDeps = {
+    learnedMemoryThreshold: getLearnedMemoryThreshold,
+    hasConvertingOutcome: async (tenantId: string, sessionId: string) => {
+      const { hasConvertingOutcome } = await import("../../../agent/memory/memoryDistiller");
+      return hasConvertingOutcome(tenantId, sessionId);
+    },
+  },
+): Promise<SeriesGateInfo[]> {
+  const threshold = deps.learnedMemoryThreshold();
+  const { MIN_MESSAGES_FOR_DISTILL } = await import("../../../agent/memory/memoryDistiller");
+
+  if (intersectionTenantIds.length === 0) {
+    return [
+      {
+        gate: "message_count",
+        label: `離脱評価の対象になる(メッセージ${DEFAULT_MIN_MESSAGE_COUNT}件以上)`,
+        currentCount: 0,
+        ofTotal: 0,
+        configKey: "sweepCandidates.DEFAULT_MIN_MESSAGE_COUNT",
+      },
+      {
+        gate: "judge_score",
+        label: `Judgeスコアが${threshold}点以上`,
+        currentCount: 0,
+        ofTotal: 0,
+        configKey: "LEARNED_MEMORY_THRESHOLD",
+      },
+      {
+        gate: "messages_length",
+        label: `蒸留時点で発話が${MIN_MESSAGES_FOR_DISTILL}件以上`,
+        currentCount: 0,
+        ofTotal: 0,
+        configKey: "memoryDistiller.MIN_MESSAGES_FOR_DISTILL",
+      },
+      {
+        gate: "converting_outcome",
+        label: "CV・成約outcomeを伴う会話",
+        currentCount: 0,
+        ofTotal: 0,
+        configKey: "memoryDistiller.hasConvertingOutcome",
+      },
+    ];
+  }
+
+  const sessionResult = await db.query<{ total: string; ge_msg: string; ge_len: string }>(
+    `SELECT
+       COUNT(*) AS total,
+       COUNT(*) FILTER (WHERE cs.message_count >= $2) AS ge_msg,
+       COUNT(*) FILTER (WHERE cs.message_count >= $3) AS ge_len
+     FROM chat_sessions cs
+     WHERE cs.tenant_id = ANY($1)
+       AND cs.started_at >= NOW() - $4::interval
+       AND cs.is_escalated = false
+       ${userSourceClause("cs")}`,
+    [intersectionTenantIds, DEFAULT_MIN_MESSAGE_COUNT, MIN_MESSAGES_FOR_DISTILL, SERIES_GATE_LOOKBACK],
+  );
+  const sessionRow = sessionResult.rows[0];
+  const sessionTotal = parseInt(sessionRow?.total ?? "0", 10);
+  const geMsg = parseInt(sessionRow?.ge_msg ?? "0", 10);
+  const geLen = parseInt(sessionRow?.ge_len ?? "0", 10);
+
+  const evalResult = await db.query<{ total: string; ge_score: string }>(
+    `SELECT
+       COUNT(*) AS total,
+       COUNT(*) FILTER (WHERE ce.score >= $2) AS ge_score
+     FROM conversation_evaluations ce
+     WHERE ce.tenant_id = ANY($1)
+       AND ce.created_at >= NOW() - $3::interval
+       ${userSourceExistsForTable("conversation_evaluations", "ce")}`,
+    [intersectionTenantIds, threshold, SERIES_GATE_LOOKBACK],
+  );
+  const evalRow = evalResult.rows[0];
+  const evalTotal = parseInt(evalRow?.total ?? "0", 10);
+  const geScore = parseInt(evalRow?.ge_score ?? "0", 10);
+
+  const candidatesResult = await db.query<{ tenant_id: string; session_id: string }>(
+    `SELECT ce.tenant_id, ce.session_id
+     FROM conversation_evaluations ce
+     WHERE ce.tenant_id = ANY($1)
+       AND ce.score >= $2
+       AND ce.created_at >= NOW() - $3::interval
+       ${userSourceExistsForTable("conversation_evaluations", "ce")}
+     LIMIT $4`,
+    [intersectionTenantIds, threshold, SERIES_GATE_LOOKBACK, CONVERTING_OUTCOME_SAMPLE_LIMIT],
+  );
+  let convertingCount = 0;
+  for (const row of candidatesResult.rows) {
+    if (await deps.hasConvertingOutcome(row.tenant_id, row.session_id)) convertingCount++;
+  }
+  const convertingOfTotal = candidatesResult.rows.length;
+  const capped = convertingOfTotal === CONVERTING_OUTCOME_SAMPLE_LIMIT;
+
+  return [
+    {
+      gate: "message_count",
+      label: `離脱評価の対象になる(メッセージ${DEFAULT_MIN_MESSAGE_COUNT}件以上)`,
+      currentCount: geMsg,
+      ofTotal: sessionTotal,
+      configKey: "sweepCandidates.DEFAULT_MIN_MESSAGE_COUNT",
+    },
+    {
+      gate: "judge_score",
+      label: `Judgeスコアが${threshold}点以上`,
+      currentCount: geScore,
+      ofTotal: evalTotal,
+      configKey: "LEARNED_MEMORY_THRESHOLD",
+    },
+    {
+      gate: "messages_length",
+      label: `蒸留時点で発話が${MIN_MESSAGES_FOR_DISTILL}件以上`,
+      currentCount: geLen,
+      ofTotal: sessionTotal,
+      configKey: "memoryDistiller.MIN_MESSAGES_FOR_DISTILL",
+    },
+    {
+      gate: "converting_outcome",
+      label: capped
+        ? `CV・成約outcomeを伴う会話(直近${CONVERTING_OUTCOME_SAMPLE_LIMIT}件のサンプルのみ)`
+        : "CV・成約outcomeを伴う会話",
+      currentCount: convertingCount,
+      ofTotal: convertingOfTotal,
+      configKey: "memoryDistiller.hasConvertingOutcome",
+    },
+  ];
+}
+
 /** tenants を1回引いて点火行列を返す。 */
 export async function fetchIgnitionStatus(db: Db): Promise<IgnitionStatusResponse> {
   const rows = await db.query<{ id: string; features: Record<string, unknown> | null }>(
     `SELECT id, features FROM tenants ORDER BY id`,
   );
-  return buildIgnitionStatus(rows.rows);
+  const status = buildIgnitionStatus(rows.rows);
+  const intersectionTenantIds = status.rows
+    .filter((r) => r.cells.find((c) => c.feature === "judge_x_memory_intersection")?.enabled)
+    .map((r) => r.tenantId);
+  const seriesGates = await computeSeriesGates(db, intersectionTenantIds);
+  return { ...status, seriesGates };
 }

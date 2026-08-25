@@ -112,7 +112,20 @@ describe("REQUIRED_COLUMNS の機械的ガード", () => {
     "platform_monthly_charges",
   ];
 
-  it("レジストリがソースの INSERT 文と完全一致する(動的テーブル名を除く)", () => {
+  // ナレッジ配線是正P15: この機械的ガードは `INSERT INTO table (cols)` しか走査しない。
+  // knowledge_gaps.recommended_action / suggested_answer は gapRecommender.ts:130-140 の
+  // UPDATE でしか書かれない(pending時点のINSERTには無く、後から推薦生成で埋まる)ため、
+  // INSERT走査には決して現れない。それでも schemaHealth の実行時チェックには含めたい
+  // (migration未適用のまま推薦生成が動くと、このUPDATEが無言で失敗し続けるため)。
+  // テーブルごと除外(DYNAMIC_TABLE_NAME_EXCLUSIONS)は粒度が粗すぎる
+  // (knowledge_gaps の他の列の突合まで失う)ため、列単位の例外にする。
+  // 下の別テストで「本当にUPDATE文に実在するか」をソースから確認し、
+  // 登録しただけで放置される事故を防ぐ。
+  const UPDATE_ONLY_COLUMNS: Record<string, string[]> = {
+    knowledge_gaps: ["recommended_action", "suggested_answer"],
+  };
+
+  it("レジストリがソースの INSERT 文と完全一致する(動的テーブル名・UPDATE専用列を除く)", () => {
     const scanned = scanInsertColumns();
     const registryTables = Object.keys(REQUIRED_COLUMNS)
       .filter((t) => !DYNAMIC_TABLE_NAME_EXCLUSIONS.includes(t))
@@ -125,11 +138,29 @@ describe("REQUIRED_COLUMNS の機械的ガード", () => {
     expect(scannedTables).toEqual(registryTables);
 
     for (const t of scannedTables) {
-      expect({ table: t, columns: [...(REQUIRED_COLUMNS[t] ?? [])].sort() }).toEqual({
+      const updateOnly = UPDATE_ONLY_COLUMNS[t] ?? [];
+      const registryColumnsFromInsert = (REQUIRED_COLUMNS[t] ?? []).filter(
+        (c) => !updateOnly.includes(c),
+      );
+      expect({ table: t, columns: [...registryColumnsFromInsert].sort() }).toEqual({
         table: t,
         columns: scanned[t]!,
       });
     }
+  });
+
+  it("UPDATE専用列として除外した列が、実際にUPDATE文で書かれていることを確認する(登録だけして放置されないように)", () => {
+    for (const [table, columns] of Object.entries(UPDATE_ONLY_COLUMNS)) {
+      for (const column of columns) {
+        expect(REQUIRED_COLUMNS[table]).toContain(column);
+      }
+    }
+    const src = fs.readFileSync(
+      path.resolve(__dirname, "../../../agent/gap/gapRecommender.ts"),
+      "utf-8",
+    );
+    expect(src).toMatch(/UPDATE\s+knowledge_gaps[\s\S]*?SET[\s\S]*?recommended_action\s*=/);
+    expect(src).toMatch(/UPDATE\s+knowledge_gaps[\s\S]*?SET[\s\S]*?suggested_answer\s*=/);
   });
 
   it("動的テーブル名(lemonslice/livekit/platform_monthly_charges)のINSERT列がレジストリと一致する", () => {
