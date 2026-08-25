@@ -226,11 +226,15 @@ export async function runSearchAgent(
   };
 
   // Phase68: rerank 後の topK チャンクを RAG ソースとして抽出。
-  // metadata の 'source' が 'book' のときのみ principle/book 扱い、
+  // metadata の 'source' が 'book' で始まるときのみ principle/book 扱い、
   // 未設定 (ES ヒット or 旧データ) は FAQ として扱う。
+  // 'book:pdf:qwen-ocr'(OCR由来)も startsWith で拾う。厳密一致だと OCR チャンクが
+  // 'faq' に誤ラベルされ、ragSources・ナレッジCV帰属で実態と異なる集計になっていた
+  // (2026-08-25 是正)。
   const ragSources: RagSource[] = rerankResult.items.map((it) => {
     const meta = (it as { metadata?: Record<string, unknown> }).metadata;
-    const sourceType = meta && meta["source"] === "book" ? "book" : "faq";
+    const rawSource = meta?.["source"];
+    const sourceType = typeof rawSource === "string" && rawSource.startsWith("book") ? "book" : "faq";
     const principle = typeof meta?.["principle"] === "string"
       ? (meta["principle"] as string)
       : undefined;

@@ -462,7 +462,14 @@ app.post(
   pdfUpload.single("file"),
   async (req: express.Request, res: express.Response): Promise<void> => {
     const tenantId = (req as AuthedRequest).tenantId;
-    const target: string = (req.body?.target as string | undefined) || tenantId;
+    // このルートは requireRole("super_admin") 済みのため常に対象テナントを
+    // 指定可能。ただし書き込み宛先は query から取る(body から禁止。
+    // CLAUDE.md 禁止1。2026-08-25 是正: bookPdfRoutes.ts の
+    // resolveUploadTenantId と同じ経路)。
+    const target: string =
+      (req.query.target as string | undefined) ||
+      (req.query.tenant as string | undefined) ||
+      tenantId;
 
     // "global" は super_admin のみ許可
     if (target === "global" && (req as any).user?.role !== "super_admin") {

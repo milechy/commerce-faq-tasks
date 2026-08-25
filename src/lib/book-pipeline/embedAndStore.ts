@@ -21,6 +21,26 @@ export interface EmbedAndStoreDeps {
  * read path（resolveFallbackIndices の `faq_${tenantId}`）と不整合だったため、
  * 書籍 doc が検索 index に届いていなかった。resolveFaqWriteIndex で統一する。
  */
+/**
+ * 書籍チャンクの ES ドキュメントを削除する（best-effort）。
+ * 2026-08-25 是正: 書籍削除ルート(bookPdfRoutes.ts)が faq_embeddings のみ削除し
+ * ES ドキュメントを残していたため、削除した書籍がBM25検索で引け続けていた。
+ * doc id は upsertToEs 書き込み時と同じ `book_${bookId}_chunk_${chunkIndex}` 規約。
+ */
+export async function deleteBookChunkFromEs(
+  esUrl: string,
+  tenantId: string,
+  docId: string
+): Promise<void> {
+  const index = resolveFaqWriteIndex(tenantId);
+  const url = `${esUrl.replace(/\/$/, "")}/${index}/_doc/${encodeURIComponent(docId)}`;
+  try {
+    await fetch(url, { method: "DELETE" });
+  } catch {
+    // best-effort: ES sync failure should not block deletion
+  }
+}
+
 export async function upsertToEs(
   esUrl: string,
   tenantId: string,
