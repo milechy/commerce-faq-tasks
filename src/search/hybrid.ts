@@ -231,20 +231,14 @@ export async function hybridSearch(
       const tProbe1 = Date.now();
       const probeMs = tProbe1 - tProbe0;
       notes.push(`probe_ms=${probeMs}`);
-      const probeHits = ((probe.hits?.hits ?? []) as EsHit[]).map((h) => ({
-        id: h._id,
-        text: decryptText(h._source?.text ?? ""),
-        score: h._score ?? 0,
-        source: "es" as const,
-        metadata: h._source?.["source"] != null
-          ? { source: h._source["source"], book_id: h._source["book_id"] }
-          : undefined,
-      }));
-      if (probeHits.length > 0) {
-        esHits = probeHits;
-        notes.push("probe:fallback_query_used");
+      // このプローブは「索引が生きているか」の診断専用。ユーザーの質問と無関係な
+      // 固定クエリ("返品 送料")のヒットを検索結果として使ってはいけない
+      // (以前は esHits に代入して回答の根拠に混入させていた。2026-08-25 是正)。
+      const probeHitCount = (probe.hits?.hits ?? []).length;
+      if (probeHitCount > 0) {
+        notes.push("probe:index_alive_query_missed");
       } else {
-        notes.push("probe:no_hits");
+        notes.push("probe:index_empty_or_down");
       }
     } catch (e: unknown) {
       notes.push(`probe_error:${(e as Error).message || String(e)}`);
