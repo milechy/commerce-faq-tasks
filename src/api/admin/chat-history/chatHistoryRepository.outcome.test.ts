@@ -315,4 +315,81 @@ describe("getActiveEscalations", () => {
     expect(mockQuery.mock.calls[1]![0] as string).toContain("LIMIT $1");
     expect(mockQuery.mock.calls[1]![1] as unknown[]).toEqual([20]);
   });
+
+  // -------------------------------------------------------------------------
+  // GID 1217808492496192: source(e2e/内部テスト)フィルタ。
+  // 既定は 'user' のみ(NULLも安全側でuser扱いに含める)、'all' 明示時だけ全件。
+  // count クエリと一覧クエリの両方に同じ条件が効くことを固定する
+  // (対象0件→count 0件、対象N件→count N件が常に一致すること)。
+  // -------------------------------------------------------------------------
+
+  const SOURCE_FILTER_CONDITION = "s.metadata->>'source' = 'user' OR s.metadata->>'source' IS NULL";
+
+  it("source未指定(既定)は 'user' と source未設定(NULL)を対象にする条件をSELECTとCOUNTの両方に含める", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ count: "2" }] }); // COUNT
+    mockQuery.mockResolvedValueOnce({ rows: [ROW, { ...ROW, id: "s2" }] }); // SELECT
+
+    await getActiveEscalations("tenant-a");
+
+    const countSql = mockQuery.mock.calls[0]![0] as string;
+    const listSql = mockQuery.mock.calls[1]![0] as string;
+    expect(countSql).toContain(SOURCE_FILTER_CONDITION);
+    expect(listSql).toContain(SOURCE_FILTER_CONDITION);
+  });
+
+  // actionExecutor.ts の get_escalations ツールは getActiveEscalations(tenantId, limit) の
+  // 2引数で呼ぶ(source は渡さない)。JSのデフォルト引数は「呼び出し側の引数の個数」ではなく
+  // 「その位置の値がundefinedか」で発火するため2引数呼び出しでも既定'user'が効くはずだが、
+  // 実際にそのシェイプ(位置引数2つ)で呼んでも同じ結果になることを固定しておく
+  // (チャットエージェントがe2e残骸を店主に見せてしまう回帰を防ぐ)。
+  it("[get_escalationsツール回帰] tenantIdとlimitの2引数のみの呼び出しでも既定sourceフィルタが効く", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ count: "1" }] }); // COUNT
+    mockQuery.mockResolvedValueOnce({ rows: [ROW] }); // SELECT
+
+    await getActiveEscalations("tenant-abc", 20);
+
+    const countSql = mockQuery.mock.calls[0]![0] as string;
+    const listSql = mockQuery.mock.calls[1]![0] as string;
+    expect(countSql).toContain(SOURCE_FILTER_CONDITION);
+    expect(listSql).toContain(SOURCE_FILTER_CONDITION);
+  });
+
+  it("source='all' を渡すと source 条件を追加せず、e2e等も含めた全件になる", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ count: "3" }] }); // COUNT
+    mockQuery.mockResolvedValueOnce({ rows: [ROW] }); // SELECT
+
+    await getActiveEscalations("tenant-a", undefined, "all");
+
+    const countSql = mockQuery.mock.calls[0]![0] as string;
+    const listSql = mockQuery.mock.calls[1]![0] as string;
+    expect(countSql).not.toContain(SOURCE_FILTER_CONDITION);
+    expect(listSql).not.toContain(SOURCE_FILTER_CONDITION);
+  });
+
+  it("SELECTは metadata->>'source' を source 列として返し、user/e2e/未設定(NULL)の3種類をそのまま反映する", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ count: "3" }] }); // COUNT
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        { ...ROW, id: "s-user", source: "user" },
+        { ...ROW, id: "s-e2e", source: "e2e" },
+        { ...ROW, id: "s-null", source: null },
+      ],
+    });
+
+    const result = await getActiveEscalations("tenant-a", undefined, "all");
+
+    const listSql = mockQuery.mock.calls[1]![0] as string;
+    expect(listSql).toContain(`s.metadata->>'source' AS source`);
+    expect(result.escalations.map((e) => e.source)).toEqual(["user", "e2e", null]);
+  });
+
+  it("total は絞る前の実件数のまま(source条件を反映したcountだが、絞った一覧件数とは独立)", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ count: "373" }] }); // COUNT: e2e混入時の実件数を模す
+    mockQuery.mockResolvedValueOnce({ rows: [ROW] }); // SELECT: limitで絞られた結果
+
+    const result = await getActiveEscalations("tenant-a", 1);
+
+    expect(result.total).toBe(373);
+    expect(result.escalations).toHaveLength(1);
+  });
 });

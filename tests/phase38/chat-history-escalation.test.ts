@@ -12,12 +12,22 @@ import {
   getActiveEscalations,
   resolveEscalation,
   saveMessage,
+  normalizeEscalationSourceFilter,
 } from "../../src/api/admin/chat-history/chatHistoryRepository";
 
 const mockGetPool = getPool as jest.MockedFunction<typeof getPool>;
 const mockGetActiveEscalations = getActiveEscalations as jest.MockedFunction<typeof getActiveEscalations>;
 const mockResolveEscalation = resolveEscalation as jest.MockedFunction<typeof resolveEscalation>;
 const mockSaveMessage = saveMessage as jest.MockedFunction<typeof saveMessage>;
+// chatHistoryRepository は automock されるため、routes.ts が呼ぶ
+// normalizeEscalationSourceFilter も既定では undefined を返す jest.fn() になる。
+// 実装と同じ「'all'指定時のみ'all'、それ以外は'user'」の挙動を与えて回帰を防ぐ
+// (jest.clearAllMocks() は呼び出し履歴のみクリアし、mockImplementationは保持される)。
+const mockNormalizeEscalationSourceFilter =
+  normalizeEscalationSourceFilter as jest.MockedFunction<typeof normalizeEscalationSourceFilter>;
+mockNormalizeEscalationSourceFilter.mockImplementation((value: unknown) =>
+  value === "all" ? "all" : "user",
+);
 
 function makeDevJwt(payload: object): string {
   const header = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url");
@@ -46,7 +56,7 @@ describe("Chat History Escalation API", () => {
     it("super_admin → 全テナントの一覧 200", async () => {
       mockGetActiveEscalations.mockResolvedValueOnce({
         escalations: [
-          { id: "s1", tenant_id: "tenant-a", session_id: "sess-1", escalated_at: "2026-01-01T00:00:00Z", last_message_at: "2026-01-01T00:00:00Z", message_count: 3, first_message_preview: "help" },
+          { id: "s1", tenant_id: "tenant-a", session_id: "sess-1", escalated_at: "2026-01-01T00:00:00Z", last_message_at: "2026-01-01T00:00:00Z", message_count: 3, first_message_preview: "help", source: "user" },
         ],
         total: 1,
       });
@@ -55,7 +65,8 @@ describe("Chat History Escalation API", () => {
         .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`);
       expect(res.status).toBe(200);
       expect(res.body.escalations).toHaveLength(1);
-      expect(mockGetActiveEscalations).toHaveBeenCalledWith(undefined);
+      // GID 1217808492496192: source未指定は既定で'user'(e2e等を除外)をrepositoryに渡す
+      expect(mockGetActiveEscalations).toHaveBeenCalledWith(undefined, undefined, "user");
     });
 
     it("client_admin → 自テナントのみ 200", async () => {
@@ -64,7 +75,7 @@ describe("Chat History Escalation API", () => {
         .get("/v1/admin/chat-history/escalations")
         .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`);
       expect(res.status).toBe(200);
-      expect(mockGetActiveEscalations).toHaveBeenCalledWith("tenant-a");
+      expect(mockGetActiveEscalations).toHaveBeenCalledWith("tenant-a", undefined, "user");
     });
 
     it("認証なし → 401", async () => {

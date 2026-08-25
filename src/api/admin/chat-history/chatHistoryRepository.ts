@@ -353,6 +353,22 @@ export interface EscalatedSessionSummary {
   last_message_at: string;
   message_count: number;
   first_message_preview: string;
+  // GID 1217808492496192: e2e/内部テストの残骸を本物の対応待ちから見分けるため。
+  // getSessions() の source 列(metadata->>'source')と同じ扱い。
+  source: string | null;
+}
+
+/** 対応中（未解決）のエスカレーション一覧のうち、どこまで含めるかの範囲。 */
+export type EscalationSourceFilter = "user" | "all";
+const VALID_ESCALATION_SOURCE_FILTER = ["user", "all"] as const;
+
+/**
+ * source クエリパラメータを検証する。normalizeSessionListParams (period/sort_order等)
+ * と同じ pickAllowlisted 規約に揃え、allowlist外は例外にせず安全側の既定 'user' に
+ * フォールバックする。routes.ts に手書きの分岐を作らないため、ここへ一本化する。
+ */
+export function normalizeEscalationSourceFilter(value: unknown): EscalationSourceFilter {
+  return pickAllowlisted(value, VALID_ESCALATION_SOURCE_FILTER) ?? "user";
 }
 
 /** 対応中（未解決）のエスカレーション一覧を取得する。tenantId未指定 = 全テナント（super_admin用）。 */
@@ -363,10 +379,19 @@ export interface EscalatedSessionSummary {
  * 呼び出し元は「全N件中M件」を正しく表示できる（絞った件数を全件数として
  * 見せてしまう事故を防ぐ）。getSessions() と同じ形に揃えてある。
  * limit 未指定なら従来どおり全件返す。
+ *
+ * source 未指定(既定) = 'user' 相当のみ。metadata->>'source' は e2e/chat-test 等の
+ * トラフィック種別を表すが、記録が始まる前に作られた古いセッションは metadata に
+ * 'source' キー自体が無い(NULL)。`metadata->>'source' = 'user'` は NULL に対して
+ * 常に false になるため、NULL を除外する条件だと本物の古い対応待ちまで隠れてしまう。
+ * 安全側に倒し、NULL は 'user' 扱い(既定表示に含める)にしている。
+ * 'all' を渡すと e2e 等も含めた全件を返す。count クエリにも同じ条件を効かせ、
+ * 一覧の件数と "全N件" 表示がズレないようにする。
  */
 export async function getActiveEscalations(
   tenantId?: string,
   limit?: number,
+  source: EscalationSourceFilter = "user",
 ): Promise<{ escalations: EscalatedSessionSummary[]; total: number }> {
   const pool = getPool();
   const conditions = ["s.is_escalated = true", "s.escalation_resolved_at IS NULL"];
@@ -374,6 +399,9 @@ export async function getActiveEscalations(
   if (tenantId) {
     args.push(tenantId);
     conditions.push(`s.tenant_id = $${args.length}`);
+  }
+  if (source !== "all") {
+    conditions.push(`(s.metadata->>'source' = 'user' OR s.metadata->>'source' IS NULL)`);
   }
   const whereClause = conditions.join(" AND ");
 
@@ -393,6 +421,7 @@ export async function getActiveEscalations(
   const result = await pool.query<EscalatedSessionSummary>(
     `SELECT
        s.id, s.tenant_id, s.session_id, s.escalated_at, s.last_message_at, s.message_count,
+       s.metadata->>'source' AS source,
        COALESCE(LEFT(m.content, 80), '') AS first_message_preview
      FROM chat_sessions s
      LEFT JOIN LATERAL (

@@ -5,7 +5,7 @@
 import type { Express, Request, Response } from "express";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 import { getPool } from "../../../lib/db";
-import { getSessions, getMessages, getActiveEscalations, resolveEscalation, saveMessage, normalizeSessionListParams, getConversionTypes, recordOutcome } from "./chatHistoryRepository";
+import { getSessions, getMessages, getActiveEscalations, resolveEscalation, saveMessage, normalizeSessionListParams, normalizeEscalationSourceFilter, getConversionTypes, recordOutcome } from "./chatHistoryRepository";
 import { deleteSession } from "./deleteSessionRepository";
 import { logger } from '../../../lib/logger';
 import { isAllowedAdminRole, roleAuthMiddleware } from "../../middleware/roleAuth";
@@ -321,10 +321,12 @@ export function registerChatHistoryRoutes(app: Express): void {
         return res.status(403).json({ error: "この操作を実行する権限がありません" });
       }
       const tenantFilter = resolveTenantFilter(req, jwtTenantId, isSuperAdmin);
+      // 未指定/不正値は既定の 'user' にフォールバックする(安全側)。'all' のときだけ全件。
+      const source = normalizeEscalationSourceFilter(req.query["source"]);
 
       try {
         // limit を渡さないため従来どおり全件。レスポンスの形も従来と同一。
-        const { escalations, total } = await getActiveEscalations(tenantFilter);
+        const { escalations, total } = await getActiveEscalations(tenantFilter, undefined, source);
         return res.json({ escalations, total });
       } catch (err) {
         logger.warn("[GET /v1/admin/chat-history/escalations]", err);
