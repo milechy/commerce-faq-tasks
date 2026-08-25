@@ -1,7 +1,7 @@
 ---
 name: Tester
 description: テストエージェント。Gate 1〜3 の実行 + 不足テストの作成 + 手動確認相当の実機検証（curl / ログ確認）を行う。失敗時は原因を特定して Generator に差し戻す。
-model: claude-sonnet-4-6
+model: claude-sonnet-5
 memory: project
 tools:
   - Bash

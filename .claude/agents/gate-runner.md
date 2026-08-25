@@ -1,7 +1,7 @@
 ---
 name: gate-runner
 description: TEST_DEPLOY_GATE.md準拠のGate 1〜3を一括実行し、フォーマット済み結果を報告する
-model: claude-sonnet-4-6
+model: claude-sonnet-5
 effort: high
 tools:
   - Bash

@@ -143,7 +143,7 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
 | テナント/運用者への通知 | `src/lib/notifications.ts` の `createNotification`（`recipientRole` は `super_admin` / `client_admin` 両対応、`recipientTenantId` を必ず添える）。ベル・既読・スコープはAPI側に実装済み。**`notification_preferences` は保存されるだけで誰も読んでいない** |
 | DB列追加 | 機能ディレクトリ内に `migration_<機能>.sql`。`ADD COLUMN IF NOT EXISTS` + `COMMENT ON COLUMN` で意味を明記 |
 | 日付・週境界の計算 | `src/lib/date/weekRange.ts`（JST暦週。UTCベースの算術のみで実装し process TZ に依存しない）。詳細: `docs/WEEKLY_SUMMARY_REQUIREMENTS.md` |
-| 有人対応（エスカレーション）の会話取得・返信 | `src/api/admin/chat-history/` の `getMessages` / `saveMessage`。取得経路を増やさない（FAQ書き込み4系統と同じ轍を踏まない）。契約は `src/api/admin/CLAUDE.md` |
+| 有人対応（エスカレーション）の会話取得・返信 | `src/api/admin/chat-history/` の `getMessages` / `saveMessage`。取得経路を増やさない（FAQ書き込み経路(10系統。`.claude/rules/knowledge.md`)と同じ轍を踏まない）。契約は `src/api/admin/CLAUDE.md` |
 | プラン制限のフロント判定 | `admin-ui/src/lib/planFeatures.ts`（`planHasFeature` / `GatedFeature`）。ページごとに403判定を書かない |
 | CORS の許可ヘッダ | `src/lib/cors.ts` の `ALLOWED_HEADERS`（単一情報源。第2の許可リストを作らない） |
 | 承認状態の判定・更新 | **`is_active` が唯一の真実**、`status` は承認判断の記録。両方を書くのは `approveTuningRule` / `rejectTuningRule`（`src/api/admin/evaluations/evaluationsRepository.ts`）と `updateRule`（`src/api/admin/tuning/tuningRulesRepository.ts`）の3点のみ。呼び出し側や LLM プロンプトに整合性を委ねない |
@@ -160,6 +160,9 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
 
 **新規ファイルを作ってよいのは**、テスト可能な純関数として切り出す場合のみ。
 その場合も `confirmPolicy.ts` / `agentAuditLog.ts` と同じ粒度・同じディレクトリに置き、隣に `*.test.ts` を作る。
+
+**ナレッジ配線(`src/search/**` / `src/lib/knowledge/**` 等)を触るときは `.claude/rules/knowledge.md` が
+自動ロードされる。** 読み側の可視性述語の場所、書き込み経路の実数、索引同期の正典ヘルパはそちらが一次情報。
 
 ## 指示ルール（tuning_rules）の不変ルール
 
@@ -232,8 +235,8 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
 6. **同じ関心事を2ファイルに複製したまま片方だけ直す。**
    既知の重複: 業種テンプレ（`src/api/admin/agent/industryFaqTemplates.ts` と
    `admin-ui/src/components/onboarding/industryFaqTemplates.ts`）。増やさない、直すときは必ず両方。
-   **FAQ書き込み経路4系統**（`faqCrudRoutes` / レガシー `faqAdminRoutes` / `knowledge-gaps/add-knowledge` /
-   `actionExecutor`）はそれぞれが embedding+ES 同期を個別実装しており、索引不整合の再発元。**5本目を作らない。**
+   **FAQ書き込み経路は実際には10系統ある**（4系統ではない。内訳と索引同期の正典ヘルパは
+   `.claude/rules/knowledge.md` 参照）。**11系統目を作らない。**
 7. **ユーザー単位・テナント単位の進行状態を localStorage に持つ。** ブラウザを変えると消える。サーバが正。
 8. **DB migration を自動実行する。** 不可逆操作は人間承認（24h自走中は禁止項目）。
 9. **オンボーディング等の作業フロー中に、同タブで旧UIへ遷移させる。** 会話と進行が飛ぶ。別タブ固定。

@@ -1,7 +1,7 @@
 ---
 name: Planner
 description: 上流エージェント。Asana タスクを実装可能な計画に分解する。実機照合（file/grep/git log）必須、推測ベース計画の生成禁止。read-only。
-model: claude-sonnet-4-6
+model: claude-opus-5
 memory: project
 tools:
   - Bash

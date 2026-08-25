@@ -1,7 +1,7 @@
 ---
 name: deploy-checker
 description: VPSデプロイ前後のチェックリストを実行する（VPS_OPS_GUIDE.md + DEPLOY_CHECKLIST.md準拠）
-model: claude-sonnet-4-6
+model: claude-sonnet-5
 effort: medium
 tools:
   - Bash

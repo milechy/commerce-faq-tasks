@@ -1,7 +1,8 @@
 ---
 name: lane-2-api
 description: R2C API 変更 (src/, avatar-agent/) を担当する Lane 2 エージェント。Tier A 以上のタスクを処理。
-model: claude-sonnet-4-6
+model: claude-sonnet-5
+isolation: worktree
 memory: project
 tools:
   - Bash

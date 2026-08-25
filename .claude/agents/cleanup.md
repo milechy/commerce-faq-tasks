@@ -1,7 +1,7 @@
 ---
 name: cleanup
 description: dead exports削除、any型の型付け、as anyキャスト除去を行うコードクリーンアップ専門エージェント
-model: claude-sonnet-4-6
+model: claude-sonnet-5
 effort: high
 tools:
   - Bash

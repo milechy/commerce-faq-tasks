@@ -1,7 +1,8 @@
 ---
 name: lane-5-security
 description: R2C セキュリティミドルウェア変更 (src/middleware/, src/auth/) を担当する Lane 5 エージェント。Tier A セキュリティタスクを処理。
-model: claude-sonnet-4-6
+model: claude-sonnet-5
+isolation: worktree
 memory: project
 tools:
   - Bash
