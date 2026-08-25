@@ -142,6 +142,33 @@ describe("GET /v1/admin/analytics/trends — source='user'フィルタ", () => {
     expect(sentTrendSql).toContain("cm.tenant_id = $2");
     expect(sentTrendSql).toContain(USER_SOURCE_SQL);
   });
+
+  // /summary の sentiment_distribution と /trends の日次 sentiment は、同じ
+  // chat_messages.sentiment を数える「同じ指標」。片方だけ述語が変わると
+  // 2画面で数字が食い違う(P0-3で実際に起きた: summary 279 / cv-status 0)。
+  // PR #954 が cvAggregation.test.ts で summary↔cv-status に対して確立した
+  // 「EXISTS句の文字列一致を固定する」ガードを、summary↔trends にも広げる。
+  // どちらか片方だけを将来編集したらここで落ちる。
+  it("/summary と /trends の sentiment が同じEXISTS述語を使う(2画面で数字が割れない)", async () => {
+    await request(makeApp()).get("/v1/admin/analytics/trends");
+    const trendsSql = mockQuery.mock.calls
+      .map((c) => c[0] as string)
+      .find((sql) => /FROM chat_messages cm/.test(sql))!;
+
+    mockQuery.mockClear();
+    await request(makeApp()).get("/v1/admin/analytics/summary");
+    const summarySql = mockQuery.mock.calls
+      .map((c) => c[0] as string)
+      .find((sql) => /FROM chat_messages\b/.test(sql) && /sentiment->>'label'/.test(sql))!;
+    expect(summarySql).toBeDefined();
+
+    // テーブル別名(cm. / chat_messages.)の差だけを吸収して、述語の構造を比較する。
+    const normalize = (sql: string) => {
+      const m = /AND EXISTS \([\s\S]*?metadata->>'source' = 'user'[\s\S]*?\)/.exec(sql);
+      return (m ? m[0] : "").replace(/\bcm\./g, "chat_messages.").replace(/\s+/g, " ").trim();
+    };
+    expect(normalize(trendsSql)).toBe(normalize(summarySql));
+  });
 });
 
 describe("GET /v1/admin/analytics/evaluations — source='user'フィルタ", () => {
