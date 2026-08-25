@@ -111,6 +111,20 @@ type Card =
       message?: string;
       adoptedUrl?: string;
     }
+  // W3-1(docs/COPILOT_UI_PARITY.md §3.1 #8、T3 候補カード+添付): 自分の写真をアバター
+  // 画像として使う。旧UI(StudioImageSection.tsx「写真をアップロード」タブ)の再現。
+  // PDF取り込みと同じ理由でエージェントツール経由にしない(バイナリはツール結果に
+  // 乗らない)。PATCH /v1/admin/avatar/configs/:id は image_url が data: URIなら
+  // サーバ側(uploadBase64ToStorage)が自動でStorageへアップロードする既存経路を
+  // そのまま使うため、新規APIエンドポイントは作らない(pdfUploadと同じ3状態の作法)。
+  | {
+      kind: "avatarPhotoUpload";
+      configId: string;
+      status: "uploading" | "success" | "error";
+      fileName: string;
+      imageUrl?: string;
+      message?: string;
+    }
   // 声の候補提示〜採用。POST /match-voice はテキストの候補(id/title/description/score)
   // のみを返し音声プレビューを持たないため(旧UIウィザードのStudioVoiceSectionも同様に
   // 試聴機能を持たない)、本カードも一覧から選ぶ形にする。description は再検索(もう一度
@@ -508,6 +522,25 @@ const AVATAR_ADOPT_GENERIC_ERROR = "この画像を反映できませんでし�
 const AVATAR_VOICE_MATCH_GENERIC_ERROR = "声を検索できませんでした。少し時間をおいてもう一度お試しください。";
 const AVATAR_VOICE_MATCH_EMPTY_ERROR = "合う声が見つかりませんでした。もう一度お試しください。";
 const AVATAR_VOICE_ADOPT_GENERIC_ERROR = "この声を反映できませんでした。少し時間をおいてもう一度お試しください。";
+
+// ─── アバター写真アップロードの受付判定・案内文 ───────────────────────────────
+// StudioImageSection.tsxの「JPG, PNG（最大5MB）」表示と揃える。旧UIのhandleFileUpload
+// はサイズしか見ていないが、ここでは §10.3 の想定操作(0バイト・拡張子偽装)に応じて
+// 種別も見る(旧UIより厳しい方に倒すのは9.3-8と矛盾しない — チャットが緩くなるのを
+// 避けているだけで、既存ユーザー操作を追加で拒否するわけではない)。
+const MAX_AVATAR_PHOTO_SIZE = 5 * 1024 * 1024;
+const AVATAR_PHOTO_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+const AVATAR_PHOTO_TYPE_ERROR = "JPG・PNG・WEBPの画像ファイルを送ってください。";
+const AVATAR_PHOTO_SIZE_ERROR = "ファイルが大きすぎます。5MB以下の画像にしてください。";
+const AVATAR_PHOTO_EMPTY_ERROR = "空のファイルは送信できませんでした。別の画像を試してください。";
+const AVATAR_PHOTO_UPLOAD_ERROR = "この写真を反映できませんでした。少し時間をおいてもう一度お試しください。";
+
+function validateAvatarPhotoFile(file: File): string | null {
+  if (file.size === 0) return AVATAR_PHOTO_EMPTY_ERROR;
+  if (file.size > MAX_AVATAR_PHOTO_SIZE) return AVATAR_PHOTO_SIZE_ERROR;
+  if (!AVATAR_PHOTO_MIME_TYPES.has(file.type)) return AVATAR_PHOTO_TYPE_ERROR;
+  return null;
+}
 const AVATAR_VOICE_DESIGN_GENERIC_ERROR = "声を作成できませんでした。少し時間をおいてもう一度お試しください。";
 const AVATAR_VOICE_DESIGN_EMPTY_ERROR = "声を作成できませんでした。もう一度お試しください。";
 
@@ -1519,6 +1552,64 @@ export default function CopilotPreviewPage() {
     }
   };
 
+  // ─── アバター画像の自前アップロード(写真をアバターにする) ─────────────────────
+  // W3-1(docs/COPILOT_UI_PARITY.md §3.1 #8): PDF取り込みと同じくエージェントツール
+  // 経由にせず、ファイル選択の瞬間に確定する(落とした行為が意思表示そのもの)。
+  // adoptAvatarCandidateと同じPATCHエンドポイントを使うが、対象カード種別が異なる
+  // (avatarPhotoUploadは常に新規カードとして積む。候補一覧を持たないため)ため、
+  // 更新関数を共有しない。
+  const updateAvatarPhotoUploadCard = useCallback((msgId: number, patch: Partial<Extract<Card, { kind: "avatarPhotoUpload" }>>) => {
+    setMsgs((prev) =>
+      prev.map((m) =>
+        m.id === msgId && m.card?.kind === "avatarPhotoUpload" ? { ...m, card: { ...m.card, ...patch } } : m,
+      ),
+    );
+  }, []);
+
+  const uploadAvatarPhoto = async (configId: string, file: File) => {
+    const rejection = validateAvatarPhotoFile(file);
+    if (rejection) {
+      // 受け付けない形式・大きさは通信する前にこの場で断る(PDF取り込みと同じ作法)
+      push({ id: nextId(), role: "ai", card: { kind: "avatarPhotoUpload", configId, status: "error", fileName: file.name, message: rejection } });
+      return;
+    }
+
+    const cardId = nextId();
+    push({ id: cardId, role: "ai", card: { kind: "avatarPhotoUpload", configId, status: "uploading", fileName: file.name } });
+
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    }).catch(() => null);
+
+    if (!dataUrl) {
+      updateAvatarPhotoUploadCard(cardId, { status: "error", message: AVATAR_PHOTO_UPLOAD_ERROR });
+      return;
+    }
+
+    try {
+      const res = await authFetch(`${API_BASE}/v1/admin/avatar/configs/${configId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ image_url: dataUrl }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { error?: string } | null;
+        updateAvatarPhotoUploadCard(cardId, { status: "error", message: body?.error || AVATAR_PHOTO_UPLOAD_ERROR });
+        return;
+      }
+      updateAvatarPhotoUploadCard(cardId, { status: "success", imageUrl: dataUrl });
+      setRealActionCount((n) => n + 1);
+    } catch (err) {
+      const message =
+        (err as { message?: string } | null)?.message === "__AUTH_REQUIRED__"
+          ? AGENT_CHAT_AUTH_REQUIRED_MESSAGE
+          : AVATAR_PHOTO_UPLOAD_ERROR;
+      updateAvatarPhotoUploadCard(cardId, { status: "error", message });
+    }
+  };
+
   // ─── アバターの声の選択・採用 ─────────────────────────────────────────────────
   // POST /match-voice はテキストの候補(id/title/description/score)のみを返す
   // (旧UIウィザードのStudioVoiceSectionも同様に試聴機能を持たない。Fish Audio
@@ -1846,6 +1937,7 @@ export default function CopilotPreviewPage() {
                 onChip={runAction}
                 onGenerateAvatarCandidates={generateAvatarCandidates}
                 onAdoptAvatarCandidate={adoptAvatarCandidate}
+                onUploadAvatarPhoto={uploadAvatarPhoto}
                 onMatchAvatarVoice={matchAvatarVoice}
                 onAdoptAvatarVoice={adoptAvatarVoice}
                 onDesignAvatarVoice={designAvatarVoice}
@@ -2100,6 +2192,7 @@ function MessageRow({
   onChip,
   onGenerateAvatarCandidates,
   onAdoptAvatarCandidate,
+  onUploadAvatarPhoto,
   onMatchAvatarVoice,
   onAdoptAvatarVoice,
   onDesignAvatarVoice,
@@ -2109,6 +2202,7 @@ function MessageRow({
   onChip: (a: string, id: number) => void;
   onGenerateAvatarCandidates: (configId: string, name: string) => void | Promise<void>;
   onAdoptAvatarCandidate: (cardMsgId: number, configId: string, imageUrl: string) => void | Promise<void>;
+  onUploadAvatarPhoto: (configId: string, file: File) => void | Promise<void>;
   onMatchAvatarVoice: (configId: string, description: string) => void | Promise<void>;
   onAdoptAvatarVoice: (cardMsgId: number, configId: string, voiceId: string) => void | Promise<void>;
   onDesignAvatarVoice: (configId: string, instruction: string) => void | Promise<void>;
@@ -2139,6 +2233,7 @@ function MessageRow({
           msgId={m.id}
           onGenerateAvatarCandidates={onGenerateAvatarCandidates}
           onAdoptAvatarCandidate={onAdoptAvatarCandidate}
+          onUploadAvatarPhoto={onUploadAvatarPhoto}
           onMatchAvatarVoice={onMatchAvatarVoice}
           onAdoptAvatarVoice={onAdoptAvatarVoice}
           onDesignAvatarVoice={onDesignAvatarVoice}
@@ -2338,6 +2433,7 @@ function CardView({
   msgId,
   onGenerateAvatarCandidates,
   onAdoptAvatarCandidate,
+  onUploadAvatarPhoto,
   onMatchAvatarVoice,
   onAdoptAvatarVoice,
   onDesignAvatarVoice,
@@ -2348,6 +2444,7 @@ function CardView({
   msgId: number;
   onGenerateAvatarCandidates: (configId: string, name: string) => void | Promise<void>;
   onAdoptAvatarCandidate: (cardMsgId: number, configId: string, imageUrl: string) => void | Promise<void>;
+  onUploadAvatarPhoto: (configId: string, file: File) => void | Promise<void>;
   onMatchAvatarVoice: (configId: string, description: string) => void | Promise<void>;
   onAdoptAvatarVoice: (cardMsgId: number, configId: string, voiceId: string) => void | Promise<void>;
   onDesignAvatarVoice: (configId: string, instruction: string) => void | Promise<void>;
@@ -2544,9 +2641,11 @@ function CardView({
         </CardShell>
       );
     case "avatarAdopted":
-      return <AvatarAdoptedCard card={card} onGenerate={onGenerateAvatarCandidates} onMatchVoice={onMatchAvatarVoice} onDesignVoice={onDesignAvatarVoice} />;
+      return <AvatarAdoptedCard card={card} onGenerate={onGenerateAvatarCandidates} onUploadPhoto={onUploadAvatarPhoto} onMatchVoice={onMatchAvatarVoice} onDesignVoice={onDesignAvatarVoice} />;
     case "avatarCandidates":
       return <AvatarCandidatesCard card={card} msgId={msgId} onGenerate={onGenerateAvatarCandidates} onAdopt={onAdoptAvatarCandidate} />;
+    case "avatarPhotoUpload":
+      return <AvatarPhotoUploadCard card={card} />;
     case "avatarVoiceCandidates":
       return (
         <AvatarVoiceCard
@@ -3245,20 +3344,32 @@ function BillingSummaryCard({ card }: { card: Extract<Card, { kind: "billingSumm
 function AvatarAdoptedCard({
   card,
   onGenerate,
+  onUploadPhoto,
   onMatchVoice,
   onDesignVoice,
 }: {
   card: Extract<Card, { kind: "avatarAdopted" }>;
   onGenerate: (configId: string, name: string) => void | Promise<void>;
+  onUploadPhoto: (configId: string, file: File) => void | Promise<void>;
   onMatchVoice: (configId: string, description: string) => void | Promise<void>;
   onDesignVoice: (configId: string, instruction: string) => void | Promise<void>;
 }) {
   const [busyImage, setBusyImage] = useState(false);
   const [busyVoice, setBusyVoice] = useState(false);
   const [busyDesignVoice, setBusyDesignVoice] = useState(false);
+  const photoInputRef = useRef<HTMLInputElement>(null);
   const handleGenerate = () => {
     setBusyImage(true);
     void Promise.resolve(onGenerate(card.configId, card.name)).finally(() => setBusyImage(false));
+  };
+  // W3-1: 旧UI(StudioImageSection.tsx)の「AIで生成」「写真をアップロード」2タブを
+  // ここで並列の2ボタンとして提示する(ボタンを押した瞬間にファイル選択が開き、
+  // 選んだ時点で即アップロードが始まる。「使う」の再確認は求めない — ドラッグ操作の
+  // 意思表示に確認を挟まないPDF取り込みと同じ作法)。
+  const handlePhotoInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (file) void onUploadPhoto(card.configId, file);
   };
   const handleMatchVoice = () => {
     setBusyVoice(true);
@@ -3276,7 +3387,7 @@ function AvatarAdoptedCard({
     <CardShell
       tone="good"
       hd={<><span>✅</span>アバター「{card.name}」を採用しました</>}
-      foot={<CardActionsNote note="生成・検索のたびに少額の費用が発生します。気に入るまで何度でもやり直せます。" />}
+      foot={<CardActionsNote note="AIでの生成・声の検索のたびに少額の費用が発生します（写真のアップロードは無料です）。気に入るまで何度でもやり直せます。" />}
     >
       {card.imageUrl && (
         <img
@@ -3297,6 +3408,24 @@ function AvatarAdoptedCard({
           }}
         >
           {busyImage ? "生成しています…" : "画像を新しく生成する"}
+        </button>
+        <input
+          ref={photoInputRef}
+          type="file"
+          accept="image/jpeg,image/png,image/webp"
+          style={{ display: "none" }}
+          aria-hidden="true"
+          tabIndex={-1}
+          onChange={handlePhotoInputChange}
+        />
+        <button
+          onClick={() => photoInputRef.current?.click()}
+          style={{
+            alignSelf: "flex-start", fontSize: 14.5, fontWeight: 700, padding: "10px 18px", borderRadius: 12, minHeight: 44,
+            border: "1px solid var(--border)", background: "transparent", color: "var(--foreground)", cursor: "pointer",
+          }}
+        >
+          自分の写真を使う
         </button>
         <button
           onClick={handleMatchVoice}
@@ -3642,6 +3771,45 @@ function PdfUploadCard({ card }: { card: Extract<Card, { kind: "pdfUpload" }> })
       tone="bad"
       hd={<><span>📄</span>PDFを受け取れませんでした</>}
       foot={<CardActionsNote note="会話はそのまま続けられます。もう一度ファイルを送るか、内容を文章で教えてください。" />}
+    >
+      <Field k="ファイル" v={card.fileName} />
+      {card.message && <div style={{ fontSize: 15, color: "var(--foreground)", lineHeight: 1.7 }}>{card.message}</div>}
+    </CardShell>
+  );
+}
+
+// W3-1(docs/COPILOT_UI_PARITY.md §3.1 #8): 写真アップロードの3状態(送っている/受け取った/
+// 受け取れなかった)。PdfUploadCardと同じ作法(無限スピナーを残さない)。進捗率は
+// FileReader+単発PATCHのため取れず(PDFのXHR進捗とは異なる)、送信中は不定表示にする。
+function AvatarPhotoUploadCard({ card }: { card: Extract<Card, { kind: "avatarPhotoUpload" }> }) {
+  if (card.status === "uploading") {
+    return (
+      <CardShell hd={<><span>🖼️</span>写真を受け取っています</>}>
+        <Field k="ファイル" v={card.fileName} />
+      </CardShell>
+    );
+  }
+
+  if (card.status === "success") {
+    return (
+      <CardShell tone="good" hd={<><span>✅</span>アバター画像を差し替えました</>}>
+        {card.imageUrl && (
+          <img
+            src={card.imageUrl}
+            alt="アップロードした写真"
+            style={{ width: 96, height: 96, borderRadius: 12, objectFit: "cover", alignSelf: "flex-start" }}
+          />
+        )}
+        <Field k="ファイル" v={card.fileName} />
+      </CardShell>
+    );
+  }
+
+  return (
+    <CardShell
+      tone="bad"
+      hd={<><span>🖼️</span>写真を反映できませんでした</>}
+      foot={<CardActionsNote note="会話はそのまま続けられます。別の写真を試すか、AIでの生成もお使いいただけます。" />}
     >
       <Field k="ファイル" v={card.fileName} />
       {card.message && <div style={{ fontSize: 15, color: "var(--foreground)", lineHeight: 1.7 }}>{card.message}</div>}

@@ -11,8 +11,10 @@
 //
 // 検査する不変条件:
 //   1. 台帳は16行ちょうどで、# が 1〜16 の重複なし連番であること
-//   2. 「参照」列は `tool:<name>[,<name>...]` / `handoff:<key>` / `pending` のいずれかであること
-//      (誤字や未知の形式を検出する)
+//   2. 「参照」列は `tool:<name>[,<name>...]` / `handoff:<key>` / `direct` / `pending` の
+//      いずれかであること(誤字や未知の形式を検出する)。`direct` はチャットツールを経由せず
+//      Copilot UI内で直接完結する実装(既存のavatarCandidates系フロントエンド直叩き
+//      パターン)であることを示す。
 //   3. `tool:` が参照するツール名は toolDefinitions.ts の ADMIN_AGENT_TOOLS に実在すること
 //   4. `handoff:` が参照する feature キーは toolDefinitions.ts の LEGACY_UI_FEATURES に実在すること
 //
@@ -27,7 +29,7 @@ import { join } from 'path';
 const LEDGER_PATH = join(__dirname, '../../../../docs/COPILOT_UI_PARITY.md');
 const TOOL_DEFINITIONS_PATH = join(__dirname, 'toolDefinitions.ts');
 
-const REF_PATTERN = /^(?:tool:([a-z0-9_]+(?:,[a-z0-9_]+)*)|handoff:([a-z0-9_]+)|pending)$/;
+const REF_PATTERN = /^(?:tool:([a-z0-9_]+(?:,[a-z0-9_]+)*)|handoff:([a-z0-9_]+)|direct|pending)$/;
 
 interface LedgerRow {
   id: number;
@@ -109,13 +111,14 @@ describe('legacyUiParity: 台帳(docs/COPILOT_UI_PARITY.md §12)の整合性', (
   // S0(可視化)の完了判定そのもの。pending が 0 になるまでは意図的に赤くならない
   // (このテストは「pending の存在」ではなく「参照の実在」だけを検査する契約のため)。
   // 現在の内訳を出力しておくと、S0 の進捗をテスト実行のたびに確認できる。
-  it('現在の内訳(tool: / handoff: / pending)を記録する', () => {
-    const counts = { tool: 0, handoff: 0, pending: 0 };
+  it('現在の内訳(tool: / handoff: / direct / pending)を記録する', () => {
+    const counts = { tool: 0, handoff: 0, direct: 0, pending: 0 };
     for (const row of rows) {
       if (row.ref === 'pending') counts.pending++;
+      else if (row.ref === 'direct') counts.direct++;
       else if (row.ref.startsWith('tool:')) counts.tool++;
       else if (row.ref.startsWith('handoff:')) counts.handoff++;
     }
-    expect(counts.tool + counts.handoff + counts.pending).toBe(rows.length);
+    expect(counts.tool + counts.handoff + counts.direct + counts.pending).toBe(rows.length);
   });
 });
