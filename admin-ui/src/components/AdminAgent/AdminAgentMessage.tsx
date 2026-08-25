@@ -1,5 +1,6 @@
 // admin-ui/src/components/AdminAgent/AdminAgentMessage.tsx
 import type { AgentMessage } from "./useAdminAgent";
+import AgentMarkdown from "../markdown/AgentMarkdown";
 
 // このパネル面(components/AdminAgent/)は凍結方針(admin-ui/CLAUDE.md)のため、
 // 全画面UI(pages/copilot-preview/)が追加した新ツールのラベルはここに追加しない。
@@ -45,12 +46,13 @@ export default function AdminAgentMessage({ message }: AdminAgentMessageProps) {
           color: "var(--foreground, #f9fafb)",
           fontSize: 14,
           lineHeight: 1.6,
-          whiteSpace: "pre-wrap",
           wordBreak: "break-word",
           textAlign: "left",
+          ...(isUser ? { whiteSpace: "pre-wrap" } : {}),
         }}
       >
-        {message.content}
+        {/* 自分自身の発話はMarkdown解釈させない。AI発話のみAgentMarkdownで描画する */}
+        {isUser ? message.content : <AgentMarkdown content={message.content} />}
       </div>
 
       {/* アクションバブル */}

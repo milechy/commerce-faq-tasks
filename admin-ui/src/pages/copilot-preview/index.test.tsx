@@ -5153,3 +5153,51 @@ describe("CopilotPreviewPage — 旧UIからの復路(from=legacy)", () => {
     expect(screen.queryByText("旧画面から戻られましたね。続きから話せます。")).toBeNull();
   });
 });
+
+// P0-2: AI発話が生Markdown記法のまま表示されていた不具合の回帰テスト。
+// AgentMarkdown(単一の描画コンポーネント)経由で <strong> 等に変換されること、
+// 自分自身の発話はMarkdown解釈されずそのまま出ることを確認する。
+describe("CopilotPreviewPage — AI発話のMarkdown描画", () => {
+  beforeEach(() => {
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+  });
+
+  it("AI発話に**a**を含むレスポンスを流すと、画面に文字列**が残らず<strong>要素になる", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
+      return mockOk({ reply: "これは**a**です", actions: [] });
+    });
+
+    renderPage();
+
+    const strong = await screen.findByText("a");
+    expect(strong.tagName).toBe("STRONG");
+    // 生のMarkdown記法(**)が文字としてどこにも残っていないこと
+    expect(screen.queryByText(/\*\*/)).toBeNull();
+  });
+
+  it("ユーザー自身の発話はMarkdown解釈されず、**がそのまま文字として表示される", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
+      return mockOk({ reply: "了解しました。", actions: [] });
+    });
+
+    renderPage();
+    await waitForBootstrapSendStarted();
+
+    fireEvent.change(screen.getByPlaceholderText(/指示ルール/), { target: { value: "**強調のつもり**" } });
+    fireEvent.click(screen.getByLabelText("送信"));
+
+    const own = await screen.findByText("**強調のつもり**");
+    expect(own.tagName).not.toBe("STRONG");
+  });
+});

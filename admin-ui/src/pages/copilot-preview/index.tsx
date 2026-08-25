@@ -60,6 +60,7 @@ import { NotificationBell } from "../../components/common/NotificationBell";
 import { ThemeToggle } from "../../components/common/ThemeToggle";
 import LangSwitcher from "../../components/LangSwitcher";
 import AppSwitcher from "../../components/AppSwitcher";
+import AgentMarkdown from "../../components/markdown/AgentMarkdown";
 
 // ─── モデル ──────────────────────────────────────────────────────────────────
 
@@ -2060,8 +2061,10 @@ function MessageRow({
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: isMe ? "flex-end" : "flex-start", gap: 10 }}>
       {m.text && (
-        <div style={{ maxWidth: "90%", padding: "14px 18px", borderRadius: isMe ? "18px 18px 6px 18px" : "18px 18px 18px 6px", background: isMe ? AGENT : "var(--muted, rgba(120,120,140,0.12))", color: isMe ? "#fff" : "var(--foreground)", fontSize: 16, lineHeight: 1.7, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-          {m.text}
+        <div style={{ maxWidth: "90%", padding: "14px 18px", borderRadius: isMe ? "18px 18px 6px 18px" : "18px 18px 18px 6px", background: isMe ? AGENT : "var(--muted, rgba(120,120,140,0.12))", color: isMe ? "#fff" : "var(--foreground)", fontSize: 16, lineHeight: 1.7, wordBreak: "break-word", ...(isMe ? { whiteSpace: "pre-wrap" } : {}) }}>
+          {/* 自分自身の発話はMarkdown解釈させない(意図しない**強調**表示等を避ける)。
+              AI発話のみAgentMarkdownで描画する */}
+          {isMe ? m.text : <AgentMarkdown content={m.text} />}
         </div>
       )}
       {/* 回答の出どころ。テキストが流し込まれるまでは出さない(空バブルの下に
