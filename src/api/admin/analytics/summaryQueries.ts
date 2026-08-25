@@ -617,6 +617,13 @@ export async function fetchAnalyticsTrend({ db, tenantId, period }: SummaryQuery
        FROM knowledge_gaps kg
        WHERE kg.created_at >= NOW() - $1::interval
        ${kgTenantClause}
+       -- sentiment と同じ理由でここにも実ユーザー判定が要る。
+       -- fetchAnalyticsSummary 側の total_knowledge_gaps には付いている(上記)のに
+       -- こちらだけ抜けていると、同じ「未回答質問数」がsummary画面とtrends画面で
+       -- 食い違う(片方はe2e除外、もう片方は含む)。
+       -- knowledge_gaps.session_id は UUID (migration_knowledge_gaps.sql:8) なので
+       -- chat_sessions.id と突き合わせる。
+       ${userSourceExists("kg.session_id", "kg.tenant_id", "id")}
        GROUP BY day
      ) kg_count ON kg_count.day = d.date
      ORDER BY d.date ASC`,
