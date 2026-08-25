@@ -4005,6 +4005,174 @@ describe('POST /v1/admin/agent/chat', () => {
   });
 
   // -------------------------------------------------------------------------
+  // W2-1: bulk_unpublish_faqs / bulk_delete_faqs(docs/COPILOT_UI_PARITY.md §3.1 #5)
+  describe('bulk_unpublish_faqs / bulk_delete_faqs', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    it('bulk_unpublish_faqs: 指定した件数分を非公開にし、件数が一致する', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-buf-1', 'bulk_unpublish_faqs', { ids: [1, 2, 3], confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('非公開にしました。'));
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [
+          { id: 1, question: 'Q1', answer: 'A1', is_excluded_from_search: false },
+          { id: 2, question: 'Q2', answer: 'A2', is_excluded_from_search: true },
+          { id: 3, question: 'Q3', answer: 'A3', is_excluded_from_search: null },
+        ],
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'この3件を非公開にして', sessionId: 'sess-buf-01' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenCalledWith(
+        expect.stringContaining('UPDATE faq_docs SET is_published = false'),
+        [[1, 2, 3], 'tenant-abc'],
+      );
+      // 件数分、is_excluded_from_searchを引き継いでESへ反映する
+      expect(mockUpsertToEsAsync).toHaveBeenCalledWith('tenant-abc', 1, 'Q1', 'A1', false, false);
+      expect(mockUpsertToEsAsync).toHaveBeenCalledWith('tenant-abc', 2, 'Q2', 'A2', false, true);
+      expect(mockUpsertToEsAsync).toHaveBeenCalledWith('tenant-abc', 3, 'Q3', 'A3', false, false);
+      expect(res.body.actions[0].result).toContain('FAQ 3件を非公開にしました');
+    });
+
+    it('bulk_unpublish_faqs: 一部が他テナント/不存在で対象外だった場合、実際に処理した件数を報告する', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-buf-2', 'bulk_unpublish_faqs', { ids: [1, 2, 999], confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('非公開にしました。'));
+
+      mockQuery.mockResolvedValueOnce({
+        rows: [
+          { id: 1, question: 'Q1', answer: 'A1', is_excluded_from_search: false },
+          { id: 2, question: 'Q2', answer: 'A2', is_excluded_from_search: false },
+        ],
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'この3件を非公開にして', sessionId: 'sess-buf-02' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('FAQ 2件を非公開にしました');
+      expect(result).toContain('1件は見つからないか対象外でした');
+    });
+
+    it('bulk_unpublish_faqs: confirmedなしでは実行されずDBが無変更', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-buf-3', 'bulk_unpublish_faqs', { ids: [1, 2], confirmed: false }))
+        .mockResolvedValueOnce(makeGroqResponse('確認しました。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'この2件を非公開にして', sessionId: 'sess-buf-03' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('確認が必要');
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    it('bulk_unpublish_faqs: ids が空配列ならDBに到達せず案内する', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-buf-4', 'bulk_unpublish_faqs', { ids: [], confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('確認しました。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '非公開にして', sessionId: 'sess-buf-04' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('1件以上指定');
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    // AC-T2-4: 上限超過を黙って切らない(先頭20件だけ処理、のような黙った縮小をしない)。
+    it('bulk_unpublish_faqs: 上限(20件)を超えると一切実行せず分割を案内する', async () => {
+      const ids = Array.from({ length: 21 }, (_, i) => i + 1);
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-buf-5', 'bulk_unpublish_faqs', { ids, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('確認しました。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '全部非公開にして', sessionId: 'sess-buf-05' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('最大20件');
+      expect(result).toContain('21件指定されました');
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    it('bulk_delete_faqs: 指定した件数分を削除する', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-bdf-1', 'bulk_delete_faqs', { ids: [10, 11], confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('削除しました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [] }) // faq_embeddings削除
+        .mockResolvedValueOnce({ rows: [{ id: 10 }, { id: 11 }] }); // DELETE ... RETURNING id
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'この2件を削除して', sessionId: 'sess-bdf-01' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining('DELETE FROM faq_docs WHERE id = ANY($1) AND tenant_id = $2'),
+        [[10, 11], 'tenant-abc'],
+      );
+      expect(res.body.actions[0].result).toContain('FAQ 2件を削除しました');
+    });
+
+    it('bulk_delete_faqs: confirmedなしでは実行されずDBが無変更', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-bdf-2', 'bulk_delete_faqs', { ids: [10, 11], confirmed: false }))
+        .mockResolvedValueOnce(makeGroqResponse('確認しました。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'この2件を削除して', sessionId: 'sess-bdf-02' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('確認が必要');
+      expect(res.body.actions[0].result).toContain('元に戻せません');
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    it('bulk_delete_faqs: 上限(20件)を超えると一切実行せず分割を案内する', async () => {
+      const ids = Array.from({ length: 25 }, (_, i) => i + 1);
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-bdf-3', 'bulk_delete_faqs', { ids, confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('確認しました。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '全部削除して', sessionId: 'sess-bdf-03' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('最大20件');
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // W1-1: update_allowed_origins(docs/COPILOT_UI_PARITY.md §3.1 #1)
   describe('update_allowed_origins', () => {
     function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {

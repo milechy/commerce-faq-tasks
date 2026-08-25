@@ -1039,6 +1039,105 @@ export async function executeToolCall(
     }
 
     // -----------------------------------------------------------------------
+    // W2-1(docs/COPILOT_UI_PARITY.md §3.1 #5): T2集合の選択。delete_faq/set_faq_publishedの
+    // 配列拡張ではなく独立ツールにする(confirmPolicy.tsのリスク階層が「1件の操作」として
+    // 付けたhigh/mediumが、配列を受け取るようになると実態を表さなくなるため)。
+    // このツール自身は絞り込みを行わない — 対象は必ず get_faq_list で事前に取得したIDを
+    // 渡させることで、「絞り込み条件を変えた後に古い対象集合で実行される」事故を構造的に
+    // 起こり得なくする(このツールにフィルタ引数が無いので、そもそも再現しない)。
+    // 上限20件は黙って切らない(超過時は一切実行せず、分割を案内する)。
+    case 'bulk_unpublish_faqs': {
+      const rawIds = Array.isArray(args['ids']) ? args['ids'] : [];
+      const ids = rawIds.map((v) => Number(v)).filter((n) => Number.isFinite(n));
+      const confirmed = isConfirmed(args['confirmed']);
+      const MAX_BULK_FAQ_IDS = 20;
+
+      if (ids.length === 0) {
+        return truncate('ids を1件以上指定してください');
+      }
+      if (ids.length > MAX_BULK_FAQ_IDS) {
+        return truncate(
+          `一度に指定できるのは最大${MAX_BULK_FAQ_IDS}件です(${ids.length}件指定されました)。` +
+          `${MAX_BULK_FAQ_IDS}件ずつに分けて依頼してください`
+        );
+      }
+      if (!confirmed) {
+        return truncate(
+          `FAQ ${ids.length}件（ID: ${ids.join(', ')}）の非公開化には確認が必要です。` +
+          '対象を提示のうえ、confirmed=true を指定して再度実行してください'
+        );
+      }
+
+      try {
+        const result = await db.query(
+          `UPDATE faq_docs SET is_published = false, updated_at = NOW()
+           WHERE id = ANY($1) AND tenant_id = $2
+           RETURNING id, question, answer, is_excluded_from_search`,
+          [ids, tenantId]
+        );
+        const updated = result.rows as {
+          id: number; question: string; answer: string; is_excluded_from_search: boolean | null;
+        }[];
+        // set_faq_publishedと同じ理由でis_excluded_from_searchを引き継ぐ(件数分)。
+        for (const row of updated) {
+          upsertToEsAsync(tenantId, row.id, row.question, row.answer, false, row.is_excluded_from_search ?? false);
+        }
+        const missing = ids.length - updated.length;
+        const missingNote = missing > 0 ? `（${missing}件は見つからないか対象外でした）` : '';
+        return truncate(`FAQ ${updated.length}件を非公開にしました${missingNote}`);
+      } catch (err) {
+        logger.warn('[actionExecutor] bulk_unpublish_faqs failed', err);
+        return truncate('一括非公開に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // W2-1続き: 削除版。delete_faqと同じ不可逆な破棄のためhigh。設計はbulk_unpublish_faqsと同じ。
+    case 'bulk_delete_faqs': {
+      const rawIds = Array.isArray(args['ids']) ? args['ids'] : [];
+      const ids = rawIds.map((v) => Number(v)).filter((n) => Number.isFinite(n));
+      const confirmed = isConfirmed(args['confirmed']);
+      const MAX_BULK_FAQ_IDS = 20;
+
+      if (ids.length === 0) {
+        return truncate('ids を1件以上指定してください');
+      }
+      if (ids.length > MAX_BULK_FAQ_IDS) {
+        return truncate(
+          `一度に指定できるのは最大${MAX_BULK_FAQ_IDS}件です(${ids.length}件指定されました)。` +
+          `${MAX_BULK_FAQ_IDS}件ずつに分けて依頼してください`
+        );
+      }
+      if (!confirmed) {
+        return truncate(
+          `FAQ ${ids.length}件（ID: ${ids.join(', ')}）の削除には確認が必要です。この操作は元に戻せません。` +
+          '対象を提示のうえ、confirmed=true を指定して再度実行してください'
+        );
+      }
+
+      try {
+        await db.query(
+          `DELETE FROM faq_embeddings WHERE tenant_id = $1 AND (metadata->>'faq_id')::bigint = ANY($2)`,
+          [tenantId, ids]
+        );
+        const result = await db.query(
+          'DELETE FROM faq_docs WHERE id = ANY($1) AND tenant_id = $2 RETURNING id',
+          [ids, tenantId]
+        );
+        const deletedIds = (result.rows as { id: number }[]).map((r) => r.id);
+        for (const deletedId of deletedIds) {
+          await deleteFaqFromEs(tenantId, deletedId);
+        }
+        const missing = ids.length - deletedIds.length;
+        const missingNote = missing > 0 ? `（${missing}件は見つからないか対象外でした）` : '';
+        return truncate(`FAQ ${deletedIds.length}件を削除しました${missingNote}`);
+      } catch (err) {
+        logger.warn('[actionExecutor] bulk_delete_faqs failed', err);
+        return truncate('一括削除に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
     // 新規テナントのオンボーディング(GID 1216274591838389のチャット版):
     // 業種別FAQたたき台を一括登録し、旧UI(OnboardingModal)と同じ条件で
     // onboarding_completed_at を更新する(業種選択のみで完了扱いになる仕様を踏襲)。
