@@ -255,7 +255,9 @@ export function registerFaqAdminRoutes(app: Express) {
 
       try {
         const embeddingText = `${row.question}\n${row.answer}`;
-        const embedding = await embedText(embeddingText);
+        // PR-2(2026-08-25収益監査): tenantId をスコープに持ちながら渡し忘れており、
+        // unknown計上され続けていた。billable:false は課金対象化の方針が未確定なため。
+        const embedding = await embedText(embeddingText, { tenantId: row.tenant_id, billable: false });
 
         const embeddingLiteral = `[${embedding.join(",")}]`;
 
@@ -350,7 +352,9 @@ export function registerFaqAdminRoutes(app: Express) {
 
       try {
         const embeddingText = `${row.question}\n${row.answer}`;
-        const embedding = await embedText(embeddingText);
+        // PR-2(2026-08-25収益監査): tenantId をスコープに持ちながら渡し忘れており、
+        // unknown計上され続けていた。billable:false は課金対象化の方針が未確定なため。
+        const embedding = await embedText(embeddingText, { tenantId: row.tenant_id, billable: false });
         const embeddingLiteral = `[${embedding.join(",")}]`;
 
         // 既存のこの FAQ 用のベクトルを削除してから再登録

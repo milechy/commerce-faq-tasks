@@ -112,7 +112,10 @@ async function saveChunk(
     tenantId: string;
   }
 ): Promise<number> {
-  const { embedding, totalTokens } = await embedTextWithUsage(params.chunkText);
+  // PR-2(2026-08-25収益監査): skipTracking=true — このトークンは runOcrPipeline末尾で
+  // 全チャンク分を合算し extraLlmUsages としてジョブ単位の1行に内包する(下記参照)。
+  // ここで計上すると、チャンクごとに tenant_id='unknown' の行が別途できて二重計上になる。
+  const { embedding, totalTokens } = await embedTextWithUsage(params.chunkText, { skipTracking: true });
   const embedLiteral = `[${embedding.join(",")}]`;
   const encryptedText = encryptText(params.chunkText);
 

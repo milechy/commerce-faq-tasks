@@ -89,6 +89,13 @@ export interface AgentSearchResponse {
   gapSignal?: { hitCount: number; topScore: number };
   /** Phase53: Groq API実トークン数 */
   llmUsage?: { prompt_tokens: number; completion_tokens: number };
+  /**
+   * PR-2(2026-08-25収益監査): クエリ埋め込み(OpenAI)のトークン消費。
+   * chat モデル(Groq)とは別単価のため llmUsage には合算しない
+   * （以前は合算しており embedding が chat モデルのレートで誤計上されていた）。
+   * 呼び出し元(chat/route.ts)が extraLlmUsages に実モデル名で内包する。
+   */
+  embeddingUsage?: { model: string; totalTokens: number };
   /** GID 1216978855735482 (PR-13): system_prompt_variants から選ばれたvariant。
    *  未設定(0/1variant)時はnull(「割当なし」と「割当あり」を区別する)。 */
   promptVariantId?: string | null;

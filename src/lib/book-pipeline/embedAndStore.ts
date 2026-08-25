@@ -3,14 +3,14 @@
 // CLAUDE.md: RAG excerpt ≤200 chars, 書籍内容をログに出力しない
 
 import type { Pool } from "pg";
-import { embedText } from "../../agent/llm/openaiEmbeddingClient";
+import { embedText, type EmbedUsageContext } from "../../agent/llm/openaiEmbeddingClient";
 import { encryptText } from "../crypto/textEncrypt";
 import { resolveFaqWriteIndex } from "../../search/langIndex";
 import type { StructuredChunk } from "./structurizer";
 
 export interface EmbedAndStoreDeps {
   db: Pool;
-  embedFn?: (text: string) => Promise<number[]>;
+  embedFn?: (text: string, usageContext?: EmbedUsageContext) => Promise<number[]>;
 }
 
 /**
@@ -86,7 +86,10 @@ export async function embedAndStore(
         ? `${chunk.question}\n${chunk.answer}`
         : chunk.summary;
 
-    const vector = await embed(embeddingSource);
+    // PR-2(2026-08-25収益監査): tenantId をスコープに持ちながら渡し忘れており、
+    // unknown計上され続けていた。billable:false は課金対象化の方針が未確定なため
+    // (原価の可視化のみ。課金対象化は別途方針判断が必要)。
+    const vector = await embed(embeddingSource, { tenantId, billable: false });
 
     // faq_embeddings.text に保存するテキスト（暗号化）
     const storedText = encryptText(embeddingSource);

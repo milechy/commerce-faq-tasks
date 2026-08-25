@@ -53,7 +53,7 @@ const PG_HIT = { id: "faq-1", text: "送料は500円です", score: 0.9, source:
 
 beforeEach(() => {
   jest.clearAllMocks();
-  mockedEmbed.mockResolvedValue({ embedding: [0.1, 0.2, 0.3], totalTokens: 12 });
+  mockedEmbed.mockResolvedValue({ embedding: [0.1, 0.2, 0.3], totalTokens: 12, model: "text-embedding-3-small" });
 });
 
 describe("runSearchAgent — pgvector 重複検索の解消", () => {
@@ -140,5 +140,62 @@ describe("runSearchAgent — pgvector 重複検索の解消", () => {
     const sources = result.ragSources ?? [];
     expect(sources.find((s) => s.chunk_id === "faq-1")?.source).toBe("faq");
     expect(sources.find((s) => s.chunk_id === "faq-2")?.source).toBe("faq");
+  });
+});
+
+// PR-2(2026-08-25収益監査): embeddingTokens が chat モデルの prompt_tokens に
+// 誤って合算されており(かつ embedTextWithUsage 自身も別途 tenant_id='unknown' の
+// 行を作っていた)、二重計上になっていた。
+describe("runSearchAgent — embedding usage の分離計上 (PR-2)", () => {
+  it("embedTextWithUsage は skipTracking:true で呼ばれる(unknown行を作らせない)", async () => {
+    mockedSearchPgVector.mockResolvedValue({ items: [PG_HIT], ms: 5 });
+
+    await runSearchAgent({ q: "送料について", tenantId: "tenant-1" });
+
+    expect(mockedEmbed).toHaveBeenCalledWith("送料について", { skipTracking: true });
+  });
+
+  it("llmUsage.prompt_tokensにembeddingトークンを合算しない(chatモデルのレートで誤課金しない)", async () => {
+    mockedSearchPgVector.mockResolvedValue({ items: [PG_HIT], ms: 5 });
+    const { synthesizeAnswer } = jest.requireMock("../tools/synthesisTool") as {
+      synthesizeAnswer: jest.Mock;
+    };
+    synthesizeAnswer.mockResolvedValueOnce({
+      answer: "回答",
+      gapSignal: { hitCount: 0, topScore: 0 },
+      llmUsage: { prompt_tokens: 100, completion_tokens: 30 },
+    });
+
+    const result = await runSearchAgent({ q: "送料について", tenantId: "tenant-1" });
+
+    // embedding分(12トークン)が混ざらず、synthesisの実トークンのみ
+    expect(result.llmUsage).toEqual({ prompt_tokens: 100, completion_tokens: 30 });
+  });
+
+  it("embeddingUsageを実モデル名・実トークン数で別途返す", async () => {
+    mockedSearchPgVector.mockResolvedValue({ items: [PG_HIT], ms: 5 });
+    mockedEmbed.mockResolvedValue({ embedding: [0.1], totalTokens: 12, model: "text-embedding-3-small" });
+
+    const result = await runSearchAgent({ q: "送料について", tenantId: "tenant-1" });
+
+    expect(result.embeddingUsage).toEqual({ model: "text-embedding-3-small", totalTokens: 12 });
+  });
+
+  it("embeddingが0トークン(テストモード等)ならembeddingUsageはundefined", async () => {
+    mockedSearchPgVector.mockResolvedValue({ items: [PG_HIT], ms: 5 });
+    mockedEmbed.mockResolvedValue({ embedding: [0.1], totalTokens: 0, model: "text-embedding-3-small" });
+
+    const result = await runSearchAgent({ q: "送料について", tenantId: "tenant-1" });
+
+    expect(result.embeddingUsage).toBeUndefined();
+  });
+
+  it("pgvector検索が失敗してembeddingが取得できなかった場合もクラッシュせずembeddingUsageはundefined", async () => {
+    mockedEmbed.mockRejectedValueOnce(new Error("openai down"));
+    mockedHybridSearch.mockResolvedValue({ items: [], ms: 10, note: "es_hits=0" });
+
+    const result = await runSearchAgent({ q: "送料について", tenantId: "tenant-1" });
+
+    expect(result.embeddingUsage).toBeUndefined();
   });
 });

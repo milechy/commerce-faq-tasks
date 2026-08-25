@@ -121,8 +121,14 @@ export interface DialogTurnMeta {
   orchestrationSteps?: OrchestratorStep[];
   /** ナレッジギャップ検出シグナル */
   gapSignal?: { hitCount: number; topScore: number };
-  /** Phase53: Groq API実トークン数（synthesis + query埋め込み、CHAT_LLM_MODEL レートで課金） */
+  /** Phase53: Groq API実トークン数（synthesis）。CHAT_LLM_MODEL レートで課金。 */
   llmUsage?: { prompt_tokens: number; completion_tokens: number };
+  /**
+   * PR-2(2026-08-25収益監査): クエリ埋め込み(OpenAI)のトークン消費。
+   * chat とは別単価のため llmUsage には合算しない。chat/route.ts が
+   * extraLlmUsages に実モデル名で内包する。
+   */
+  embeddingUsage?: { model: string; totalTokens: number };
   /**
    * Subtask 3: マルチステップ planner LLM（GPT-OSS 20B/120B）のモデル別 usage。
    * chat とは別モデル単価のため、chat/route.ts が各モデルで別 trackUsage する。

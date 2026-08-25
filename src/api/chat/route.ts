@@ -488,13 +488,23 @@ export function createChatHandler(logger: Logger) {
       // マルチステップ planner LLM（GPT-OSS 20B/120B）は chat 本体（70B）とはモデル単価が
       // 異なる。usage_logs は「1行=1リクエスト」（Stripe quantity=COUNT(*)）のため別行は作らず、
       // 本 chat 行の cost に planner 分をモデル別実レートで内包させる。
-      const extraLlmUsages = (result.meta?.plannerLlmUsages ?? [])
-        .filter((pu) => pu.prompt_tokens > 0 || pu.completion_tokens > 0)
-        .map((pu) => ({
-          model: pu.model,
-          inputTokens: pu.prompt_tokens,
-          outputTokens: pu.completion_tokens,
-        }));
+      // PR-2(2026-08-25収益監査): クエリ埋め込み(OpenAI)も同じ理由で内包する。
+      // 以前は searchAgent.ts が chat モデルの prompt_tokens に直接合算しており、
+      // embedding($0.02/1M)が chat モデル(はるかに高レート)で計上され、かつ
+      // embedTextWithUsage 自身が別途 tenant_id='unknown' の行も作っていた(二重計上)。
+      const embeddingUsage = result.meta?.embeddingUsage;
+      const extraLlmUsages = [
+        ...(result.meta?.plannerLlmUsages ?? [])
+          .filter((pu) => pu.prompt_tokens > 0 || pu.completion_tokens > 0)
+          .map((pu) => ({
+            model: pu.model,
+            inputTokens: pu.prompt_tokens,
+            outputTokens: pu.completion_tokens,
+          })),
+        ...(embeddingUsage && embeddingUsage.totalTokens > 0
+          ? [{ model: embeddingUsage.model, inputTokens: embeddingUsage.totalTokens, outputTokens: 0 }]
+          : []),
+      ];
 
       trackUsage({
         tenantId,
