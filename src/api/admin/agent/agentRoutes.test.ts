@@ -2771,6 +2771,47 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(prevSessionsSql).toContain("chat_sessions.metadata->>'source' = 'user'");
       expect(evalSql).toContain("cs.metadata->>'source' = 'user'");
     });
+
+    it('GID 1217810487918908: 成約(CV)集計のクエリにsource="user"絞り込みが入っている(結合列はchat_sessions.id)', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: 'call-wb-cv-source-filter',
+                  type: 'function',
+                  function: { name: 'get_weekly_briefing', arguments: '{}' },
+                }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('今週の状況です。'));
+
+      mockQuery.mockResolvedValue({ rows: [{ n: 0 }] });
+      mockGetGaps.mockResolvedValueOnce({ gaps: [], total: 0 });
+
+      await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '今週の状況を教えて', sessionId: 'sess-cv-source-filter' });
+
+      // Promise.allSettled の3番目(0始まり)が成約(conversion_attributions)のクエリ。
+      // 隣接する sessionsRes/prevSessionsRes/evalRes には絞り込みがあったのに、
+      // このクエリだけ実ユーザー判定が無く、e2e/chat-testの成約まで合算していた
+      // (2026-08-25監査: carnation で「会話数0件・成約130件・売上¥248,820,000」)。
+      const [cvSql] = mockQuery.mock.calls[3]!;
+      expect(cvSql).toContain("conversion_attributions.tenant_id");
+      expect(cvSql).toContain("cs.metadata->>'source' = 'user'");
+      // 結合列の固定: conversion_attributions.session_id は chat_sessions.id (UUID) を参照する。
+      // 第3引数を誤って既定値("session_id")にすると cs.session_id(TEXT) = ...(UUID) になり、
+      // Postgres は暗黙キャストしないため週次ブリーフィングが500になる(PR #958で実証済み)。
+      expect(cvSql).toContain('cs.id = conversion_attributions.session_id');
+      expect(cvSql).not.toContain('cs.session_id = conversion_attributions.session_id');
+    });
   });
 
   // -------------------------------------------------------------------------
