@@ -40,10 +40,18 @@ export const WRITE_TOOL_RISK_TIERS: Record<string, RiskTier> = {
   set_avatar_feature: 'low',
   // 社内向け分析レコードのステータス変更のみ。顧客影響なし・再度拾い直せる。
   dismiss_knowledge_gap: 'low',
+  // recommendation_statusの承認状態を倒すだけで、FAQは作らない・顧客への露出も
+  // 発生しない(dismiss_knowledge_gapと同じくrecommendation_status列の変更のみ)。
+  // 再度dismissすれば戻せる。
+  approve_gap_recommendation: 'low',
 
   // --- medium: 永続コンテンツの作成・変更 ---
   add_faq: 'medium',
   update_faq: 'medium',
+  // 承認済みギャップからFAQを作成し is_published=true で公開する。add_faqと同じ
+  // 「永続コンテンツをそのまま公開する」操作(delete_faqのような不可逆ではなく、
+  // 作成後は他のFAQと同様にupdate_faq/delete_faqで訂正・削除できる)。
+  add_knowledge_from_gap: 'medium',
   // 既定見本の自テナントへの複製。is_active=false で作るため公開はされないが、
   // 永続レコードを作成する点は add_faq と同じ階層。
   adopt_avatar_preset: 'medium',

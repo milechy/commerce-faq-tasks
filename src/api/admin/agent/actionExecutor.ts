@@ -18,6 +18,7 @@ import { routeCorrection } from "../../../agent/knowledge/correctionRouter";
 import { generateTestResponses } from '../tuning/testResponseRoutes';
 import { searchKnowledgeForSuggestion, formatKnowledgeContext } from '../../../lib/knowledgeSearchUtil';
 import { getGaps, updateGapStatus } from '../knowledge/knowledgeGapRepository';
+import { approveGapRecommendation, addKnowledgeFromGap } from '../knowledge-gaps/routes';
 import { textToFaqs } from '../knowledge/routes';
 import {
   generateTextFaqPreview,
@@ -3067,6 +3068,85 @@ export async function executeToolCall(
       } catch (err) {
         logger.warn('[actionExecutor] dismiss_knowledge_gap failed', err);
         return truncate('知識ギャップの更新に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // ナレッジ配線是正「チャット完結」(Asana GID 1217811043900566):
+    // ギャップ承認→知識追加までをチャットの中だけで完結させる2ツール。
+    // 書き込みは knowledge-gaps/routes.ts の approveGapRecommendation /
+    // addKnowledgeFromGap を共有する(FAQ書き込みの6本目を作らない。禁止6)。
+    case 'approve_gap_recommendation': {
+      const gapId = Number(args['gap_id']);
+      const confirmed = isConfirmed(args['confirmed']);
+
+      if (!confirmed) {
+        return truncate(`知識ギャップ（ID: ${gapId}）の推薦を承認するには確認が必要です。confirmed=true を指定して再度実行してください`);
+      }
+      if (!Number.isFinite(gapId)) {
+        return truncate('gap_id が不正です');
+      }
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+
+      try {
+        const result = await approveGapRecommendation(gapId, tenantId, isSuperAdmin);
+        if (!result.ok) {
+          return truncate(`知識ギャップ（ID: ${gapId}）が見つかりません`);
+        }
+        // 出所を示さずに承認させない(禁止29・33の趣旨)。質問文・検出源・頻度を必ず添える。
+        const freqNote = result.frequency ? `、これまで${result.frequency}回検出` : '';
+        return truncate(
+          `知識ギャップ（ID: ${gapId}）「${result.userQuestion}」の推薦を承認しました` +
+          `(検出源: ${result.detectionSource ?? '不明'}${freqNote})。` +
+          `続けて add_knowledge_from_gap でFAQを作成できます。`
+        );
+      } catch (err) {
+        logger.warn('[actionExecutor] approve_gap_recommendation failed', err);
+        return truncate('知識ギャップの承認に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    case 'add_knowledge_from_gap': {
+      const gapId = Number(args['gap_id']);
+      const answerText = String(args['answer_text'] ?? '').trim();
+      const category = args['category'] ? String(args['category']).slice(0, 100) : null;
+      const confirmed = isConfirmed(args['confirmed']);
+
+      if (!confirmed) {
+        return truncate(`知識ギャップ（ID: ${gapId}）からFAQを作成するには確認が必要です。confirmed=true を指定して再度実行してください`);
+      }
+      if (!Number.isFinite(gapId)) {
+        return truncate('gap_id が不正です');
+      }
+      if (!answerText) {
+        return truncate('answer_text は必須です');
+      }
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+
+      try {
+        const result = await addKnowledgeFromGap(gapId, answerText, category, tenantId, isSuperAdmin);
+        if (!result.ok) {
+          if (result.reason === 'not_found') {
+            return truncate(`知識ギャップ（ID: ${gapId}）が見つかりません`);
+          }
+          if (result.reason === 'forbidden') {
+            return truncate('このギャップは他のテナントのものです');
+          }
+          return truncate(`知識ギャップ（ID: ${gapId}）はまだ承認されていません。先に approve_gap_recommendation で承認してください`);
+        }
+        const freqNote = result.frequency ? `、これまで${result.frequency}回検出` : '';
+        return truncate(
+          `知識ギャップ（ID: ${gapId}）「${result.gapQuestion}」(検出源: ${result.detectionSource ?? '不明'}${freqNote})から` +
+          `FAQ（ID: ${result.faqDocId}）を作成し公開しました。ギャップは解決済みになりました`
+        );
+      } catch (err) {
+        logger.warn('[actionExecutor] add_knowledge_from_gap failed', err);
+        return truncate('知識の追加に失敗しました');
       }
     }
 
