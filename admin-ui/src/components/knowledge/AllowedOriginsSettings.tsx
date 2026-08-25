@@ -70,9 +70,15 @@ export default function AllowedOriginsSettings({ tenantId }: AllowedOriginsSetti
     }
   };
 
+  // Origin ヘッダーにパスや末尾スラッシュは載らないため、末尾スラッシュ付きの値を
+  // そのまま保存すると照合(originCheck.ts)に一致せず、登録したのに弾かれる事故になる。
+  // 見た目は同じでも危険な値を保存前に取り除く。
+  const normalizeOrigin = (value: string): string => value.trim().replace(/\/+$/, "");
+
   const handleAdd = () => {
-    const candidate = newOrigin.trim();
-    if (!candidate) return;
+    const raw = newOrigin.trim();
+    if (!raw) return;
+    const candidate = normalizeOrigin(raw);
     if (!candidate.startsWith("https://")) {
       setInputError(t("knowledge.allowed_origins_invalid_https"));
       return;
@@ -88,13 +94,30 @@ export default function AllowedOriginsSettings({ tenantId }: AllowedOriginsSetti
       setInputError(t("knowledge.allowed_origins_duplicate"));
       return;
     }
+
+    // 初回登録＝fail-open(全許可)からfail-closed相当に切り替わる操作(R3)。
+    // 「ここに無いドメインは以後弾かれる」ことと正規化後の値を保存前に確認する。
+    if (origins.length === 0) {
+      const confirmed = window.confirm(
+        t("knowledge.allowed_origins_first_add_confirm", { origin: candidate })
+      );
+      if (!confirmed) return;
+    }
+
     setInputError(null);
     setNewOrigin("");
     void persist([...origins, candidate]);
   };
 
   const handleRemove = (origin: string) => {
-    void persist(origins.filter((o) => o !== origin));
+    const next = origins.filter((o) => o !== origin);
+    // 最後の1件を消す操作＝fail-open(全許可)に戻る操作(R3)。画面上は何も壊れず
+    // 気づけないため、無言で保護が外れないよう確認する。
+    if (next.length === 0 && origins.length > 0) {
+      const confirmed = window.confirm(t("knowledge.allowed_origins_remove_last_confirm"));
+      if (!confirmed) return;
+    }
+    void persist(next);
   };
 
   if (!tenantId || tenantId === "global") return null;
@@ -138,7 +161,24 @@ export default function AllowedOriginsSettings({ tenantId }: AllowedOriginsSetti
 
           <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
             {!loaded ? null : origins.length === 0 ? (
-              <p style={{ fontSize: 13, color: "#6b7280", margin: 0 }}>{t("knowledge.allowed_origins_empty")}</p>
+              // 空配列=fail-open(全ドメイン許可)。「未設定」の中立な空状態(グレー・低彩度)ではなく
+              // 「保護なし」の警告状態として視覚的に区別する(空欄と保護なしを同じ見た目にしない)。
+              <div
+                role="status"
+                style={{
+                  padding: "10px 12px",
+                  borderRadius: 8,
+                  border: "1px solid rgba(245,158,11,0.4)",
+                  background: "rgba(245,158,11,0.1)",
+                }}
+              >
+                <p style={{ fontSize: 13, color: "#fbbf24", fontWeight: 600, margin: "0 0 4px" }}>
+                  {t("knowledge.allowed_origins_empty")}
+                </p>
+                <p style={{ fontSize: 12, color: "#9ca3af", margin: 0, lineHeight: 1.5 }}>
+                  {t("knowledge.allowed_origins_empty_desc")}
+                </p>
+              </div>
             ) : (
               origins.map((origin) => (
                 <div

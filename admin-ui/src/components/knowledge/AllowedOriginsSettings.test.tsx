@@ -6,7 +6,12 @@ import AllowedOriginsSettings from "./AllowedOriginsSettings";
 vi.mock("../../i18n/LangContext", async () => {
   const jaModule = await import("../../i18n/ja");
   const ja = jaModule.default as Record<string, string>;
-  const stableT = (key: string) => ja[key] ?? key;
+  // 実装のtranslate()と同じ{var}展開ルールに揃える(tuning/index.test.tsxと同じパターン)。
+  const stableT = (key: string, vars?: Record<string, string | number>) => {
+    let text = ja[key] ?? key;
+    if (vars) for (const [k, v] of Object.entries(vars)) text = text.replace(new RegExp(`\\{${k}\\}`, "g"), String(v));
+    return text;
+  };
   return { useLang: () => ({ lang: "ja" as const, setLang: () => {}, t: stableT }) };
 });
 
@@ -15,6 +20,10 @@ vi.mock("../../lib/api", () => ({
   API_BASE: "http://localhost:3100",
   authFetch: (...args: unknown[]) => authFetchMock(...args),
 }));
+
+// 「初回登録」「最後の1件を削除」はwindow.confirmで意図確認する(R3)。
+// 既定はtrue(確認して進む)にし、キャンセル系のテストだけ個別にfalseへ上書きする。
+const confirmMock = vi.fn((_message?: string) => true);
 
 function jsonRes(body: unknown, ok = true) {
   return Promise.resolve({ ok, json: () => Promise.resolve(body) } as Response);
@@ -28,6 +37,9 @@ async function openPanel() {
 describe("AllowedOriginsSettings", () => {
   beforeEach(() => {
     authFetchMock.mockReset();
+    confirmMock.mockReset();
+    confirmMock.mockReturnValue(true);
+    vi.stubGlobal("confirm", confirmMock);
   });
 
   it("既存のallowed_originsを読み込んで一覧表示する", async () => {
@@ -37,11 +49,18 @@ describe("AllowedOriginsSettings", () => {
     await waitFor(() => expect(screen.getByText("https://shop.example.com")).toBeTruthy());
   });
 
-  it("空配列のときは「登録されていません」を表示する", async () => {
+  it("空配列のときは「登録されていません」ではなく「保護なし」の警告として表示する(空欄と保護なしを同じ見た目にしない)", async () => {
     authFetchMock.mockReturnValueOnce(jsonRes({ allowed_origins: [] }));
     await openPanel();
 
-    await waitFor(() => expect(screen.getByText("許可ドメインが登録されていません")).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByText("⚠️ 保護なし：現在すべてのドメインからこのWidgetにアクセスできます")).toBeTruthy()
+    );
+    expect(
+      screen.getByText("ドメインを1件以上登録すると、登録したドメイン以外からのアクセスを拒否するようになります。")
+    ).toBeTruthy();
+    // 警告状態はstatusロールを持つ専用ブロックとして描画され、中立な空リスト表示と区別される
+    expect(screen.getByRole("status")).toBeTruthy();
   });
 
   it("https://始まりのURLを追加すると PATCH /v1/admin/my-tenant が呼ばれる", async () => {
@@ -60,6 +79,59 @@ describe("AllowedOriginsSettings", () => {
       expect(call?.[1]).toMatchObject({ body: JSON.stringify({ allowed_origins: ["https://new-shop.example.com"] }) });
     });
     await waitFor(() => expect(screen.getByText("https://new-shop.example.com")).toBeTruthy());
+  });
+
+  it("初回登録(0件→1件)では、正規化後の値と『ここに無いドメインは弾かれる』ことを提示する確認ダイアログを出す", async () => {
+    authFetchMock.mockReturnValueOnce(jsonRes({ allowed_origins: [] }));
+    authFetchMock.mockReturnValueOnce(jsonRes({ allowed_origins: ["https://new-shop.example.com"] }));
+    await openPanel();
+
+    // 末尾スラッシュ付きで入力しても、確認ダイアログとPATCH送信値は正規化後(末尾スラッシュなし)になる
+    const input = await screen.findByPlaceholderText("https://shop.example.com");
+    fireEvent.change(input, { target: { value: "https://new-shop.example.com/" } });
+    fireEvent.click(screen.getByText("追加"));
+
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+    expect(confirmMock.mock.calls[0][0]).toContain("https://new-shop.example.com");
+    expect(confirmMock.mock.calls[0][0]).not.toContain("https://new-shop.example.com/");
+
+    await waitFor(() => {
+      const call = authFetchMock.mock.calls.find(([, opts]) => (opts as RequestInit | undefined)?.method === "PATCH");
+      expect(call?.[1]).toMatchObject({ body: JSON.stringify({ allowed_origins: ["https://new-shop.example.com"] }) });
+    });
+  });
+
+  it("初回登録の確認ダイアログでキャンセルするとPATCHを呼ばない", async () => {
+    authFetchMock.mockReturnValueOnce(jsonRes({ allowed_origins: [] }));
+    confirmMock.mockReturnValue(false);
+    await openPanel();
+
+    const input = await screen.findByPlaceholderText("https://shop.example.com");
+    fireEvent.change(input, { target: { value: "https://new-shop.example.com" } });
+    fireEvent.click(screen.getByText("追加"));
+
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+    expect(authFetchMock.mock.calls.some(([, opts]) => (opts as RequestInit | undefined)?.method === "PATCH")).toBe(false);
+    // 追加されなかった(一覧は空のまま=警告状態が残る)
+    expect(
+      await screen.findByText("⚠️ 保護なし：現在すべてのドメインからこのWidgetにアクセスできます")
+    ).toBeTruthy();
+  });
+
+  it("2件目以降の追加(既に保護あり)では確認ダイアログを出さない", async () => {
+    authFetchMock.mockReturnValueOnce(jsonRes({ allowed_origins: ["https://a.example.com"] }));
+    authFetchMock.mockReturnValueOnce(
+      jsonRes({ allowed_origins: ["https://a.example.com", "https://b.example.com"] })
+    );
+    await openPanel();
+
+    await screen.findByText("https://a.example.com");
+    const input = screen.getByPlaceholderText("https://shop.example.com");
+    fireEvent.change(input, { target: { value: "https://b.example.com" } });
+    fireEvent.click(screen.getByText("追加"));
+
+    await waitFor(() => expect(screen.getByText("https://b.example.com")).toBeTruthy());
+    expect(confirmMock).not.toHaveBeenCalled();
   });
 
   it("http://始まりのURLはPATCHを呼ばずエラー表示する", async () => {
@@ -99,6 +171,52 @@ describe("AllowedOriginsSettings", () => {
       expect(call?.[1]).toMatchObject({ body: JSON.stringify({ allowed_origins: ["https://b.example.com"] }) });
     });
     await waitFor(() => expect(screen.queryByText("https://a.example.com")).toBeNull());
+  });
+
+  it("最後の1件を削除しようとすると『無制限になる』ことを提示する確認ダイアログを出してからPATCHする", async () => {
+    authFetchMock.mockReturnValueOnce(jsonRes({ allowed_origins: ["https://a.example.com"] }));
+    authFetchMock.mockReturnValueOnce(jsonRes({ allowed_origins: [] }));
+    await openPanel();
+
+    await screen.findByText("https://a.example.com");
+    fireEvent.click(screen.getByLabelText("remove https://a.example.com"));
+
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+    expect(confirmMock.mock.calls[0][0]).toContain("削除してもよろしいですか");
+
+    await waitFor(() => {
+      const call = authFetchMock.mock.calls.find(([, opts]) => (opts as RequestInit | undefined)?.method === "PATCH");
+      expect(call?.[1]).toMatchObject({ body: JSON.stringify({ allowed_origins: [] }) });
+    });
+    // 削除後は「保護なし」の警告状態に戻る
+    await waitFor(() =>
+      expect(screen.getByText("⚠️ 保護なし：現在すべてのドメインからこのWidgetにアクセスできます")).toBeTruthy()
+    );
+  });
+
+  it("最後の1件を削除する確認ダイアログでキャンセルするとPATCHを呼ばず一覧が残る", async () => {
+    authFetchMock.mockReturnValueOnce(jsonRes({ allowed_origins: ["https://a.example.com"] }));
+    confirmMock.mockReturnValue(false);
+    await openPanel();
+
+    await screen.findByText("https://a.example.com");
+    fireEvent.click(screen.getByLabelText("remove https://a.example.com"));
+
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+    expect(authFetchMock.mock.calls.some(([, opts]) => (opts as RequestInit | undefined)?.method === "PATCH")).toBe(false);
+    expect(screen.getByText("https://a.example.com")).toBeTruthy();
+  });
+
+  it("複数件残っているうちの1件を削除するときは確認ダイアログを出さない", async () => {
+    authFetchMock.mockReturnValueOnce(jsonRes({ allowed_origins: ["https://a.example.com", "https://b.example.com"] }));
+    authFetchMock.mockReturnValueOnce(jsonRes({ allowed_origins: ["https://b.example.com"] }));
+    await openPanel();
+
+    await screen.findByText("https://a.example.com");
+    fireEvent.click(screen.getByLabelText("remove https://a.example.com"));
+
+    await waitFor(() => expect(screen.queryByText("https://a.example.com")).toBeNull());
+    expect(confirmMock).not.toHaveBeenCalled();
   });
 
   it("PATCH失敗時は元の一覧にロールバックしエラートーストを表示する", async () => {
