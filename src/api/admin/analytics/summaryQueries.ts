@@ -627,6 +627,9 @@ export async function fetchAnalyticsTrend({ db, tenantId, period }: SummaryQuery
   const sentTrendsTenantClause = tenantId ? "AND cm.tenant_id = $2" : "";
   if (tenantId) sentTrendsParams.push(tenantId);
 
+  // GID 1217825468673283: fetchAnalyticsSummary の sentiment_distribution
+  // (P0-3, PR #954)と同根の欠陥。userSourceExists() が無く、テナントの
+  // 全 chat_messages(e2e/chat-test含む)を集計していた。同じ形で揃える。
   const sentTrendsResult = await db.query(
     `SELECT
        DATE_TRUNC('day', cm.created_at)::date::text AS day,
@@ -637,6 +640,7 @@ export async function fetchAnalyticsTrend({ db, tenantId, period }: SummaryQuery
      WHERE cm.sentiment IS NOT NULL
        AND cm.created_at >= NOW() - $1::interval
      ${sentTrendsTenantClause}
+     ${userSourceExists("cm.session_id", "cm.tenant_id", "id")}
      GROUP BY day ORDER BY day`,
     sentTrendsParams,
   );
