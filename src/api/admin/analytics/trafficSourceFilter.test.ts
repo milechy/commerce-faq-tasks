@@ -167,6 +167,11 @@ describe("GET /v1/admin/analytics/trends — source='user'フィルタ", () => {
       const m = /AND EXISTS \([\s\S]*?metadata->>'source' = 'user'[\s\S]*?\)/.exec(sql);
       return (m ? m[0] : "").replace(/\bcm\./g, "chat_messages.").replace(/\s+/g, " ").trim();
     };
+    // 両方から述語が消えると normalize() がどちらも "" を返し、"" === "" で
+    // このテストが空振りする(=このテストが防ぐはずのドリフトを通してしまう)。
+    // 一致を見る前に、両方が実在することを先に固定する。
+    expect(normalize(trendsSql)).toContain("EXISTS");
+    expect(normalize(summarySql)).toContain("EXISTS");
     expect(normalize(trendsSql)).toBe(normalize(summarySql));
   });
 });
