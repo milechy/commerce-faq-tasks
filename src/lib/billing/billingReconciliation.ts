@@ -106,37 +106,60 @@ export async function reconcileMonth(
   const tenantIds = await listTenantsToReconcile(db, period);
 
   const results: ReconciliationResult[] = [];
+  // ★テナント単位の失敗を可視化する★
+  // 導入時は catch → logger.error のみで、失敗したテナントは results から
+  // 単純に消えるだけだった。「壊れているのに気づけないのをテストではなく
+  // 検知で守る」ためのジョブ自身に、気づけない経路が残っていた
+  // (DB接続不調などで一部テナントだけ突合できていない状態がサイレントになる)。
+  const failedTenants: Array<{ tenantId: string; error: string }> = [];
   for (const tenantId of tenantIds) {
     try {
       results.push(await reconcileTenantPeriod(db, logger, tenantId, period));
     } catch (err) {
       logger.error({ err, tenantId, period }, "[billingReconciliation] tenant check failed");
+      failedTenants.push({ tenantId, error: err instanceof Error ? err.message : String(err) });
     }
   }
 
   const mismatches = results.filter((r) => !r.matches);
-  if (mismatches.length > 0) {
-    const lines = mismatches
+  if (mismatches.length > 0 || failedTenants.length > 0) {
+    const mismatchLines = mismatches
       .map(
         (r) =>
           `・${r.tenantId}: 再計算=${r.expectedBilledQuantity} / 記録済み送信=${r.lastReportedQuantity ?? "(送信履歴なし)"}`
       )
       .join("\n");
+    const failureLines = failedTenants
+      .map((f) => `・${f.tenantId}: 突合そのものが失敗(${f.error})`)
+      .join("\n");
+
+    const parts: string[] = [
+      `${period} の請求突合で ${tenantIds.length} テナント中、` +
+        `乖離 ${mismatches.length} 件・突合失敗 ${failedTenants.length} 件があります。`,
+    ];
+    if (mismatches.length > 0) {
+      parts.push(
+        `usage_logs から再計算した金額と、Stripeへ送信を記録した金額が一致していません。\n${mismatchLines}`
+      );
+    }
+    if (failedTenants.length > 0) {
+      // 突合失敗は「乖離が無い」とは別物。DB接続不調などでこのテナントの
+      // 実態が不明なだけであり、実際には請求ズレがあっても検知できていない。
+      parts.push(`以下のテナントは突合自体が実行できませんでした（実態不明）:\n${failureLines}`);
+    }
+    parts.push(`SCRIPTS/reconcile-billing.ts --period=${period} で再実行し、原因を確認してください。`);
+
     await sendSlackAlert({
       ruleId: "billing_reconciliation_mismatch",
       name: "billing_reconciliation_mismatch",
       level: "CRITICAL",
       status: "FIRING",
-      details:
-        `${period} の請求突合で ${mismatches.length}/${results.length} テナントに乖離があります。\n` +
-        `usage_logs から再計算した金額と、Stripeへ送信を記録した金額が一致していません。\n` +
-        `${lines}\n` +
-        `SCRIPTS/reconcile-billing.ts --period=${period} で再実行し、原因を確認してください。`,
+      details: parts.join("\n\n"),
     }).catch((err) => logger.warn({ err }, "[billingReconciliation] slack send failed"));
   }
 
   logger.info(
-    { period, totalTenants: results.length, mismatches: mismatches.length },
+    { period, totalTenants: tenantIds.length, mismatches: mismatches.length, failed: failedTenants.length },
     "[billingReconciliation] reconciliation completed"
   );
 
@@ -148,3 +171,47 @@ function previousPeriodYyyyMm(now: Date = new Date()): string {
   const prevMonthAnchor = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
   return getPeriodYyyyMm(prevMonthAnchor);
 }
+
+// ---------------------------------------------------------------------------
+// 定期実行ラッパー。
+//
+// ★導入時、このジョブは SCRIPTS/reconcile-billing.ts のCLIからしか呼ばれず、
+// cron/systemd timer のいずれにも登録されていなかった(厳格レビューで発覚)。
+// 「壊れているのに誰も気づかない」を防ぐために作ったジョブ自身が、
+// 動線として閉じていなかった(CLAUDE.md 禁止15)。
+//
+// billingHealthCheck.ts の BillingHealthMonitor と同じ形(DI・二重起動防止・
+// stop())を踏襲する。対象は「先月」という閉じた期間なので、
+// report-stripe-usage.ts の日次バッチと同じ 24h 周期で十分
+// (先月は月が変わるまで結果が変わらないため、日次実行は「毎日同じ答えを
+// 再確認する」意味になる。乖離が起きた場合、直るまで日次でSlackが鳴り
+// 続けるのは意図的 — 一度鳴って忘れられるより、直るまで毎日思い出させる
+// 方を選んだ。cooldownは付けない)。
+// ---------------------------------------------------------------------------
+
+const RECONCILE_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24時間ごと(report-stripe-usage.tsと同じ周期)
+
+class BillingReconciliationMonitor {
+  private timer: NodeJS.Timeout | null = null;
+
+  start(db: DbLike, logger: pino.Logger): void {
+    if (this.timer) return; // 二重起動防止(CLAUDE.md 禁止30)
+    const tick = () => {
+      reconcileMonth(db, logger).catch((err) => {
+        logger.error({ err }, "[billingReconciliation] scheduled run failed");
+      });
+    };
+    this.timer = setInterval(tick, RECONCILE_INTERVAL_MS);
+    // 起動直後に1回実行する(次の24hを待たない。billingHealthMonitorと同じ方針)。
+    tick();
+  }
+
+  stop(): void {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+  }
+}
+
+export const billingReconciliationMonitor = new BillingReconciliationMonitor();
