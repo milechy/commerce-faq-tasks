@@ -48,6 +48,16 @@ export interface MeasurementHealthResponse {
    * 新テーブルは作らず、毎回ライブ計算する(CLAUDE.md 禁止32)。
    */
   knowledgeIndexDrift: KnowledgeIndexDrift | null;
+  /**
+   * 消費者の回答評価(👍👎、2026-08-25 ナレッジ配線是正P14)。母数が小さくても
+   * 生の件数は誤解を招かないため率ではなくカウントで出す(禁止34は比率の話)。
+   */
+  answerFeedback: AnswerFeedbackCounts;
+}
+
+export interface AnswerFeedbackCounts {
+  upCount: number;
+  downCount: number;
 }
 
 export interface KnowledgeIndexDrift {
@@ -234,6 +244,22 @@ export async function fetchMeasurementHealth(
         .catch(() => null)
     : null;
 
+  // ナレッジ配線是正P14: answer_feedback(👍👎)の生件数。event_data.rating は
+  // 'up' | 'down' の2値のみ想定(不明値はどちらにも数えない)。
+  const feedbackResult = await db.query<{ up: string; down: string }>(
+    `SELECT
+       COUNT(*) FILTER (WHERE b.event_data->>'rating' = 'up') AS up,
+       COUNT(*) FILTER (WHERE b.event_data->>'rating' = 'down') AS down
+     FROM behavioral_events b
+     WHERE b.event_type = 'answer_feedback'
+       AND b.created_at >= NOW() - $1::interval ${beTenantClause}`,
+    params,
+  );
+  const answerFeedback: AnswerFeedbackCounts = {
+    upCount: parseInt(feedbackResult.rows[0]?.up ?? "0", 10),
+    downCount: parseInt(feedbackResult.rows[0]?.down ?? "0", 10),
+  };
+
   return {
     sourceBreakdown,
     emptySessionCount,
@@ -242,5 +268,6 @@ export async function fetchMeasurementHealth(
     validUserSessionCount,
     chatOpenDropoff,
     knowledgeIndexDrift,
+    answerFeedback,
   };
 }

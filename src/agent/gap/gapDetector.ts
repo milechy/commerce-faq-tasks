@@ -8,6 +8,7 @@ import { createNotification, notificationExists } from '../../lib/notifications'
 const logger = pino();
 
 export type GapDetectionSource =
+  | 'user_negative'
   | 'no_rag'
   | 'low_confidence'
   | 'fallback'
@@ -21,6 +22,13 @@ export interface GapDetectionInput {
   topRerankScore?: number;
   templateSource?: string;  // 'notion' | 'fallback'
   judgeScore?: number;
+  /**
+   * ナレッジ配線是正P14: 消費者が回答に👎を付けた(answer_feedback rating='down')。
+   * Judge は4通未満の会話を評価しないため、1往復で終わる現状ではこれが唯一
+   * 機能する品質シグナル(要件Rj/決定D1)。他の全トリガーより優先度を高くする
+   * (自動判定より、人間の明示的な不満表明の方が確度が高い)。
+   */
+  userNegativeFeedback?: boolean;
 }
 
 export interface GapDetectionResult {
@@ -41,6 +49,9 @@ export async function detectGap(input: GapDetectionInput): Promise<GapDetectionR
   }
 
   // Trigger priority order
+  if (input.userNegativeFeedback) {
+    return upsertGap(input, 'user_negative');
+  }
   if (input.ragResultCount === 0) {
     return upsertGap(input, 'no_rag');
   }
