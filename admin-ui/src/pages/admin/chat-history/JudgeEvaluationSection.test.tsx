@@ -172,10 +172,10 @@ describe("JudgeEvaluationSection — 未評価時のトリガーUI", () => {
       <JudgeEvaluationSection evaluation={null} isSuperAdmin={false} setEvaluation={vi.fn()} sessionId="s1" />
     );
     expect(screen.getByText("未評価")).toBeTruthy();
-    expect(screen.queryByText(/取得に失敗しました/)).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  it("fetchFailed=true なら「未評価」ではなく「取得に失敗しました」を表示する", () => {
+  it("fetchFailed=true なら「未評価」ではなく取得失敗のバナー(role=alert)を表示する", () => {
     render(
       <JudgeEvaluationSection
         evaluation={null}
@@ -185,7 +185,8 @@ describe("JudgeEvaluationSection — 未評価時のトリガーUI", () => {
         fetchFailed
       />
     );
-    expect(screen.getByText(/取得に失敗しました/)).toBeTruthy();
+    expect(screen.getByRole("alert")).toBeTruthy();
+    expect(screen.getByText(/読み込めませんでした/)).toBeTruthy();
     expect(screen.queryByText("未評価")).toBeNull();
   });
 

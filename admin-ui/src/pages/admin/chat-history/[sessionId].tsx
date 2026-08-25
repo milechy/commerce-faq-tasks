@@ -115,8 +115,12 @@ export default function ChatHistorySessionPage() {
   // GID 1217808301732050: このAPIは0件を200+空配列で返す（＝未評価）。
   // ここで !r.ok になるのは認証切れ・サーバエラー等の「本当の取得失敗」のみなので、
   // 「未評価」と「取得失敗」を区別してJudge欄に伝える。
-  useEffect(() => {
+  const loadEvaluation = useCallback(() => {
     if (!sessionId) return;
+    // セッションを切り替えた瞬間に前のセッションの評価を捨てる。
+    // ここでリセットしないと、次のfetchが失敗した場合に「前の会話のスコアが
+    // 別の会話の画面に残る」(取得失敗の表示も出ないまま古い数字が正しく見える)。
+    setEvaluation(null);
     setEvaluationFetchFailed(false);
     authFetch(`${API_BASE}/v1/admin/evaluations/${sessionId}`)
       .then((r) => {
@@ -130,9 +134,16 @@ export default function ChatHistorySessionPage() {
         setEvaluation(data?.evaluations?.[0] ?? null);
       })
       .catch(() => {
+        // authFetch自体のreject(ネットワーク断・セッション期限切れの__AUTH_REQUIRED__)。
+        // 上のthenを通らないため、ここでも評価をクリアしておく。
+        setEvaluation(null);
         setEvaluationFetchFailed(true);
       });
   }, [sessionId]);
+
+  useEffect(() => {
+    loadEvaluation();
+  }, [loadEvaluation]);
 
   // テナントのconversion_typesを取得
   useEffect(() => {
@@ -519,6 +530,7 @@ export default function ChatHistorySessionPage() {
             setEvaluation={setEvaluation}
             sessionId={sessionId}
             fetchFailed={evaluationFetchFailed}
+            onRetryFetch={loadEvaluation}
           />
 
           {/* 営業結果入力（Client Adminのみ表示） */}
