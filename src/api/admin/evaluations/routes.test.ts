@@ -22,6 +22,7 @@ jest.mock("./evaluationsRepository", () => ({
 import {
   listEvaluations,
   getDetailedStats,
+  getEvaluationsBySession,
   updateOutcome,
   approveTuningRule,
   rejectTuningRule,
@@ -110,6 +111,38 @@ describe("2. GET /v1/admin/evaluations/stats → 集計", () => {
     expect(res.status).toBe(200);
     expect(res.body.avg_score).toBe(0.78);
     expect(res.body.stage_progression_rate).toBe(0.6);
+  });
+});
+
+// GID 1217808301732050: GET /v1/admin/evaluations/:sessionId → 未評価は200+空配列
+// (以前は404を返しており、UI側が「未評価」と「取得失敗」を区別できなかった)
+describe("1b. GET /v1/admin/evaluations/:sessionId → 200（0件でも404にしない）", () => {
+  it("評価が0件でも404ではなく200+空配列を返す", async () => {
+    (getEvaluationsBySession as jest.Mock).mockResolvedValue([]);
+
+    const res = await request(makeApp()).get("/v1/admin/evaluations/sess-001");
+
+    expect(res.status).toBe(200);
+    expect(res.body.evaluations).toEqual([]);
+    expect(res.body.total).toBe(0);
+  });
+
+  it("評価がある場合はそのまま返す", async () => {
+    (getEvaluationsBySession as jest.Mock).mockResolvedValue([EVAL_ROW]);
+
+    const res = await request(makeApp()).get("/v1/admin/evaluations/sess-001");
+
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(1);
+    expect(res.body.evaluations[0].session_id).toBe("sess-001");
+  });
+
+  it("DBエラー時は500を返す（未評価と区別できる）", async () => {
+    (getEvaluationsBySession as jest.Mock).mockRejectedValue(new Error("db down"));
+
+    const res = await request(makeApp()).get("/v1/admin/evaluations/sess-001");
+
+    expect(res.status).toBe(500);
   });
 });
 

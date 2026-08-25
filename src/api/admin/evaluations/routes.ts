@@ -355,10 +355,13 @@ export function registerEvaluationRoutes(app: Express): void {
     const tenantId = isSuperAdmin ? undefined : jwtTenantId || undefined;
 
     try {
+      // GID 1217808301732050: 評価が0件は「未評価」であって「取得失敗」ではない。
+      // 以前はここで404を返しており、UI側が404も他の失敗も区別できず、未評価な
+      // セッションを開くたびにネットワークにエラーが出ていた（実際にはAPIは廃止
+      // されていない — サーバ側は現役。廃止されたのは admin-ui の /admin/evaluations
+      // ページ単体で、このAPIとは別物）。空配列を200で返し、真の失敗（4xx/5xx/
+      // ネットワークエラー）とだけ区別させる。
       const evaluations = await getEvaluationsBySession(sessionId, tenantId);
-      if (evaluations.length === 0) {
-        return res.status(404).json({ error: "評価データが見つかりません" });
-      }
       return res.json({ evaluations, total: evaluations.length });
     } catch (err) {
       logger.warn("[GET /v1/admin/evaluations/:sessionId]", err);

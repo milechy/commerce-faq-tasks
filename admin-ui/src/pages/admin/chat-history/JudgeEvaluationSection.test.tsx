@@ -167,6 +167,28 @@ describe("JudgeEvaluationSection — 未評価時のトリガーUI", () => {
     resolveFetch(jsonResponse(200, { evaluation: { id: 1, score: 90, evaluated_at: "2026-01-01T00:00:00Z" } }));
   });
 
+  it("fetchFailed=false かつ evaluation が null なら「未評価」を表示する", () => {
+    render(
+      <JudgeEvaluationSection evaluation={null} isSuperAdmin={false} setEvaluation={vi.fn()} sessionId="s1" />
+    );
+    expect(screen.getByText("未評価")).toBeTruthy();
+    expect(screen.queryByText(/取得に失敗しました/)).toBeNull();
+  });
+
+  it("fetchFailed=true なら「未評価」ではなく「取得に失敗しました」を表示する", () => {
+    render(
+      <JudgeEvaluationSection
+        evaluation={null}
+        isSuperAdmin={false}
+        setEvaluation={vi.fn()}
+        sessionId="s1"
+        fetchFailed
+      />
+    );
+    expect(screen.getByText(/取得に失敗しました/)).toBeTruthy();
+    expect(screen.queryByText("未評価")).toBeNull();
+  });
+
   it("evaluation が存在する場合は実行ボタンを出さない", () => {
     const evaluation: Evaluation = {
       id: 1,
