@@ -103,6 +103,45 @@ describe("GET /v1/admin/analytics/trends — source='user'フィルタ", () => {
     expect(sentTrendSql).toBeDefined();
     expect(sentTrendSql).toContain(USER_SOURCE_SQL);
   });
+
+  // USER_SOURCE_SQL("metadata->>'source' = 'user'")だけを見るアサーションは、
+  // userSourceExists の第3引数が誤っていても通ってしまう(変異テストで実証:
+  // "id"→"session_id" に変えても analytics 188件が全て緑のまま)。
+  // 誤った第3引数は本番で cs.session_id(TEXT) = cm.session_id(UUID) を生成し、
+  // Postgres は暗黙キャストしないため /trends が全呼び出しで500になる。
+  // 静かな誤集計ではなく即死するので、結合列そのものを固定する。
+  // PR #954 が summary 側で確立したガード(cvAggregation.test.ts)と同じ形。
+  it("sentimentトレンドは chat_sessions.id(UUID)と突き合わせる(TEXT列と結合して500にしない)", async () => {
+    await request(makeApp()).get("/v1/admin/analytics/trends");
+    const allSql = mockQuery.mock.calls.map((c) => c[0] as string);
+    const sentTrendSql = allSql.find((sql) => /FROM chat_messages cm/.test(sql))!;
+    expect(sentTrendSql).toMatch(/cs\.id\s*=\s*cm\.session_id/);
+  });
+
+  // GID 1217825468673283 のレビューで発見: sentiment と同じ理由で
+  // knowledge_gaps 側にも実ユーザー判定が要る。summary側(total_knowledge_gaps)には
+  // 付いているのに trends 側だけ抜けていると、同じ「未回答質問数」が
+  // 2画面で食い違う(片方はe2e除外、片方は含む)。
+  it("knowledge_gapsトレンドにも実ユーザー判定が入る(summaryと同じ数字になる)", async () => {
+    await request(makeApp()).get("/v1/admin/analytics/trends");
+    const allSql = mockQuery.mock.calls.map((c) => c[0] as string);
+    const trendSql = allSql.find((sql) => /generate_series/.test(sql))!;
+    // kg_count サブクエリ部分だけを取り出して検証する
+    const kgBlock = /FROM knowledge_gaps kg[\s\S]*?GROUP BY day/.exec(trendSql)?.[0] ?? "";
+    expect(kgBlock).toContain(USER_SOURCE_SQL);
+    expect(kgBlock).toMatch(/cs\.id\s*=\s*kg\.session_id/);
+  });
+
+  // 実運用の大半は client_admin(テナント絞り込みあり)だが、上のテストは全て
+  // super_admin(tenant_id なし)の分岐しか通っていなかった。$2 と EXISTS が
+  // 並ぶ実際の形を1本固定しておく。
+  it("テナント絞り込みありでも tenant_id 条件と実ユーザー判定が併存する", async () => {
+    await request(makeApp()).get("/v1/admin/analytics/trends?tenant=tenant-a");
+    const allSql = mockQuery.mock.calls.map((c) => c[0] as string);
+    const sentTrendSql = allSql.find((sql) => /FROM chat_messages cm/.test(sql))!;
+    expect(sentTrendSql).toContain("cm.tenant_id = $2");
+    expect(sentTrendSql).toContain(USER_SOURCE_SQL);
+  });
 });
 
 describe("GET /v1/admin/analytics/evaluations — source='user'フィルタ", () => {
