@@ -6,6 +6,12 @@ jest.mock('../../../lib/db', () => ({
   getPool: () => null,
 }));
 jest.mock('pino', () => () => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn() }));
+// P6是正で routes.ts が faqCrudRoutes.ts(→ faqIndexSync.ts)経由の共有 logger を
+// import するようになった。共有 logger は起動時に pino.stdSerializers を参照するため、
+// 上の生 pino モック(stdSerializers を持たない)だけでは import 時に落ちる。
+jest.mock('../../../lib/logger', () => ({
+  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn() },
+}));
 jest.mock('../../../admin/http/supabaseAuthMiddleware', () => ({
   supabaseAuthMiddleware: (req: any, _res: any, next: any) => {
     req.supabaseUser = req._mockUser ?? null;

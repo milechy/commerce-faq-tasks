@@ -7,10 +7,9 @@ import { z } from 'zod';
 import { getPool } from '../../../lib/db';
 import { supabaseAuthMiddleware } from '../../../admin/http/supabaseAuthMiddleware';
 import { superAdminMiddleware } from '../tenants/superAdminMiddleware';
-import { embedText } from '../../../agent/llm/openaiEmbeddingClient';
 import { generateRecommendations } from '../../../agent/gap/gapRecommender';
 import { callGeminiJudge } from '../../../lib/gemini/client';
-import { resolveFaqWriteIndex } from '../../../search/langIndex';
+import { insertEmbeddingAsync, upsertToEsAsync } from '../knowledge/faqCrudRoutes';
 
 const logger = pino();
 
@@ -51,44 +50,6 @@ function denyKgPhase46Role(req: Request, res: Response, su: Record<string, any> 
     hasUserMetadataRole: !!su?.['user_metadata']?.role,
   }, 'knowledge-gaps access denied: invalid actor role');
   return res.status(403).json({ error: 'この操作を実行する権限がありません', code: 'AUTHZ_ROLE_DENIED' });
-}
-
-// ---------------------------------------------------------------------------
-// Embedding + ES helpers (fire-and-forget, same pattern as faqCrudRoutes)
-// ---------------------------------------------------------------------------
-
-function insertEmbeddingAsync(
-  tenantId: string,
-  text: string,
-  faqId: number,
-): void {
-  const pool = getPool();
-  embedText(text)
-    .then((vec) =>
-      pool.query(
-        'INSERT INTO faq_embeddings (tenant_id, text, embedding, metadata) VALUES ($1, $2, $3::vector, $4::jsonb)',
-        [tenantId, text, `[${vec.join(',')}]`, JSON.stringify({ faq_id: faqId, source: 'knowledge_gap_resolution' })],
-      ),
-    )
-    .catch((e: unknown) => logger.warn({ err: e, faqId }, 'knowledge-gaps: embedding insert failed'));
-}
-
-function upsertToEsAsync(
-  tenantId: string,
-  faqId: number,
-  question: string,
-  answer: string,
-): void {
-  const esUrl = process.env['ES_URL'];
-  const index = resolveFaqWriteIndex(tenantId);
-  if (!esUrl) return;
-  const doc = { tenant_id: tenantId, question, answer, faq_id: faqId, is_published: true };
-  const url = `${esUrl.replace(/\/$/, '')}/${index}/_doc/${faqId}_${tenantId}`;
-  fetch(url, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(doc),
-  }).catch(() => {});
 }
 
 // ---------------------------------------------------------------------------
@@ -389,11 +350,20 @@ export function registerKnowledgeGapPhase46Routes(app: Express): void {
 
         const faqDocId = faqResult.rows[0]!.id;
 
-        // embedding を非同期生成（fire-and-forget）
-        insertEmbeddingAsync(gap.tenant_id, answer_text.slice(0, 2000), faqDocId);
+        // embedding を非同期生成（fire-and-forget）。質問文も埋め込む
+        // (以前は answer_text のみで、このFAQが答えるべき質問自体がベクトルに
+        // 入っておらず検索精度が劣化していた。2026-08-25 是正)。
+        insertEmbeddingAsync(
+          getPool(),
+          gap.tenant_id,
+          `${gap.user_question}\n${answer_text}`.slice(0, 2000),
+          faqDocId,
+          { source: 'knowledge_gap_resolution', faq_id: faqDocId },
+        );
 
-        // ES に非同期 upsert（fire-and-forget）
-        upsertToEsAsync(gap.tenant_id, faqDocId, gap.user_question, answer_text);
+        // ES に非同期 upsert（fire-and-forget）。新規作成のため is_excluded_from_search
+        // を引き継ぐ必要はない(既定 false で正しい)
+        upsertToEsAsync(gap.tenant_id, faqDocId, gap.user_question, answer_text, true);
 
         // Gap のステータスを resolved に更新
         await pool.query(
