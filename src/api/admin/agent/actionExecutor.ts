@@ -47,6 +47,8 @@ import { trackUsage } from '../../../lib/billing/usageTracker';
 import { queryTenantPlan, planHasFeature, resolveShareForTenantPlan } from '../../../lib/billing/planFeatures';
 import { fetchAnalyticsSummary, fetchAnalyticsTrend, fetchConversionSummary, fetchLowScoreSessions } from '../analytics/summaryQueries';
 import { getRuleEffect } from '../analytics/ruleEffect';
+import { computeAbExperimentResults, fetchAbExperimentsOverview } from '../../conversion/abResultsQuery';
+import { fetchUnreadNotificationsByType } from '../../../lib/notifications';
 import { isOnboardingIndustry, ONBOARDING_INDUSTRY_LABELS, INDUSTRY_FAQ_TEMPLATES } from './industryFaqTemplates';
 import { buildPlacementAttributes, validateWidgetPlacement } from './widgetPlacement';
 
@@ -530,6 +532,41 @@ export type AnalyticsTrendCardPayload = {
   }>;
 };
 
+// W2-5(docs/COPILOT_UI_PARITY.md §3.1 #13、T4 要約+可視化): 実施中/直近のA/Bテストの
+// 結果一覧と、AIの自動改善提案。旧UI(conversion/index.tsx の A/Bテストセクション・
+// 改善提案セクション)の再現。resultsはcomputeAbExperimentResults(abResultsQuery.ts)を
+// そのまま持たせ、reliable=falseの警告文もサーバ側の文言をそのまま使う(LLM生成を経由しない)。
+// draft(結果なし)のexperimentはresultsを持たせない。
+// suggestionsの「適用」は専用の保存ツールを新設せず、提案文をそのまま
+// suggest_tuning_rule に渡す既存フローに乗せる(フロントの送信ボタンは
+// __real:「<action>」というルールを追加して を送るだけで、実処理はLLMが
+// suggest_tuning_rule → save_tuning_rule で行う)。
+export type AbTestResultsCardPayload = {
+  kind: 'ab_test_results';
+  experiments: Array<{
+    id: number;
+    name: string;
+    status: string;
+    minSampleSize: number;
+    results: {
+      totalExposed: number;
+      reliable: boolean;
+      warning?: string;
+      variants: Record<string, {
+        exposed: number;
+        reachedTwoPlusRate: number;
+        conversionRate: number;
+        avgJudgeScore: number | null;
+      }>;
+    } | null;
+  }>;
+  suggestions: Array<{
+    id: number;
+    description: string;
+    suggestedAction: string;
+  }>;
+};
+
 export type ActionCardPayload =
   | LegacyLinkCardPayload
   | AvatarPresetCardPayload
@@ -542,7 +579,8 @@ export type ActionCardPayload =
   | ConversationEvaluationCardPayload
   | KnowledgeGapsListCardPayload
   | RuleEffectCardPayload
-  | AnalyticsTrendCardPayload;
+  | AnalyticsTrendCardPayload
+  | AbTestResultsCardPayload;
 
 // ツール結果は既定では素の文字列で、構造化データを添えるツールだけが
 // { text, card } 形を返す。card は text の置き換えではなく追加である
@@ -4139,6 +4177,96 @@ export async function executeToolCall(
       } catch (err) {
         logger.warn(`[actionExecutor] ${toolName} failed`, err);
         return truncate('分析サマリーの取得に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // W2-5(docs/COPILOT_UI_PARITY.md §3.1 #13、T4 要約+可視化): 実施中/直近のA/Bテスト
+    // 結果と改善提案。旧UI(conversion/index.tsx の A/Bテストセクション・改善提案セクション)
+    // の再現。draft(未開始)のexperimentは結果を持たないため results=null で返す。
+    case 'get_ab_test_results': {
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+      const plan = await queryTenantPlan(db, tenantId);
+      if (!planHasFeature(plan, 'conversion')) {
+        return truncate(planLimitNotice(tenantId, sessionId, 'conversion'));
+      }
+
+      try {
+        const [overview, suggestions] = await Promise.all([
+          fetchAbExperimentsOverview(db, tenantId, 5),
+          fetchUnreadNotificationsByType('auto_tuning_suggestion', tenantId, 5),
+        ]);
+
+        const experiments = await Promise.all(
+          overview.map(async (exp) => {
+            if (exp.status === 'draft') {
+              return { id: exp.id, name: exp.name, status: exp.status, minSampleSize: exp.min_sample_size, results: null };
+            }
+            const r = await computeAbExperimentResults(db, exp.id, exp.min_sample_size, tenantId);
+            const variants: Record<string, { exposed: number; reachedTwoPlusRate: number; conversionRate: number; avgJudgeScore: number | null }> = {};
+            for (const [variant, v] of Object.entries(r.variants)) {
+              variants[variant] = {
+                exposed: v.exposed,
+                reachedTwoPlusRate: v.reached_two_plus_rate,
+                conversionRate: v.conversion_rate,
+                avgJudgeScore: v.avg_judge_score,
+              };
+            }
+            return {
+              id: exp.id,
+              name: exp.name,
+              status: exp.status,
+              minSampleSize: exp.min_sample_size,
+              results: { totalExposed: r.total_exposed, reliable: r.reliable, warning: r.warning, variants },
+            };
+          }),
+        );
+
+        const lines: string[] = [];
+        if (experiments.length === 0) {
+          lines.push('実施中/直近のA/Bテストはありません');
+        } else {
+          lines.push(`A/Bテスト（直近${experiments.length}件）`);
+          for (const exp of experiments) {
+            if (!exp.results) {
+              lines.push(`• [${exp.status}] ${exp.name}: 未開始`);
+              continue;
+            }
+            if (!exp.results.reliable) {
+              lines.push(`• [${exp.status}] ${exp.name}: ${exp.results.warning}`);
+              continue;
+            }
+            const variantLines = Object.entries(exp.results.variants)
+              .map(([v, s]) => `${v}=継続率${s.reachedTwoPlusRate}%/成約率${s.conversionRate}%`)
+              .join(', ');
+            lines.push(`• [${exp.status}] ${exp.name}: ${variantLines}`);
+          }
+        }
+        if (suggestions.length > 0) {
+          lines.push(`改善提案（${suggestions.length}件）:`);
+          for (const s of suggestions) {
+            lines.push(`• ${s.message}`);
+          }
+        } else {
+          lines.push('改善提案: なし');
+        }
+
+        const card: AbTestResultsCardPayload = {
+          kind: 'ab_test_results',
+          experiments,
+          suggestions: suggestions.map((s) => ({
+            id: s.id,
+            description: s.message,
+            suggestedAction: (s.metadata?.['suggested_action'] as string | undefined) ?? '',
+          })),
+        };
+
+        return { text: truncateRead(lines.join('\n')), card };
+      } catch (err) {
+        logger.warn('[actionExecutor] get_ab_test_results failed', err);
+        return truncate('A/Bテスト結果の取得に失敗しました');
       }
     }
 

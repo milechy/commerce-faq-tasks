@@ -14,7 +14,7 @@ import { supabaseAuthMiddleware } from '../../admin/http/supabaseAuthMiddleware'
 import { roleAuthMiddleware, requireRole } from '../middleware/roleAuth';
 import type { AuthenticatedUser, AuthedReq } from '../middleware/roleAuth';
 import { planHasFeature, queryTenantPlan } from '../../lib/billing/planFeatures';
-import { reconcileAbResultOutcomes } from './abResultsOutcomeSync';
+import { computeAbExperimentResults } from './abResultsQuery';
 
 /**
  * GID: LP料金表(Growth〜: CV計測)に基づくplan制限。
@@ -215,72 +215,8 @@ export function registerAbTestRoutes(app: Express, db: Pool | null): void {
       }
       const minSampleSize = Number(existing.rows[0].min_sample_size);
 
-      // GID 1216978855735482: 成果(継続率/CV)をchat_sessionsと突合して反映してから集計する。
-      // best-effort — 突合が失敗しても、その時点のab_results状態で集計は続行する。
-      try {
-        await reconcileAbResultOutcomes(db, id, existing.rows[0].tenant_id);
-      } catch {
-        // noop — 集計は続行
-      }
-
-      const result = await db.query(
-        `SELECT
-           variant,
-           COUNT(*) AS exposed,
-           COUNT(*) FILTER (WHERE reached_two_plus_exchanges) AS reached_two_plus,
-           COUNT(*) FILTER (WHERE converted) AS converted,
-           ROUND(AVG(judge_score)::numeric, 1) AS avg_judge_score
-         FROM ab_results
-         WHERE experiment_id = $1
-         GROUP BY variant`,
-        [id],
-      );
-
-      const byVariant: Record<string, {
-        exposed: number;
-        // GID 1216978855735482: 主要指標。2往復以上に進んだセッションの割合。
-        reached_two_plus: number;
-        reached_two_plus_rate: number;
-        // 副次指標（記録のみ・判定には使わない）
-        converted: number;
-        conversion_rate: number;
-        avg_judge_score: number | null;
-      }> = {};
-      let totalExposed = 0;
-      for (const row of result.rows) {
-        const exposed = Number(row.exposed);
-        const reachedTwoPlus = Number(row.reached_two_plus);
-        const converted = Number(row.converted);
-        totalExposed += exposed;
-        byVariant[row.variant] = {
-          exposed,
-          reached_two_plus: reachedTwoPlus,
-          reached_two_plus_rate: exposed > 0 ? Math.round((reachedTwoPlus / exposed) * 1000) / 10 : 0,
-          converted,
-          conversion_rate: exposed > 0 ? Math.round((converted / exposed) * 1000) / 10 : 0,
-          avg_judge_score: row.avg_judge_score !== null ? Number(row.avg_judge_score) : null,
-        };
-      }
-
-      // GID 1216978855735482: peeking(覗き見)によるfalse positive防止。
-      // min_sample_size未到達の間は reliable=false とし、意思決定に使わないよう警告する。
-      // 生の件数自体は隠さない（テナント自身のデータであり透明性を優先する）。
-      const reliable = totalExposed >= minSampleSize;
-
-      return res.json({
-        experiment_id: id,
-        min_sample_size: minSampleSize,
-        total_exposed: totalExposed,
-        reliable,
-        ...(reliable
-          ? {}
-          : {
-              warning:
-                `サンプルサイズが min_sample_size(${minSampleSize}) に未到達です` +
-                `（現在 ${totalExposed} 件）。この結果を意思決定に使わないでください。`,
-            }),
-        variants: byVariant,
-      });
+      const response = await computeAbExperimentResults(db, id, minSampleSize, existing.rows[0].tenant_id);
+      return res.json(response);
     } catch {
       return res.status(500).json({ error: 'internal_error' });
     }

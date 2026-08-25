@@ -169,11 +169,11 @@ export default function ConversionDashboardPage() {
 
   // Load autotuning suggestions from notifications
   useEffect(() => {
-    authFetch(`${API_BASE}/v1/admin/notifications?type=auto_tuning_suggestion&unread=true`)
-      .then((r) => r.ok ? r.json() : { notifications: [] })
+    authFetch(`${API_BASE}/v1/admin/notifications?type=auto_tuning_suggestion&is_read=false`)
+      .then((r) => r.ok ? r.json() : { items: [] })
       .then((data) => {
         setSuggestions(
-          (data.notifications ?? []).slice(0, 5).map((n: any) => ({
+          (data.items ?? []).slice(0, 5).map((n: any) => ({
             description: n.message,
             suggestedAction: n.metadata?.suggested_action ?? '',
             type: n.metadata?.candidate_type ?? '',

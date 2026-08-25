@@ -175,6 +175,34 @@ export type AnalyticsTrendAgentActionCard = {
   }>;
 };
 
+// W2-5: A/Bテスト結果+改善提案。フィールド形状は
+// src/api/admin/agent/actionExecutor.ts の AbTestResultsCardPayload と1対1に保つ。
+export type AbTestResultsAgentActionCard = {
+  kind: "ab_test_results";
+  experiments: Array<{
+    id: number;
+    name: string;
+    status: string;
+    minSampleSize: number;
+    results: {
+      totalExposed: number;
+      reliable: boolean;
+      warning?: string;
+      variants: Record<string, {
+        exposed: number;
+        reachedTwoPlusRate: number;
+        conversionRate: number;
+        avgJudgeScore: number | null;
+      }>;
+    } | null;
+  }>;
+  suggestions: Array<{
+    id: number;
+    description: string;
+    suggestedAction: string;
+  }>;
+};
+
 export type AgentActionCard =
   | LegacyLinkAgentActionCard
   | AvatarPresetAgentActionCard
@@ -187,7 +215,8 @@ export type AgentActionCard =
   | ConversationEvaluationAgentActionCard
   | KnowledgeGapsListAgentActionCard
   | RuleEffectAgentActionCard
-  | AnalyticsTrendAgentActionCard;
+  | AnalyticsTrendAgentActionCard
+  | AbTestResultsAgentActionCard;
 
 export type AgentAction = { tool: string; result: string; card?: AgentActionCard };
 

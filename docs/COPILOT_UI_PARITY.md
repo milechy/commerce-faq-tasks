@@ -515,9 +515,9 @@ handoff は出るが、店主はチャットを離れる。離れた先で「何
 | 10 | 高品質画像の生成 | `handoff:avatar_premium` |
 | 11 | アバター新規作成ウィザード | `handoff:avatar_wizard` |
 | 12 | 会話分析の推移グラフ・低評価セッション | `tool:get_analytics_trend` |
-| 13 | ABテスト結果・改善提案 | `handoff:conversion` |
+| 13 | ABテスト結果・改善提案 | `tool:get_ab_test_results` |
 | 14 | ナレッジ別の成約貢献度 | `handoff:knowledge_attribution` |
 | 15 | ご利用状況・お支払い | `handoff:billing` |
 | 16 | 集計期間90日 | `tool:get_analytics_summary,get_conversion_summary` |
 
-現在地（2026-08-25、W2-4着手時点）: `tool:` 9 / `handoff:` 6 / `pending` 1。W1完了。W2-1(#5)/W2-2(#6)/W2-3(#7)/W2-4(#12)/W2-8(#16)tool化。残るpendingは#8写真アップロードのみ。残るT4(#13,14,15)とT3(#9,10,11)は未着手。S0 の完了は `pending` が 0 になった時点（`tool:` か `handoff:` のどちらかに必ず分類されている状態）。
+現在地（2026-08-25、W2-5完了時点）: `tool:` 10 / `handoff:` 5 / `pending` 1。W1完了。W2-1(#5)/W2-2(#6)/W2-3(#7)/W2-4(#12)/W2-5(#13)/W2-8(#16)tool化。残るpendingは#8写真アップロードのみ。残るT4(#14,15)とT3(#9,10,11)は未着手。S0 の完了は `pending` が 0 になった時点（`tool:` か `handoff:` のどちらかに必ず分類されている状態）。

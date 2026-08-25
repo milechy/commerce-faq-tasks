@@ -56,3 +56,36 @@ export async function notificationExists(
     return false;
   }
 }
+
+export type UnreadNotification = {
+  id: number;
+  title: string;
+  message: string;
+  link: string | null;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+};
+
+/**
+ * 指定テナント宛(recipient_tenant_id一致 or 全体宛)の未読通知を type で絞り込んで取得する。
+ * 会話分析ページの改善提案セクション(conversion/index.tsx)とチャットの両方から使う。
+ */
+export async function fetchUnreadNotificationsByType(
+  type: string,
+  tenantId: string,
+  limit = 5,
+): Promise<UnreadNotification[]> {
+  const pool = getPool();
+  const result = await pool.query(
+    `SELECT id, title, message, link, metadata, created_at
+     FROM notifications
+     WHERE type = $1
+       AND is_read = false
+       AND recipient_role = 'client_admin'
+       AND (recipient_tenant_id = $2 OR recipient_tenant_id IS NULL)
+     ORDER BY created_at DESC
+     LIMIT $3`,
+    [type, tenantId, limit],
+  );
+  return result.rows;
+}

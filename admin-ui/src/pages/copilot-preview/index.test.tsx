@@ -1615,6 +1615,93 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     });
   });
 
+  describe("ab_test_results カード", () => {
+    it("実施中experimentのvariant別結果と改善提案が描画される", async () => {
+      mockAgent({
+        reply: "結果をお伝えします。",
+        actions: [
+          {
+            tool: "get_ab_test_results",
+            result: "A/Bテスト（直近1件）\n• [running] CTA文言テスト: a=継続率60%/成約率30%, b=継続率40%/成約率20%",
+            card: {
+              kind: "ab_test_results",
+              experiments: [
+                {
+                  id: 1,
+                  name: "CTA文言テスト",
+                  status: "running",
+                  minSampleSize: 100,
+                  results: {
+                    totalExposed: 200,
+                    reliable: true,
+                    variants: {
+                      a: { exposed: 100, reachedTwoPlusRate: 60, conversionRate: 30, avgJudgeScore: 75 },
+                      b: { exposed: 100, reachedTwoPlusRate: 40, conversionRate: 20, avgJudgeScore: 65 },
+                    },
+                  },
+                },
+              ],
+              suggestions: [
+                { id: 1, description: "同じ質問が繰り返されています", suggestedAction: "送料FAQを追加する" },
+              ],
+            },
+          },
+        ],
+      });
+
+      await send("ABテストの結果を教えて");
+
+      expect(await screen.findByText("CTA文言テスト")).toBeTruthy();
+      expect(screen.getByText("実施中")).toBeTruthy();
+      expect(screen.getByText(/継続率60%.*成約率30%/)).toBeTruthy();
+      expect(screen.getByText("同じ質問が繰り返されています")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "適用する" })).toBeTruthy();
+    });
+
+    it("draft(未開始)のexperimentは「まだ結果はありません」と描画される", async () => {
+      mockAgent({
+        reply: "結果をお伝えします。",
+        actions: [
+          {
+            tool: "get_ab_test_results",
+            result: "A/Bテスト（直近1件）\n• [draft] 準備中のテスト: 未開始",
+            card: {
+              kind: "ab_test_results",
+              experiments: [
+                { id: 2, name: "準備中のテスト", status: "draft", minSampleSize: 100, results: null },
+              ],
+              suggestions: [],
+            },
+          },
+        ],
+      });
+
+      await send("ABテストの状況を教えて");
+
+      expect(await screen.findByText("準備中のテスト")).toBeTruthy();
+      expect(screen.getByText("まだ結果はありません")).toBeTruthy();
+      expect(screen.getByText("現在、改善提案はありません")).toBeTruthy();
+    });
+
+    it("experimentが0件のときは「ありません」と描画される(空のリストを黙って出さない)", async () => {
+      mockAgent({
+        reply: "現在はどちらもありません。",
+        actions: [
+          {
+            tool: "get_ab_test_results",
+            result: "実施中/直近のA/Bテストはありません\n改善提案: なし",
+            card: { kind: "ab_test_results", experiments: [], suggestions: [] },
+          },
+        ],
+      });
+
+      await send("ABテストの結果を教えて");
+
+      expect(await screen.findByText("実施中/直近のA/Bテストはありません")).toBeTruthy();
+      expect(screen.getByText("現在、改善提案はありません")).toBeTruthy();
+    });
+  });
+
   // REAL_TOOL_LABEL への登録を忘れると、画面に生の英語ツール名がそのまま出る
   // (パネル側のラベル表が9件で取り残されたのと同型の事故)。新ツール追加時の回帰。
   it("アバターの一覧・停止ツールは生の英語名ではなく日本語ラベルで表示される", async () => {

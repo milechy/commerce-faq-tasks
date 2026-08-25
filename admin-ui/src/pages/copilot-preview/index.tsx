@@ -30,7 +30,7 @@ import {
   AGENT_CHAT_HISTORY_MAX_ENTRIES,
   useAgentChatTransport,
 } from "../../lib/useAgentChatTransport";
-import type { AnsweredFrom, WeeklySummaryAgentActionCard, RuleEffectAgentActionCard, AnalyticsTrendAgentActionCard } from "../../lib/useAgentChatTransport";
+import type { AnsweredFrom, WeeklySummaryAgentActionCard, RuleEffectAgentActionCard, AnalyticsTrendAgentActionCard, AbTestResultsAgentActionCard } from "../../lib/useAgentChatTransport";
 // アバター画像候補のプロンプト組み立ては旧UIウィザードと同じ関数を使う(再実装しない)。
 // チャットは選択肢を集めないため、固定の標準的な選択で呼ぶ。
 import { buildAvatarPrompt } from "../../lib/buildAvatarPrompt";
@@ -212,7 +212,10 @@ type Card =
   | ({ kind: "ruleEffect" } & Omit<RuleEffectAgentActionCard, "kind">)
   // W2-4: 会話数の日次推移+低評価セッション。フィールド形状は
   // AnalyticsTrendAgentActionCard(useAgentChatTransport.ts)と同一に保つ(weeklySummaryと同じ作法)。
-  | ({ kind: "analyticsTrend" } & Omit<AnalyticsTrendAgentActionCard, "kind">);
+  | ({ kind: "analyticsTrend" } & Omit<AnalyticsTrendAgentActionCard, "kind">)
+  // W2-5: A/Bテスト結果+改善提案。フィールド形状は
+  // AbTestResultsAgentActionCard(useAgentChatTransport.ts)と同一に保つ(weeklySummaryと同じ作法)。
+  | ({ kind: "abTestResults" } & Omit<AbTestResultsAgentActionCard, "kind">);
 
 // 優先度3段階(lib/tuningPriority.ts)の店主向け表示ラベル。rule / rulesList カードで共有する。
 const TIER_LABEL: Record<"low" | "normal" | "high", string> = { low: "低", normal: "普通", high: "高" };
@@ -279,6 +282,7 @@ const REAL_TOOL_LABEL: Record<string, string> = {
   get_analytics_summary: "会話分析サマリーの取得",
   get_analytics_trend: "会話数の推移・低評価セッションの取得",
   get_conversion_summary: "成約・効果分析サマリーの取得",
+  get_ab_test_results: "A/Bテスト結果・改善提案の取得",
   get_tuning_rule_effect: "ルール効果の取得",
   get_avatar_status: "アバター稼働状況の取得",
   request_sai_task: "Saiへの代行依頼",
@@ -802,6 +806,14 @@ export default function CopilotPreviewPage() {
           id: nextId(),
           role: "ai",
           card: { kind: "analyticsTrend", period, daily, lowScoreSessions },
+        };
+      }
+      if (a.card?.kind === "ab_test_results") {
+        const { experiments, suggestions } = a.card;
+        return {
+          id: nextId(),
+          role: "ai",
+          card: { kind: "abTestResults", experiments, suggestions },
         };
       }
       // D6: 優先度を含め、正規表現では拾えなかった内容(複数行の対応方針)もそのまま運ぶ。
@@ -2651,6 +2663,8 @@ function CardView({
       return <RuleEffectCard card={card} onSendReal={onSendReal} />;
     case "analyticsTrend":
       return <AnalyticsTrendCard card={card} onSendReal={onSendReal} />;
+    case "abTestResults":
+      return <AbTestResultsCard card={card} onSendReal={onSendReal} />;
     case "knowledgeGapsList":
       return (
         <CardShell hd={<><span>📚</span>知識ギャップ一覧（{card.totalCount}件）</>}>
@@ -2974,6 +2988,83 @@ function AnalyticsTrendCard({
           低評価セッション（スコア40未満）はありません
         </div>
       )}
+    </CardShell>
+  );
+}
+
+// A/Bテストのstatus表示。旧UI(conversion/index.tsx STATUS_COLORS・conversion.ab_status_*)と
+// 同じ4状態・同じ日本語ラベルに揃える(このカードのためだけにi18n辞書は持ち込まない)。
+const AB_STATUS_LABEL: Record<string, string> = { draft: "準備中", running: "実施中", completed: "完了", cancelled: "中止" };
+
+// W2-5(docs/COPILOT_UI_PARITY.md §3.1 #13): 実施中/直近のA/Bテスト結果+改善提案。
+// 旧UI(conversion/index.tsx の A/Bテストセクション・改善提案セクション)の再現。
+// 数値はすべてサーバ集計値(card)をそのまま描画する(AnalyticsTrendCardと同じ権威分離)。
+// 改善提案の「適用」は専用の保存ツールを新設せず、既存の suggest_tuning_rule フローに
+// 委ねる(__real: 送信でLLMに続けさせる。TuningRuleDraftCard等と同じ作法)。
+function AbTestResultsCard({
+  card,
+  onSendReal,
+}: {
+  card: Extract<Card, { kind: "abTestResults" }>;
+  onSendReal?: (action: string) => void;
+}) {
+  const { experiments, suggestions } = card;
+
+  return (
+    <CardShell hd={<><span>🔬</span>A/Bテスト結果・改善提案</>} tone="agent">
+      {experiments.length === 0 ? (
+        <div style={{ fontSize: 13.5, color: "var(--muted-foreground)" }}>実施中/直近のA/Bテストはありません</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {experiments.map((exp) => (
+            <div key={exp.id} style={{ display: "flex", flexDirection: "column", gap: 6, background: "var(--muted, rgba(120,120,140,0.08))", borderRadius: 8, padding: "10px 12px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ padding: "2px 8px", borderRadius: 999, background: "rgba(120,120,140,0.15)", fontSize: 11, fontWeight: 700, color: "var(--muted-foreground)", whiteSpace: "nowrap" }}>
+                  {AB_STATUS_LABEL[exp.status] ?? exp.status}
+                </span>
+                <span style={{ fontSize: 14, fontWeight: 600, color: "var(--foreground)" }}>{exp.name}</span>
+              </div>
+              {!exp.results ? (
+                <div style={{ fontSize: 12.5, color: "var(--muted-foreground)" }}>まだ結果はありません</div>
+              ) : !exp.results.reliable ? (
+                <div style={{ fontSize: 12.5, color: "var(--muted-foreground)" }}>{exp.results.warning}</div>
+              ) : (
+                <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                  {Object.entries(exp.results.variants).map(([variant, s]) => (
+                    <div key={variant} style={{ fontSize: 12.5, color: "var(--foreground)" }}>
+                      <strong>{variant}</strong>: 継続率{s.reachedTwoPlusRate}% / 成約率{s.conversionRate}%（{s.exposed}件）
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      <div>
+        <div style={{ fontSize: 12.5, color: "var(--muted-foreground)", fontWeight: 600, marginBottom: 6 }}>
+          改善提案
+        </div>
+        {suggestions.length === 0 ? (
+          <div style={{ fontSize: 13.5, color: "var(--muted-foreground)" }}>現在、改善提案はありません</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {suggestions.map((s) => (
+              <div key={s.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, fontSize: 13.5, background: "var(--muted, rgba(120,120,140,0.08))", borderRadius: 8, padding: "8px 12px" }}>
+                <span style={{ color: "var(--foreground)" }}>{s.description}</span>
+                {onSendReal && s.suggestedAction && (
+                  <button
+                    onClick={() => onSendReal(`__real:「${s.suggestedAction}」というルールを追加して`)}
+                    style={{ flexShrink: 0, fontSize: 12, fontWeight: 700, padding: "6px 10px", borderRadius: 8, cursor: "pointer", border: "1px solid var(--border)", background: "transparent", color: AGENT, minHeight: 36 }}
+                  >
+                    適用する
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </CardShell>
   );
 }
