@@ -393,3 +393,102 @@ describe("getActiveEscalations", () => {
     expect(result.escalations).toHaveLength(1);
   });
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// getActiveEscalations の壊れやすい点（2026-08-25 テスト強化）
+//
+// このSQLが守りたい不変条件は2つ。
+//  (1) COUNT と一覧が同じ条件で走る  … ズレると「全383件中20件」の383が嘘になる
+//  (2) 既定でe2e等を除外しつつ、metadata未設定の古い本物は落とさない
+// どちらも失敗しても画面は正常に見えるため、SQL文字列レベルで固定する。
+// ───────────────────────────────────────────────────────────────────────────
+describe("getActiveEscalations — COUNTと一覧の条件一致（件数表示が嘘にならない）", () => {
+  const ROW = { id: "x", tenant_id: "t", session_id: "s", escalated_at: null, last_message_at: null, message_count: 2, first_message_preview: "", source: "user" };
+
+  it.each([
+    ["既定(source未指定)", undefined],
+    ["source='user'", "user" as const],
+    ["source='all'", "all" as const],
+  ])("%s で COUNT と一覧の WHERE 句が完全に一致する", async (_name, source) => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ count: "5" }] });
+    mockQuery.mockResolvedValueOnce({ rows: [ROW] });
+    await getActiveEscalations("tenant-a", undefined, source);
+
+    const countSql = String(mockQuery.mock.calls[0]![0]);
+    const listSql = String(mockQuery.mock.calls[1]![0]);
+    // 一覧SQLには LATERAL 副問い合わせが持つ内側の WHERE が先に現れるため、
+    // lastIndexOf で外側(=絞り込み本体)の WHERE を取る。
+    const whereOf = (sql: string) =>
+      sql.slice(sql.lastIndexOf("WHERE")).replace(/ORDER BY[\s\S]*$/, "").replace(/\s+/g, " ").trim();
+    expect(whereOf(countSql)).toBe(whereOf(listSql));
+  });
+
+  it("COUNTと一覧に同じパラメータを渡す（片方だけテナントが抜けない）", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ count: "1" }] });
+    mockQuery.mockResolvedValueOnce({ rows: [ROW] });
+    await getActiveEscalations("tenant-a");
+    expect(mockQuery.mock.calls[0]![1]).toEqual(mockQuery.mock.calls[1]![1]);
+  });
+
+  it("limitを付けてもCOUNT側にはLIMITを付けない（絞った件数を全件数として返さない）", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ count: "383" }] });
+    mockQuery.mockResolvedValueOnce({ rows: [ROW] });
+    const { total } = await getActiveEscalations("tenant-a", 20);
+    expect(String(mockQuery.mock.calls[0]![0])).not.toContain("LIMIT");
+    expect(total).toBe(383);
+  });
+});
+
+describe("getActiveEscalations — 古い本物のエスカレーションを落とさない", () => {
+  const ROW = { id: "x", tenant_id: "t", session_id: "s", escalated_at: null, last_message_at: null, message_count: 2, first_message_preview: "", source: null };
+
+  // metadata->>'source' は記録開始前のセッションで NULL になる。
+  // `= 'user'` だけで書くと NULL に対して常に false となり、
+  // 過去の本物の対応待ちが既定表示から静かに消える(見逃し=最悪の失敗)。
+  it("既定フィルタは NULL の source も 'user' 扱いで含める", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ count: "1" }] });
+    mockQuery.mockResolvedValueOnce({ rows: [ROW] });
+    await getActiveEscalations("tenant-a");
+    const sql = String(mockQuery.mock.calls[0]![0]).replace(/\s+/g, " ");
+    expect(sql).toContain("IS NULL");
+  });
+
+  it("source='all' では source 条件そのものを付けない（e2eも含めた全件）", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ count: "3" }] });
+    mockQuery.mockResolvedValueOnce({ rows: [ROW] });
+    await getActiveEscalations("tenant-a", undefined, "all");
+    const sql = String(mockQuery.mock.calls[0]![0]);
+    expect(sql).not.toContain("metadata->>'source'");
+  });
+
+  it("未解決のものだけを対象にする（対応完了済みが混ざらない）", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ count: "0" }] });
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getActiveEscalations("tenant-a");
+    const sql = String(mockQuery.mock.calls[0]![0]).replace(/\s+/g, " ");
+    expect(sql).toContain("escalation_resolved_at IS NULL");
+    expect(sql).toContain("is_escalated = true");
+  });
+
+  it("tenantId未指定(super_admin)ではテナント条件を付けない", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ count: "0" }] });
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await getActiveEscalations(undefined);
+    expect(String(mockQuery.mock.calls[0]![0])).not.toContain("tenant_id = $");
+  });
+
+  it("COUNTが文字列で返っても数値になる（pgのbigintは文字列で来る）", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ count: "383" }] });
+    mockQuery.mockResolvedValueOnce({ rows: [ROW] });
+    const { total } = await getActiveEscalations("tenant-a");
+    expect(total).toBe(383);
+    expect(typeof total).toBe("number");
+  });
+
+  it("COUNT行が無い異常応答でも0件として壊れない", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    const { total } = await getActiveEscalations("tenant-a");
+    expect(total).toBe(0);
+  });
+});

@@ -26,14 +26,56 @@ function extractHost(origin: string): string | null {
   return m ? m[1] : null;
 }
 
-function isR2cOwnHost(origin: string): boolean {
-  const host = extractHost(origin);
-  return host !== null && R2C_OWN_HOSTS.has(host);
+/**
+ * ブラウザが送る Origin ヘッダの正規形に寄せる。
+ * originCheck.ts の matchesPattern は完全一致(`pattern === origin`)で照合するため、
+ * 末尾スラッシュ・大文字・既定ポート・パスが付いた値は「どのOriginにも一致しない
+ * 死んだ登録」になる。R2C自身のドメイン判定がその表記揺れで漏れないよう、
+ * 判定前にここで正規化する(照合そのものを変えるわけではない)。
+ */
+function normalizeOriginForHostCheck(origin: string): string {
+  return origin.trim().replace(/\/+$/, "").toLowerCase();
 }
 
-/** allowed_origins が空 = fail-open(既存タスク 1217807010191802 と同じ穴)。 */
+function isR2cOwnHost(origin: string): boolean {
+  const normalized = normalizeOriginForHostCheck(origin);
+  const host = extractHost(normalized);
+  if (host === null) return false;
+  // 既定ポートは Origin ヘッダに現れないため、付いていても同一ホストとみなす
+  const withoutDefaultPort = host.replace(/:443$/, "");
+  return R2C_OWN_HOSTS.has(withoutDefaultPort);
+}
+
+/**
+ * ブラウザの Origin ヘッダと決して一致しない形の登録を検出する。
+ *
+ * originCheck.ts の matchesPattern は完全一致で照合し、ブラウザが送る Origin は
+ * 「スキーム + ホスト(+既定でないポート)」のみ・小文字・末尾スラッシュ無し。
+ * よって末尾スラッシュ / 大文字 / パス付き / 前後空白 / 既定ポート明記 の登録は
+ * **一件も一致せず、ウィジェットが全ページで無言で止まる**。
+ * allowed_origins が空なら fail-open で全許可になるのに対し、こちらは fail-close で
+ * 画面上は何のエラーも出ないため、機械監査でしか気付けない。
+ */
+export function findUnmatchableOrigins(allowedOrigins: string[]): string[] {
+  return allowedOrigins.filter((raw) => {
+    if (raw.trim().length === 0) return true; // 空行は何にも一致しない
+    if (raw !== raw.trim()) return true; // 前後空白
+    if (raw !== raw.toLowerCase()) return true; // 大文字
+    if (/\/$/.test(raw)) return true; // 末尾スラッシュ
+    if (/:443$/.test(raw)) return true; // 既定ポートはOriginに現れない
+    // スキーム直後より後ろにパスが付いている
+    if (/^https?:\/\/[^/]+\/./.test(raw)) return true;
+    return false;
+  });
+}
+
+/**
+ * allowed_origins が実質空 = fail-open(既存タスク 1217807010191802 と同じ穴)。
+ * 空白のみの行だけが入っている場合も、照合には一切使われないため空と同じ扱いにする
+ * (`[""]` を「1件登録済み」と数えると、fail-open していることに気付けない)。
+ */
 export function hasEmptyOrigins(allowedOrigins: string[]): boolean {
-  return allowedOrigins.length === 0;
+  return allowedOrigins.every((o) => o.trim().length === 0);
 }
 
 /**
@@ -64,6 +106,8 @@ export interface TenantConfigIssues {
   emptyOrigins: boolean;
   r2cOwnDomainOnly: boolean;
   invalidOriginPattern: boolean;
+  /** ブラウザのOriginと決して一致しない登録(表記揺れ)。空なら問題なし。 */
+  unmatchableOrigins: string[];
   emptySystemPrompt: boolean;
 }
 
@@ -75,6 +119,7 @@ export function auditTenantConfig(input: {
     emptyOrigins: hasEmptyOrigins(input.allowedOrigins),
     r2cOwnDomainOnly: isR2cOwnDomainOnly(input.allowedOrigins),
     invalidOriginPattern: hasInvalidOriginPattern(input.allowedOrigins),
+    unmatchableOrigins: findUnmatchableOrigins(input.allowedOrigins),
     emptySystemPrompt: hasEmptySystemPrompt(input.systemPrompt),
   };
 }
@@ -84,6 +129,7 @@ export function hasAnyIssue(issues: TenantConfigIssues): boolean {
     issues.emptyOrigins ||
     issues.r2cOwnDomainOnly ||
     issues.invalidOriginPattern ||
+    issues.unmatchableOrigins.length > 0 ||
     issues.emptySystemPrompt
   );
 }

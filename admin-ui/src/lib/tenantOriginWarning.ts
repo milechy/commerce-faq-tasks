@@ -16,17 +16,20 @@ function extractHost(origin: string): string | null {
   return m ? m[1] : null;
 }
 
+// 末尾スラッシュ・大文字・既定ポートの表記揺れで判定を取りこぼさない。
+// 判定基準は src/lib/tenantConfigAudit.ts と揃えること(両方更新が必要)。
 function isR2cOwnHost(origin: string): boolean {
-  const host = extractHost(origin);
-  return host !== null && R2C_OWN_HOSTS.has(host);
+  const host = extractHost(origin.trim().replace(/\/+$/, "").toLowerCase());
+  if (host === null) return false;
+  return R2C_OWN_HOSTS.has(host.replace(/:443$/, ""));
 }
 
 export function hasEmptyOrigins(allowedOrigins: string[]): boolean {
-  return allowedOrigins.length === 0;
+  return allowedOrigins.every((o) => o.trim().length === 0);
 }
 
 export function isR2cOwnDomainOnly(allowedOrigins: string[]): boolean {
-  if (allowedOrigins.length === 0) return false;
+  if (allowedOrigins.every((o) => o.trim().length === 0)) return false;
   return allowedOrigins.every(isR2cOwnHost);
 }
 

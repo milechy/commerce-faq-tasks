@@ -117,3 +117,84 @@ describe("GET /v1/admin/chat-history/escalations", () => {
     expect(mockGetActiveEscalations).toHaveBeenCalledWith("tenant-a", undefined, "all");
   });
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// 壊れやすい点を突くテスト（2026-08-25 テスト強化）
+//
+// このフィルタが守りたいのは「本物の対応待ちがe2e残骸に埋もれない」こと。
+// よって "誤って全件表示に倒れる"(=残骸が混ざる)方向の失敗を重点的に突く。
+// source はURLに直接現れるため、ユーザーが手で書き換えうる面でもある。
+// ───────────────────────────────────────────────────────────────────────────
+describe("GET /v1/admin/chat-history/escalations — sourceパラメータの異常値", () => {
+  let app: ReturnType<typeof express>;
+
+  beforeAll(() => {
+    process.env.NODE_ENV = "development";
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    app = express();
+    app.use(express.json());
+    registerChatHistoryRoutes(app);
+    mockGetActiveEscalations.mockResolvedValue({ escalations: [], total: 0 });
+  });
+
+  // Express は ?source=a&source=b を配列で渡す。「最後の値を採用」する実装だと
+  // ?source=user&source=all で全件に倒れてしまう。現行は非文字列を弾いて
+  // 既定'user'に落ちる = 安全側。ここが崩れると残骸が混ざるため固定する。
+  it("同じキーを2つ渡す(?source=user&source=all)と配列になるが、安全側の'user'に倒れる", async () => {
+    await request(app)
+      .get("/v1/admin/chat-history/escalations?source=user&source=all")
+      .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`)
+      .expect(200);
+    expect(mockGetActiveEscalations).toHaveBeenCalledWith("tenant-a", undefined, "user");
+  });
+
+  it.each([
+    ["大文字", "ALL"],
+    ["前後空白", " all "],
+    ["空文字", ""],
+    ["未知の値", "e2e"],
+    ["SQL片", "all'; DROP TABLE chat_sessions;--"],
+    ["長大な値", "a".repeat(5000)],
+    ["部分一致を狙った値", "allx"],
+  ])("%s の source は既定の'user'に落ちる（全件表示に倒れない）", async (_name, value) => {
+    await request(app)
+      .get(`/v1/admin/chat-history/escalations?source=${encodeURIComponent(value)}`)
+      .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`)
+      .expect(200);
+    expect(mockGetActiveEscalations).toHaveBeenCalledWith("tenant-a", undefined, "user");
+  });
+
+  it("0件でも200で空配列を返す（未対応が無い状態を壊さない）", async () => {
+    const res = await request(app)
+      .get("/v1/admin/chat-history/escalations")
+      .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`)
+      .expect(200);
+    expect(res.body.escalations).toEqual([]);
+    expect(res.body.total).toBe(0);
+  });
+
+  it("client_admin は source=all を指定しても自テナントに閉じたままになる（越境しない）", async () => {
+    await request(app)
+      .get("/v1/admin/chat-history/escalations?source=all")
+      .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`)
+      .expect(200);
+    // 第1引数(テナント絞り込み)がJWT由来の tenant-a のままであること
+    expect(mockGetActiveEscalations).toHaveBeenCalledWith("tenant-a", undefined, "all");
+  });
+
+  it("total は limit で絞る前の実件数をそのまま返す（絞った件数を全件数として見せない）", async () => {
+    mockGetActiveEscalations.mockResolvedValue({
+      escalations: [{ id: "1" } as never],
+      total: 383,
+    });
+    const res = await request(app)
+      .get("/v1/admin/chat-history/escalations")
+      .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`)
+      .expect(200);
+    expect(res.body.total).toBe(383);
+    expect(res.body.escalations).toHaveLength(1);
+  });
+});

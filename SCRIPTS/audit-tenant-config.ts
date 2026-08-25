@@ -49,6 +49,10 @@ function formatIssueLabels(issues: TenantConfigIssues): string[] {
   if (issues.emptyOrigins) labels.push("allowed_origins空(fail-open)");
   if (issues.r2cOwnDomainOnly) labels.push("R2C自身のドメインのみ");
   if (issues.invalidOriginPattern) labels.push("不正なオリジン形式(パブリックサフィックスワイルドカード等)");
+  if (issues.unmatchableOrigins.length > 0) {
+    // 完全一致で照合されるため、これらは1件も一致せず全ページでウィジェットが止まる。
+    labels.push(`ブラウザOriginと一致し得ない登録: ${issues.unmatchableOrigins.map((o) => JSON.stringify(o)).join(", ")}`);
+  }
   if (issues.emptySystemPrompt) labels.push("system_prompt空");
   return labels;
 }

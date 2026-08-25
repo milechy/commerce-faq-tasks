@@ -15,6 +15,7 @@
 // URLのサニタイズは react-markdown 既定の urlTransform に依存している
 // (javascript:/data: 等は空文字に潰される)。urlTransform を上書きしないこと。
 // ユーザー自身の発話はこのコンポーネントに通さないこと(呼び出し側の責務)。
+import { Children, isValidElement } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -24,6 +25,13 @@ import remarkGfm from "remark-gfm";
 // var(--muted) を使うと copilot-preview のAIバブルと同色になり完全に溶ける(実測)。
 const CODE_BG = "rgba(127,127,127,0.22)";
 const CODE_BORDER = "rgba(127,127,127,0.35)";
+
+const listUl = ({ children }: { children?: React.ReactNode }) => (
+  <ul style={{ margin: "4px 0", paddingLeft: 22, lineHeight: 1.7 }}>{children}</ul>
+);
+const listOl = ({ children }: { children?: React.ReactNode }) => (
+  <ol style={{ margin: "4px 0", paddingLeft: 22, lineHeight: 1.7 }}>{children}</ol>
+);
 
 const components: Components = {
   h1: ({ children }) => (
@@ -45,9 +53,18 @@ const components: Components = {
   strong: ({ children }) => <strong style={{ fontWeight: 700 }}>{children}</strong>,
   em: ({ children }) => <em>{children}</em>,
   del: ({ children }) => <del style={{ opacity: 0.7 }}>{children}</del>,
-  ul: ({ children }) => <ul style={{ margin: "4px 0", paddingLeft: 22, lineHeight: 1.7 }}>{children}</ul>,
-  ol: ({ children }) => <ol style={{ margin: "4px 0", paddingLeft: 22, lineHeight: 1.7 }}>{children}</ol>,
-  li: ({ children }) => <li style={{ whiteSpace: "pre-line" }}>{children}</li>,
+  ul: listUl,
+  ol: listOl,
+  // li のソフト改行(\n)は pre-line で見せたいが、入れ子リストを含む li には
+  // 構造由来の改行テキストノード(</li>と<ul>の間など)がぶら下がるため、
+  // そのまま pre-line にすると入れ子の前後に空行が入る(実測: 3段で末尾に4改行)。
+  // 子要素にブロック(入れ子リスト)がある li だけ pre-line を外す。
+  li: ({ children }) => {
+    const hasBlockChild = Children.toArray(children).some(
+      (c) => isValidElement(c) && (c.type === listUl || c.type === listOl),
+    );
+    return <li style={hasBlockChild ? undefined : { whiteSpace: "pre-line" }}>{children}</li>;
+  },
   // href が空 = react-markdown の urlTransform が危険なスキーム(javascript: 等)を
   // 潰した後。アンカーのまま出すと「押せるのに現在の画面が新タブで開くだけ」の
   // 偽リンクになり、本物と見分けがつかない。素のテキストとして出す。
