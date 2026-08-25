@@ -344,6 +344,25 @@ async function _reportTenantUsage(
   //
   // GID 1216944003337186: billable=false（管理系LLM機能・chargeOneOffJpyで別途請求済みの
   // sai_agent等）は原価がusage_logsに記録されていてもStripe請求数量の集計対象から除外する。
+  // ★C-2: 月の累積を毎回丸ごと再計算し、絶対値として送る(増分方式をやめる)★
+  //
+  // 旧設計は「pending 行だけを対象に集計→成功したら reported に倒す」という
+  // 増分方式のように書かれていたが、Stripe へは action:'set'(絶対値の置き換え)
+  // で送っていた。この不一致は「同月2回目以降は idempotencyKey 一致で丸ごと
+  // スキップする」ガードに隠れて表面化していなかった(Asana 1217808138968200)。
+  // もしそのガードだけを外すと、2回目の実行が「新たにpendingになった差分」を
+  // 絶対値としてStripeへ送り、月初からの分を上書きして消してしまう
+  // (過少請求。例: 1日目 100件送信→2日目 pending の新規50件だけを『合計』として送ると
+  // 累積100件が消えて50件になる)。
+  //
+  // 正しい直し方は「請求状態を進行管理しない」こと: billing_status を集計の
+  // フィルタから外し、その月に発生した billable 行を毎回すべて数え、
+  // 常に「月初からの累積」を絶対値として送る。これにより:
+  //   - 集計と reported 更新の間のレース(Asana課題)も消える(集計対象が
+  //     状態遷移に依存しないため、順序を問わない)
+  //   - リトライが安全になる(同じ絶対値を再送するだけ)
+  //   - 遅れて届いた行も次回実行で自動的に拾われる
+  //   - 冪等キーの連番化が不要になる(下記、金額そのものをキーに含める)
   const fallbackMultiplier = planMultiplier(plan);
   const aggResult = await db.query(
     `SELECT
@@ -366,7 +385,6 @@ async function _reportTenantUsage(
      WHERE tenant_id = $1
        AND created_at >= $2
        AND created_at <  $3
-       AND billing_status = 'pending'
        AND billable = true`,
     [tenantId, startDate, endDate, fallbackMultiplier]
   );
@@ -398,15 +416,22 @@ async function _reportTenantUsage(
     );
   }
 
-  const idempotencyKey = `billing:${tenantId}:${periodYyyyMm}`;
+  // 冪等キーに billedQuantity を含める。
+  // 「(テナント, 月)」だけをキーにすると、金額が変わった2回目以降の実行が
+  // 同じキーでスキップされてしまう(C-2 導入前の不具合)。金額をキーに含めることで:
+  //   - 前回と同額なら同じキー → 既存行がヒットしてスキップ(何も変わっていない)
+  //   - 増えていれば新しいキー → 新しい絶対値として素通りする
+  // billedQuantity はその月の累積(集計クエリが行を消費しない限り単調非減少)なので、
+  // 同一(テナント,月)内で過去のキーへ後戻りすることはない。
+  const idempotencyKey = `billing:${tenantId}:${periodYyyyMm}:${billedQuantity}`;
 
-  // 既に送信済みならスキップ
+  // 同額を既に送信済みならスキップ(直前の実行から変化が無い)
   const existing = await db.query(
     `SELECT status FROM stripe_usage_reports WHERE idempotency_key = $1`,
     [idempotencyKey]
   );
   if (existing.rows.length > 0 && existing.rows[0].status === 'sent') {
-    logger.debug({ tenantId, periodYyyyMm }, '[stripeSync] already reported, skipping');
+    logger.debug({ tenantId, periodYyyyMm, billedQuantity }, '[stripeSync] same amount already reported, skipping');
     return;
   }
 
@@ -478,16 +503,18 @@ async function _reportTenantUsage(
         [usageRecord.id, idempotencyKey]
       );
 
+      // billing_status は集計の対象条件ではなくなった(上記)ので、ここでの更新は
+      // 「この月は少なくとも1回、直近の送信に含まれた」という観測用の印にすぎない。
       // billable=false の行はこの集計・報告に含まれていないため 'reported' にはしない
       // （'pending' のまま維持。原価可視化のための行であり、Stripeに送信済みという意味を
-      // 持たせない）。
+      // 持たせない）。'pending' 縛りを外すのは、集計時点より後に届いた行も
+      // 次回実行で自然に拾われるため、状態遷移の順序に依存させないため。
       await db.query(
         `UPDATE usage_logs
          SET billing_status = 'reported'
          WHERE tenant_id = $1
            AND created_at >= $2
            AND created_at <  $3
-           AND billing_status = 'pending'
            AND billable = true`,
         [tenantId, startDate, endDate]
       );

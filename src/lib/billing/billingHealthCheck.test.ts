@@ -45,6 +45,23 @@ describe('checkBillingHealth', () => {
     expect(violations[0].message).toContain('2026-06-01');
   });
 
+  // ★オオカミ少年防止★ billing_enabled=false のテナントは _reportTenantUsage が
+  // 集計にすら到達しないため、その usage_logs は「意図的に永久 pending」であり
+  // 故障ではない。tenants.billing_enabled のデフォルトは false(migration_billing.sql)
+  // なので、これを除外し忘れると新規テナントが1つ増えるだけで毎時間 CRITICAL が
+  // 鳴り続け、本物の異常が埋もれる。
+  it('SQLが tenants.billing_enabled で絞り込んでいる(billing_enabled=falseの誤検知を防ぐ)', async () => {
+    const db = makeDb({
+      "billing_status = 'pending'": (sql: string) => {
+        expect(sql).toMatch(/billing_enabled\s*=\s*true/);
+        expect(sql).toMatch(/JOIN\s+tenants/i);
+        return { rows: [{ cnt: 0, oldest: null }] };
+      },
+      'plan_multiplier IS NULL': CLEAN_UNSTAMPED,
+    });
+    await checkBillingHealth(db as any, mockLogger);
+  });
+
   it('未確定行の比率がしきい値(5%)を超えると WARNING', async () => {
     const db = makeDb({
       "billing_status = 'pending'": CLEAN_STUCK,

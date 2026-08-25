@@ -544,9 +544,13 @@ describe('集計SQL: 絞り込み条件(壊れると請求額が変わる)', () 
     expect(sql).not.toMatch(/created_at\s*<=\s*\$3/); // 終端を含めると翌月分を巻き込む
   });
 
-  // 落とすと、既に Stripe へ送った分をもう一度請求する。
-  it('未送信(pending)の行だけを対象にする', () => {
-    expect(aggregationSql()).toMatch(/billing_status\s*=\s*'pending'/);
+  // ★C-2: 集計は billing_status で絞らない(月の累積を毎回丸ごと再計算する)★
+  // pending 縛りで絞ると、2回目以降の実行が「新たにpendingになった差分」だけを
+  // 絶対値としてStripeへ送り、月初からの分を上書きして消してしまう(過少請求)。
+  // 冪等性は idempotencyKey に billedQuantity を含めることで担保する
+  // (下記 describe('idempotencyKey は billedQuantity を含む') 参照)。
+  it('billing_status では絞り込まない(状態遷移に依存させない)', () => {
+    expect(aggregationSql()).not.toMatch(/billing_status/);
   });
 
   // 落とすと、chargeOneOffJpy で請求済みの sai_agent 等を二重請求する。
@@ -699,7 +703,9 @@ describe('reportUsageToStripe（実行される統合テスト）', () => {
     expect(mockCreateUsageRecord).toHaveBeenCalledWith(
       'si_1',
       expect.objectContaining({ quantity: 225, action: 'set' }),
-      expect.objectContaining({ idempotencyKey: 'billing:t1:202603' })
+      // 冪等キーに金額(225)を含める(C-2)。次回、金額が変わらなければ同じキーで
+      // 自然にスキップされ、変われば新しいキーで通る。
+      expect.objectContaining({ idempotencyKey: 'billing:t1:202603:225' })
     );
     // 送信前にINSERTしてある(送信が例外を投げても「送ろうとした値」が残る)
     expect(calls.indexOf('insert_report')).toBeLessThan(calls.indexOf('mark_sent'));
@@ -812,4 +818,151 @@ describe('reportUsageToStripe（実行される統合テスト）', () => {
     });
     await expect(reportUsageToStripe(db as any, mockLogger, { periodYyyyMm: '202603' })).resolves.toBeUndefined();
   }, 15000);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// C-2: 累積set方式のリグレッションテスト。
+//
+// これが今回の本題: 「同月2回目以降のバッチがスキップされ、月初以降の利用が
+// 請求されない」(Asana 1217808138968200)を、冪等ガードだけ外す形で直すと、
+// 2回目の実行が「新たにpendingになった差分」を絶対値としてStripeへ送り、
+// 月初からの分を上書きして消す(過少請求)。ここでは実際に2営業日分の実行を
+// シミュレートし、2日目に送られる quantity が「差分」ではなく「累積」で
+// あることを、簡易な状態を持つ fake DB で検証する。
+// ─────────────────────────────────────────────────────────────────────────────
+describe('C-2: 累積set方式（複数回の実行をまたいだ整合性）', () => {
+  const cLogger = { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() } as any;
+  const OLD_ENV = process.env;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    process.env = { ...OLD_ENV, STRIPE_SECRET_KEY: 'sk_test_dummy' };
+    mockSubscriptionsRetrieve.mockResolvedValue({ items: { data: [{ id: 'si_1' }] }, customer: 'cus_1' });
+    mockCreateUsageRecord.mockImplementation(async (_itemId: string, params: { quantity: number }) => ({
+      id: `mbur_${params.quantity}`,
+    }));
+  });
+  afterAll(() => { process.env = OLD_ENV; });
+
+  /**
+   * usage_logs / stripe_usage_reports の最小限の状態を持つ fake DB。
+   * SQLパーサは持たず、既知の文パターンだけを判定する(このモジュール内の
+   * クエリ形状が変わったら、ここも意図的に直す必要がある=回帰検知として機能する)。
+   */
+  function makeStatefulDb() {
+    const usageLogs: Array<{ id: number; createdAt: string; billable: boolean; billingStatus: string; planMultiplier: number }> = [];
+    const usageReports = new Map<string, { status: string; billedQuantity: number }>();
+    let nextId = 1;
+
+    function addUsage(n: number, createdAt = '2026-03-15T00:00:00Z') {
+      for (let i = 0; i < n; i++) {
+        usageLogs.push({ id: nextId++, createdAt, billable: true, billingStatus: 'pending', planMultiplier: 1 });
+      }
+    }
+
+    const query = jest.fn().mockImplementation(async (sql: string, params: unknown[] = []) => {
+      if (sql.includes('SELECT DISTINCT tenant_id FROM stripe_subscriptions')) {
+        return { rows: [{ tenant_id: 't1' }] };
+      }
+      if (sql.includes('SELECT billing_enabled')) {
+        return { rows: [{ billing_enabled: true, billing_free_from: null, billing_free_until: null, plan: 'starter' }] };
+      }
+      if (sql.includes('billed_units_weighted')) {
+        const [, startDate, endDate] = params as [string, string, string];
+        const inRange = usageLogs.filter((r) => r.billable && r.createdAt >= startDate && r.createdAt < endDate);
+        const total = inRange.length;
+        const weighted = inRange.reduce((s, r) => s + r.planMultiplier, 0);
+        return { rows: [{ total_requests: total, total_cost_cents: total * 5, billable_units: total, billed_units_weighted: String(weighted), unstamped_rows: 0 }] };
+      }
+      if (sql.includes('SELECT status FROM stripe_usage_reports')) {
+        const [key] = params as [string];
+        const found = usageReports.get(key);
+        return { rows: found ? [{ status: found.status }] : [] };
+      }
+      if (sql.includes('SELECT stripe_subscription_id')) {
+        return { rows: [{ stripe_subscription_id: 'sub_1' }] };
+      }
+      if (sql.includes('INSERT INTO stripe_usage_reports')) {
+        const key = (params as unknown[])[2] as string;
+        const billedQuantity = (params as unknown[])[5] as number;
+        usageReports.set(key, { status: 'pending', billedQuantity });
+        return { rows: [] };
+      }
+      if (sql.includes("SET status = 'sent'")) {
+        const key = (params as unknown[])[1] as string;
+        const existing = usageReports.get(key);
+        if (existing) existing.status = 'sent';
+        return { rows: [] };
+      }
+      if (sql.includes('UPDATE usage_logs')) {
+        const [, startDate, endDate] = params as [string, string, string];
+        for (const r of usageLogs) {
+          if (r.billable && r.createdAt >= startDate && r.createdAt < endDate) r.billingStatus = 'reported';
+        }
+        return { rows: [] };
+      }
+      return { rows: [] };
+    });
+
+    return { query, addUsage, usageLogs, usageReports };
+  }
+
+  it('★本題★ 2日目の送信量は「差分」ではなく「月初からの累積」になる', async () => {
+    const db = makeStatefulDb();
+    db.addUsage(100, '2026-03-01T00:00:00Z'); // 1日目時点の利用
+
+    await reportUsageToStripe(db as any, cLogger, { periodYyyyMm: '202603' });
+    expect(mockCreateUsageRecord).toHaveBeenNthCalledWith(
+      1, 'si_1', expect.objectContaining({ quantity: 100 }), expect.anything()
+    );
+
+    db.addUsage(50, '2026-03-15T00:00:00Z'); // 2日目に新たに発生した利用
+    await reportUsageToStripe(db as any, cLogger, { periodYyyyMm: '202603' });
+
+    // ★ここが過少請求バグの検出点★ 50(差分)ではなく150(累積)が送られること。
+    expect(mockCreateUsageRecord).toHaveBeenNthCalledWith(
+      2, 'si_1', expect.objectContaining({ quantity: 150 }), expect.anything()
+    );
+    expect(mockCreateUsageRecord).toHaveBeenCalledTimes(2);
+  });
+
+  it('変化が無い日は再送しない(冪等キーが金額に紐づく)', async () => {
+    const db = makeStatefulDb();
+    db.addUsage(100, '2026-03-01T00:00:00Z');
+
+    await reportUsageToStripe(db as any, cLogger, { periodYyyyMm: '202603' });
+    await reportUsageToStripe(db as any, cLogger, { periodYyyyMm: '202603' }); // 3日目、利用量は変わらない
+
+    expect(mockCreateUsageRecord).toHaveBeenCalledTimes(1); // 2回目は同額なのでスキップ
+  });
+
+  it('3日連続で増え続けても、常に累積が送られる', async () => {
+    const db = makeStatefulDb();
+    db.addUsage(10, '2026-03-01T00:00:00Z');
+    await reportUsageToStripe(db as any, cLogger, { periodYyyyMm: '202603' });
+
+    db.addUsage(10, '2026-03-02T00:00:00Z');
+    await reportUsageToStripe(db as any, cLogger, { periodYyyyMm: '202603' });
+
+    db.addUsage(10, '2026-03-03T00:00:00Z');
+    await reportUsageToStripe(db as any, cLogger, { periodYyyyMm: '202603' });
+
+    const quantities = mockCreateUsageRecord.mock.calls.map(([, p]: [string, { quantity: number }]) => p.quantity);
+    expect(quantities).toEqual([10, 20, 30]); // 差分の[10,10,10]にはならない
+  });
+
+  it('減ったふりをして戻ってきても(実際には発生しえないが)累積は単調非減少', async () => {
+    // usage_logs は追記専用(削除も更新も無い)ため、集計は本来 非減少 のはず。
+    // ここでは「行が増えるだけ」という前提そのものを固定する回帰テスト。
+    const db = makeStatefulDb();
+    db.addUsage(5);
+    await reportUsageToStripe(db as any, cLogger, { periodYyyyMm: '202603' });
+    const first = mockCreateUsageRecord.mock.calls[0][1].quantity;
+
+    db.addUsage(3);
+    await reportUsageToStripe(db as any, cLogger, { periodYyyyMm: '202603' });
+    const second = mockCreateUsageRecord.mock.calls[1][1].quantity;
+
+    expect(second).toBeGreaterThanOrEqual(first);
+  });
 });
