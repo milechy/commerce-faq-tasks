@@ -3583,7 +3583,7 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(mockQuery).toHaveBeenNthCalledWith(
         2,
         expect.stringContaining('COALESCE($3, category)'),
-        ['q', 'a', null, 42, 'tenant-abc'],
+        ['q', 'a', null, null, 42, 'tenant-abc'],
       );
       expect(res.body.actions[0].result).toContain('ID: 42');
     });
@@ -3608,7 +3608,7 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(mockQuery).toHaveBeenNthCalledWith(
         2,
         expect.stringContaining('COALESCE($3, category)'),
-        ['q', 'a', 'pricing', 42, 'tenant-abc'],
+        ['q', 'a', 'pricing', null, 42, 'tenant-abc'],
       );
       expect(res.body.actions[0].result).toContain('ID: 42');
     });
@@ -3631,7 +3631,7 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(mockQuery).toHaveBeenNthCalledWith(
         2,
         expect.stringContaining('COALESCE($3, category)'),
-        ['q2', 'a2', null, 42, 'tenant-abc'],
+        ['q2', 'a2', null, null, 42, 'tenant-abc'],
       );
       expect(res.body.actions[0].result).toContain('ID: 42');
     });
@@ -3669,6 +3669,93 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.body.actions[0].result).toContain('アクセス権限がありません');
       // 所有権確認のSELECTのみ呼ばれ、UPDATEには到達しない
       expect(mockQuery).toHaveBeenCalledTimes(1);
+    });
+
+    // W1-2(docs/COPILOT_UI_PARITY.md §3.1 #2): FAQの検索対象からの除外をチャットから
+    // 切り替えられるようにする。既存ツールのparameters拡張(update_faqにexcluded_from_search
+    // を追加)で対応し、新規ツールは作らない。
+    it('update_faq: excluded_from_search=true を指定すると検索除外できる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(
+          toolCallResponse('call-uf-8', 'update_faq', { id: 42, question: 'q', answer: 'a', excluded_from_search: true }),
+        )
+        .mockResolvedValueOnce(makeGroqResponse('更新しました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ id: 42, tenant_id: 'tenant-abc' }] })
+        .mockResolvedValueOnce({
+          rows: [{ id: 42, question: 'q', answer: 'a', is_published: true, is_excluded_from_search: true }],
+        })
+        .mockResolvedValueOnce({ rows: [] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'この質問はもう検索に出さないで', sessionId: 'sess-uf-08' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining('is_excluded_from_search = COALESCE($4, is_excluded_from_search)'),
+        ['q', 'a', null, true, 42, 'tenant-abc'],
+      );
+      // ESにも除外状態を引き継いで反映する
+      expect(mockUpsertToEsAsync).toHaveBeenCalledWith('tenant-abc', 42, 'q', 'a', true, true);
+      expect(res.body.actions[0].result).toContain('除外中');
+    });
+
+    it('update_faq: excluded_from_search=false を指定すると検索対象に戻せる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(
+          toolCallResponse('call-uf-9', 'update_faq', { id: 42, question: 'q', answer: 'a', excluded_from_search: false }),
+        )
+        .mockResolvedValueOnce(makeGroqResponse('更新しました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ id: 42, tenant_id: 'tenant-abc' }] })
+        .mockResolvedValueOnce({
+          rows: [{ id: 42, question: 'q', answer: 'a', is_published: true, is_excluded_from_search: false }],
+        })
+        .mockResolvedValueOnce({ rows: [] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'この質問を検索対象に戻して', sessionId: 'sess-uf-09' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining('is_excluded_from_search = COALESCE($4, is_excluded_from_search)'),
+        ['q', 'a', null, false, 42, 'tenant-abc'],
+      );
+      expect(mockUpsertToEsAsync).toHaveBeenCalledWith('tenant-abc', 42, 'q', 'a', true, false);
+      expect(res.body.actions[0].result).toContain('含める');
+    });
+
+    // 2026-08-25 実装確認で発見した既存バグの回帰防止(このPRで修正)。excluded_from_search
+    // を指定しない通常の本文編集で、既に検索除外されているFAQのES側除外状態が
+    // 黙って解除されないこと。修正前は upsertToEsAsync が5引数で呼ばれ、6番目の
+    // isExcludedFromSearch が既定値falseに巻き戻っていた。
+    it('excluded_from_search未指定の通常編集では、既存の検索除外状態がESで維持される', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-uf-10', 'update_faq', { id: 42, question: 'q2', answer: 'a2' }))
+        .mockResolvedValueOnce(makeGroqResponse('更新しました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ id: 42, tenant_id: 'tenant-abc' }] })
+        // DB側は既に is_excluded_from_search=true(除外中)のFAQを、本文だけ編集する想定。
+        // COALESCEにより実際のUPDATEでもtrueのまま維持される。
+        .mockResolvedValueOnce({
+          rows: [{ id: 42, question: 'q2', answer: 'a2', is_published: true, is_excluded_from_search: true }],
+        })
+        .mockResolvedValueOnce({ rows: [] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '本文だけ直して', sessionId: 'sess-uf-10' });
+
+      expect(res.status).toBe(200);
+      // 修正前は ('tenant-abc', 42, 'q2', 'a2', true) の5引数だった
+      expect(mockUpsertToEsAsync).toHaveBeenCalledWith('tenant-abc', 42, 'q2', 'a2', true, true);
     });
   });
 
