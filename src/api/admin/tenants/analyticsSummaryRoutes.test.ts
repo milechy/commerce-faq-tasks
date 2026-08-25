@@ -33,9 +33,18 @@ const db = { query: (...args: unknown[]) => mockQuery(...args) } as unknown as P
 function allSql(): string {
   return mockQuery.mock.calls.map((c) => String(c[0])).join("\n---\n");
 }
-/** chat_sessions を参照しているSQLだけを抜き出す */
+/**
+ * chat_sessions を主テーブルとするSQLだけを抜き出す(conversationsRowクエリ)。
+ * cvMacro/cvMicro/cvRank/alertの各クエリはuserSourceExists()のEXISTS部分文文で
+ * `FROM chat_sessions cs`(エイリアス付き)を副問い合わせとして含むため、
+ * エイリアス無しの `FROM chat_sessions` (改行が続く)だけにマッチさせて区別する。
+ */
 function chatSessionSql(): string[] {
-  return mockQuery.mock.calls.map((c) => String(c[0])).filter((s) => /FROM\s+chat_sessions/.test(s));
+  return mockQuery.mock.calls.map((c) => String(c[0])).filter((s) => /FROM\s+chat_sessions\s*\n/.test(s));
+}
+/** conversion_attributions を参照しているSQL(cvMacro/cvMicro/cvRank/alertの4本)だけを抜き出す */
+function cvSql(): string[] {
+  return mockQuery.mock.calls.map((c) => String(c[0])).filter((s) => /FROM\s+conversion_attributions/.test(s));
 }
 
 let app: Express;
@@ -118,6 +127,39 @@ describe("GET /v1/admin/tenants/:id/analytics-summary", () => {
 
     expect(res.status).toBe(200);
     expect(allSql()).toMatch(/FROM\s+chat_sessions/);
+  });
+
+  // GID 1217810442450208: cvMacroRow/cvMicroRow/cvRankRow/alertRow の4クエリに
+  // 実ユーザー判定(userSourceExists)が無く、e2e/chat-test 由来の
+  // conversion_attributions を実CVと一緒に数えていた欠陥の回帰テスト。
+  it("GID 1217810442450208: conversion_attributions の4クエリ全てにsource='user'絞り込みが入っている", async () => {
+    await request(app)
+      .get("/v1/admin/tenants/carnation/analytics-summary?period=last_30d")
+      .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`);
+
+    const sqls = cvSql();
+    // cvMacroRow / cvMicroRow / cvRankRow / alertRow の4本が揃っていること
+    expect(sqls.length).toBe(4);
+    for (const sql of sqls) {
+      expect(sql).toMatch(/metadata->>'source'\s*=\s*'user'/);
+    }
+  });
+
+  // 結合列を固定しないと第3引数("id" vs "session_id")の誤りを検出できない。
+  // conversion_attributions.session_id は chat_sessions.id(UUID)を参照するため、
+  // 誤って第3引数を省略/"session_id"にすると cs.session_id(TEXT) = ...session_id(UUID) の
+  // 暗黙キャスト不可で本番が全呼び出し500になる(PR #958で実証済み)。
+  it("GID 1217810442450208: conversion_attributions の4クエリ全てが cs.id で結合している(第3引数=\"id\")", async () => {
+    await request(app)
+      .get("/v1/admin/tenants/carnation/analytics-summary?period=last_30d")
+      .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`);
+
+    const sqls = cvSql();
+    expect(sqls.length).toBe(4);
+    for (const sql of sqls) {
+      expect(sql).toMatch(/cs\.id\s*=\s*conversion_attributions\.session_id/);
+      expect(sql).not.toMatch(/cs\.session_id\s*=\s*conversion_attributions\.session_id/);
+    }
   });
 
   // 2引数の ROUND() は numeric 版しか存在しない。COUNT(*)/float の結果

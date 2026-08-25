@@ -4,7 +4,7 @@ import type { AuthedReq } from "../../middleware/roleAuth";
 import { getMonthlyLLMUsageFromPostHog } from "../../../lib/billing/posthogUsageTracker";
 import { logger } from "../../../lib/logger";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
-import { userSourceClause } from "../analytics/summaryQueries";
+import { userSourceClause, userSourceExists } from "../analytics/summaryQueries";
 
 const PERIOD_DAYS: Record<string, number> = {
   last_7d: 7,
@@ -63,12 +63,19 @@ export function registerAnalyticsSummaryRoutes(app: Express, db: Pool): void {
                ${userSourceClause("chat_sessions")}`,
             [tenantId, days, interval],
           ),
+          // GID 1217810442450208: cvMacroRow/cvMicroRow/cvRankRow/alertRow の4クエリは
+          // 同じハンドラ内の conversationsRow(userSourceClause("chat_sessions")適用済み)と
+          // 異なり実ユーザー判定が無く、e2e/chat-test 由来の conversion_attributions を
+          // 実CVと一緒に数えていた(P0-3・PR #954/#958と同根)。cv-status/crossTenantContext.ts
+          // と同じ userSourceExists() で揃える。conversion_attributions.session_id は
+          // chat_sessions.id(UUID)を参照するため第3引数は "id"。
           db.query<{ source: string; cnt: string }>(
             `SELECT source, COUNT(*)::text AS cnt
              FROM conversion_attributions
              WHERE tenant_id = $1
                AND event_type = 'macro'
                AND created_at >= NOW() - ($2::text)::interval
+               ${userSourceExists("conversion_attributions.session_id", "conversion_attributions.tenant_id", "id")}
              GROUP BY source`,
             [tenantId, interval],
           ),
@@ -78,6 +85,7 @@ export function registerAnalyticsSummaryRoutes(app: Express, db: Pool): void {
              WHERE tenant_id = $1
                AND event_type = 'micro'
                AND created_at >= NOW() - ($2::text)::interval
+               ${userSourceExists("conversion_attributions.session_id", "conversion_attributions.tenant_id", "id")}
              GROUP BY source`,
             [tenantId, interval],
           ),
@@ -86,6 +94,7 @@ export function registerAnalyticsSummaryRoutes(app: Express, db: Pool): void {
              FROM conversion_attributions
              WHERE tenant_id = $1
                AND created_at >= NOW() - ($2::text)::interval
+               ${userSourceExists("conversion_attributions.session_id", "conversion_attributions.tenant_id", "id")}
              GROUP BY rank`,
             [tenantId, interval],
           ),
@@ -95,7 +104,8 @@ export function registerAnalyticsSummaryRoutes(app: Express, db: Pool): void {
                COUNT(CASE WHEN rank = 'D' THEN 1 END)::text AS ranked_d
              FROM conversion_attributions
              WHERE tenant_id = $1
-               AND created_at >= NOW() - ($2::text)::interval`,
+               AND created_at >= NOW() - ($2::text)::interval
+               ${userSourceExists("conversion_attributions.session_id", "conversion_attributions.tenant_id", "id")}`,
             [tenantId, interval],
           ),
         ]);
