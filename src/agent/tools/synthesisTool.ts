@@ -325,15 +325,8 @@ export async function synthesizeAnswer(input: SynthesisInput): Promise<Synthesis
     // 書籍著作権保護: 1件あたり RAG_EXCERPT_MAX_CHARS 文字までに切り詰める
     // (src/agent/config/ragLimits.ts)。テキストをそのままLLMへ渡すと、
     // 書籍由来チャンク(metadata.source='book')の全文がプロンプトに乗ってしまう。
-    const faqContext = items.length
-      ? items
-          .slice(0, RAG_MAX_EXCERPTS)
-          .map((it, i) => {
-            const excerpt = truncate(sanitizeText(it.text), RAG_EXCERPT_MAX_CHARS);
-            return `FAQ${i + 1}:\nQ: ${excerpt}\nA: ${excerpt}`;
-          })
-          .join('\n\n')
-      : '';
+    // Q/A の組み立ては buildFaqContext() 参照(ナレッジ配線是正P16)。
+    const faqContext = await buildFaqContext(items, tenantId);
 
     const userPrompt = faqContext
       ? `お客様の質問: ${query}\n参考FAQ:\n${faqContext}\n上記のFAQ情報をもとに、お客様の質問に自然な日本語で回答してください。`
@@ -396,6 +389,66 @@ function fallbackSynthesize(input: SynthesisInput): SynthesisOutput {
     answer,
     gapSignal: { hitCount: items.length, topScore: (items[0] as any)?.score ?? 0 },
   };
+}
+
+/**
+ * ナレッジ配線是正P16: LLMに渡す参考FAQを組み立てる。
+ *
+ * 検索ヒット(items)は faq_embeddings.text(question と answer を連結して
+ * 埋め込んだもの)であり、質問文と回答文が分離されていない。是正前はこの
+ * 同一テキストを Q/A 両方にそのまま入れており、質問と回答の区別が失われ、
+ * 限られたコンテキストを二重に消費していた。
+ *
+ * metadata.faq_id を持つヒットだけ faq_docs から question/answer を個別に
+ * 引き直す(1クエリでまとめて取得。上位 RAG_MAX_EXCERPTS 件のみが対象なので
+ * 回答経路に乗る追加クエリは最大1回)。faq_id を持たない book/OCR/
+ * learned_memory 由来のヒットは、存在しない質問文を捏造しないよう
+ * Q/A 形式にせず「参考情報」の1ブロックとして渡す。
+ */
+async function buildFaqContext(items: RerankItem[], tenantId: string | undefined): Promise<string> {
+  const top = items.slice(0, RAG_MAX_EXCERPTS);
+  if (!top.length) return '';
+
+  const faqIdByIndex = new Map<number, number>();
+  top.forEach((it, i) => {
+    const raw = it.metadata?.faq_id;
+    const faqId =
+      typeof raw === 'number'
+        ? raw
+        : typeof raw === 'string' && /^\d+$/.test(raw)
+          ? parseInt(raw, 10)
+          : null;
+    if (faqId !== null) faqIdByIndex.set(i, faqId);
+  });
+
+  let faqDocsById = new Map<number, { question: string; answer: string }>();
+  if (tenantId && faqIdByIndex.size > 0) {
+    try {
+      const pool = getPool();
+      const ids = [...new Set(faqIdByIndex.values())];
+      const result = await pool.query<{ id: number; question: string; answer: string }>(
+        'SELECT id, question, answer FROM faq_docs WHERE tenant_id = $1 AND id = ANY($2)',
+        [tenantId, ids],
+      );
+      faqDocsById = new Map(result.rows.map((r) => [r.id, { question: r.question, answer: r.answer }]));
+    } catch {
+      // best-effort: 取得に失敗しても参考情報ブロックにフォールバックする(下のmapで自然に処理される)
+    }
+  }
+
+  return top
+    .map((it, i) => {
+      const faqId = faqIdByIndex.get(i);
+      const doc = faqId !== undefined ? faqDocsById.get(faqId) : undefined;
+      if (doc) {
+        const q = truncate(sanitizeText(doc.question), RAG_EXCERPT_MAX_CHARS);
+        const a = truncate(sanitizeText(doc.answer), RAG_EXCERPT_MAX_CHARS);
+        return `FAQ${i + 1}:\nQ: ${q}\nA: ${a}`;
+      }
+      const excerpt = truncate(sanitizeText(it.text), RAG_EXCERPT_MAX_CHARS);
+      return `FAQ${i + 1}:\n参考情報: ${excerpt}`;
+    })
+    .join('\n\n');
 }
 
 function truncate(s: string, maxChars: number): string {
