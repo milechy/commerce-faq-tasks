@@ -18,6 +18,18 @@
  * unstamped(NULL)比率はほぼ0のはず。しきい値を超えたまま高止まりしている場合、
  * 焼き付けが機能していない(queryTenantPlanResult の障害・tenants行の欠損等)。
  * サンプル数が少ない時間帯の誤検知を避けるため最小サンプル数を設ける。
+ *
+ * ★この監視は「有効化されるまで沈黙する」★
+ * チェック1は `tenants.billing_enabled = true` のテナントだけを対象にする
+ * (billing_enabled のデフォルトは false。migration_billing.sql)。つまり
+ * billing_enabled=true のテナントが1つも無い間は stuckPendingRows は常に0件で
+ * 沈黙し続ける。billingReconciliation.ts(月次突合)も stripe_usage_reports に
+ * 行があるテナントだけを対象にするため、一度も送信を試みていない環境では
+ * 対象0件のまま沈黙する。「オオカミ少年を防ぐ」ための設計だが、裏を返すと
+ * 「監視があるから安心」と誤解してはいけない、ということでもある。
+ * この2本が実際に異常を拾えるのは、billing_enabled=true のテナントが
+ * 存在し、かつ請求送信が試みられて初めて。有効化前は「異常が無い」のではなく
+ * 「まだ何も見ていない」。
  */
 import type pino from "pino";
 import { sendSlackAlert, type AlertLevel } from "../alerts/slackNotifier";

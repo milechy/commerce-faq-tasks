@@ -13,10 +13,10 @@ interface MinimalLogger {
   error(obj: unknown, msg?: string): void;
 }
 
-// プラン倍率の定義は planPricing.ts に移した（usageTracker.ts が利用記録時に
+// プラン倍率の定義は planPricing.ts にある（usageTracker.ts が利用記録時に
 // 焼き付けるため、Stripe連携モジュールへの依存を持たせたくない）。
-// 既存の import 元を壊さないよう、ここから re-export する。
-export { PLAN_MULTIPLIERS, planMultiplier } from './planPricing';
+// re-export は置かない。PLAN_MULTIPLIERS/planMultiplier が要る側は
+// './planPricing' から直接importすること（二重の出どころを作らない）。
 import { planMultiplier } from './planPricing';
 
 /** 環境変数から LemonSlice 月額固定費(JPY)を取得。未設定/0 なら按分課金は無効。 */

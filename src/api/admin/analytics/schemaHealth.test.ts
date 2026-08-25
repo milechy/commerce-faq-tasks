@@ -97,9 +97,26 @@ describe("REQUIRED_COLUMNS の機械的ガード", () => {
     return out;
   }
 
-  it("レジストリがソースの INSERT 文と完全一致する", () => {
+  // scanInsertColumns の正規表現(INSERT\s+INTO\s+([a-z_]+))はリテラルなテーブル名しか
+  // 検出できない。stripeSync.ts の _chargeMonthlyFixedShare は
+  // `INSERT INTO ${table} (...)` とテンプレートリテラル変数でテーブル名を切り替える
+  // (lemonslice/livekit/platform_monthly_charges の3テーブルを1つの関数で共有するため)。
+  // そのためこの3テーブルは静的スキャンの対象外になる。REQUIRED_COLUMNS には
+  // 含める(schemaHealth の実行時チェックには効かせたい。migration未適用時の
+  // INSERT全滅を検知できないと按分請求が無言で止まるため)が、この機械的ガードの
+  // 完全一致チェックからは除外し、代わりに下のテストでソースの実際のカラム列と
+  // 手動で突き合わせる。
+  const DYNAMIC_TABLE_NAME_EXCLUSIONS = [
+    "lemonslice_monthly_charges",
+    "livekit_monthly_charges",
+    "platform_monthly_charges",
+  ];
+
+  it("レジストリがソースの INSERT 文と完全一致する(動的テーブル名を除く)", () => {
     const scanned = scanInsertColumns();
-    const registryTables = Object.keys(REQUIRED_COLUMNS).sort();
+    const registryTables = Object.keys(REQUIRED_COLUMNS)
+      .filter((t) => !DYNAMIC_TABLE_NAME_EXCLUSIONS.includes(t))
+      .sort();
     const scannedTables = Object.keys(scanned).sort();
 
     // 正規表現が壊れて空振りしていないことの下限アサーション
@@ -112,6 +129,27 @@ describe("REQUIRED_COLUMNS の機械的ガード", () => {
         table: t,
         columns: scanned[t]!,
       });
+    }
+  });
+
+  it("動的テーブル名(lemonslice/livekit/platform_monthly_charges)のINSERT列がレジストリと一致する", () => {
+    // _chargeMonthlyFixedShare は3テーブルとも同一のINSERT文テンプレートを使う
+    // (stripeSync.ts:109)。テーブル名だけが変数なので、列名は固定文字列として
+    // ソースから直接確認できる。
+    const src = fs.readFileSync(
+      path.resolve(__dirname, "../../../lib/billing/stripeSync.ts"),
+      "utf-8"
+    );
+    const m = /INSERT INTO \$\{table\}\s*\(([^)]+)\)/.exec(src);
+    expect(m).not.toBeNull();
+    const cols = m![1]!
+      .split(",")
+      .map((c) => c.trim().toLowerCase())
+      .filter(Boolean)
+      .sort();
+
+    for (const t of DYNAMIC_TABLE_NAME_EXCLUSIONS) {
+      expect({ table: t, columns: [...REQUIRED_COLUMNS[t]!].sort() }).toEqual({ table: t, columns: cols });
     }
   });
 
