@@ -296,6 +296,58 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
   {
     type: 'function',
     function: {
+      name: 'bulk_unpublish_faqs',
+      description:
+        '複数のFAQをまとめて非公開にする。対象は get_faq_list で確認したIDのみを使うこと' +
+        '（このツール自身は絞り込みを行わない）。一度に指定できるのは最大20件。必ず先に対象の' +
+        'FAQ（質問文の一覧）をユーザーに提示し、明確な同意を得たターンでのみ confirmed=true で' +
+        '呼び出すこと。個別に1件だけ止めたい場合は set_faq_published を使うこと。',
+      parameters: {
+        type: 'object',
+        properties: {
+          ids: {
+            type: 'array',
+            items: { type: 'number' },
+            description: '対象のFAQ ID配列（最大20件、get_faq_listで確認したもの）',
+          },
+          confirmed: {
+            type: 'boolean',
+            description: '確認フラグ（true でのみ実行される）',
+          },
+        },
+        required: ['ids', 'confirmed'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'bulk_delete_faqs',
+      description:
+        '複数のFAQをまとめて完全に削除する。取り消せない操作のため、必ず先に対象のFAQ（質問文の' +
+        '一覧）をユーザーに提示し、明確な同意を得たターンでのみ confirmed=true で呼び出すこと。' +
+        '対象は get_faq_list で確認したIDのみを使うこと（このツール自身は絞り込みを行わない）。' +
+        '一度に指定できるのは最大20件。個別に1件だけ削除したい場合は delete_faq を使うこと。',
+      parameters: {
+        type: 'object',
+        properties: {
+          ids: {
+            type: 'array',
+            items: { type: 'number' },
+            description: '対象のFAQ ID配列（最大20件、get_faq_listで確認したもの）',
+          },
+          confirmed: {
+            type: 'boolean',
+            description: '確認フラグ（true でのみ実行される）',
+          },
+        },
+        required: ['ids', 'confirmed'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'import_industry_faq_templates',
       description:
         '新規テナントのオンボーディングで、ユーザーが答えた業種に合わせたFAQのたたき台を一括登録する。' +

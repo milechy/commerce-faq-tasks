@@ -61,6 +61,8 @@ export const WRITE_TOOL_RISK_TIERS: Record<string, RiskTier> = {
   // 顧客の目に触れる内容の公開状態を変える点で publish_faq_drafts と同じ階層。
   // is_published を戻せば元に戻る(delete_faq のような不可逆ではない)。
   set_faq_published: 'medium',
+  // set_faq_publishedの複数件版。同じ理由(is_publishedを戻せば元に戻る)でmedium。
+  bulk_unpublish_faqs: 'medium',
   // 追加・削除いずれも1件戻せば元に戻る点はlowの定義を満たすが、Widget埋め込みの
   // セキュリティ境界(CORS/オリジン許可)を直接変える操作であり、かつ最後の1件を
   // 削除すると fail-open(全ドメイン許可)に倒れる非対称性がある(originCheck.ts)。
@@ -92,6 +94,8 @@ export const WRITE_TOOL_RISK_TIERS: Record<string, RiskTier> = {
 
   // --- high: 不可逆な破棄 / 課金 / 外部送出 ---
   delete_faq: 'high',
+  // delete_faqの複数件版。同じ不可逆な破棄でhigh。
+  bulk_delete_faqs: 'high',
   delete_tuning_rule: 'high',
   // アバター設定の完全削除。不可逆な破棄で delete_faq と同じ階層。稼働中(is_active)の
   // 設定は削除できない制約があるため、顧客画面からアバターが消える経路そのものは

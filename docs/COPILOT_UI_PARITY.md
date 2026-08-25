@@ -92,7 +92,7 @@ handoff は出るが、店主はチャットを離れる。離れた先で「何
 | 2 | FAQ の検索対象から除外 | T1 | tool化(2026-08-25, `update_faq`拡張) | `KnowledgeFaqEditModal.tsx:71` |
 | 3 | FAQ入力例 (`faq_question_hint` / `faq_answer_hint`) | T1 | tool化(2026-08-25, `set_faq_hints`) | `FaqHintSettings.tsx` |
 | 4 | アバター設定の削除 | T1 | tool化(2026-08-25, `delete_avatar_config`) | `avatar/index.tsx:227` |
-| 5 | FAQ一括非公開・一括削除 | T2 | `faq_bulk_ops` | `KnowledgeListTab.tsx:238,260` |
+| 5 | FAQ一括非公開・一括削除 | T2 | tool化(2026-08-25, `bulk_unpublish_faqs`/`bulk_delete_faqs`)。旧`faq_bulk_ops` handoffキーは計測窓のため残置 | `KnowledgeListTab.tsx:238,260` |
 | 6 | FAQ一覧のカテゴリ絞り込み | T2 | 不可視 | `KnowledgeListTab.tsx:118` |
 | 7 | FAQ のタグ | T2 | handoff無し | `KnowledgeFaqEditModal.tsx:69` |
 | 8 | アバター画像「写真をアップロード」 | T3 | 不可視 | `StudioImageSection.tsx:87` |
@@ -507,7 +507,7 @@ handoff は出るが、店主はチャットを離れる。離れた先で「何
 | 2 | FAQの検索対象から除外 | `tool:update_faq` |
 | 3 | FAQ入力例(faq_question_hint/faq_answer_hint) | `tool:set_faq_hints` |
 | 4 | アバター設定の削除 | `tool:delete_avatar_config` |
-| 5 | FAQ一括非公開・一括削除 | `handoff:faq_bulk_ops` |
+| 5 | FAQ一括非公開・一括削除 | `tool:bulk_unpublish_faqs,bulk_delete_faqs` |
 | 6 | FAQ一覧のカテゴリ絞り込み | `pending` |
 | 7 | FAQのタグ | `pending` |
 | 8 | アバター画像「写真をアップロード」 | `pending` |
@@ -520,4 +520,4 @@ handoff は出るが、店主はチャットを離れる。離れた先で「何
 | 15 | ご利用状況・お支払い | `handoff:billing` |
 | 16 | 集計期間90日 | `pending` |
 
-現在地（2026-08-25、W1完了時点）: `tool:` 4 / `handoff:` 8 / `pending` 4。W1(T1状態カード4件)完了。S0 の完了は `pending` が 0 になった時点（`tool:` か `handoff:` のどちらかに必ず分類されている状態）。
+現在地（2026-08-25、W2-1着手時点）: `tool:` 5 / `handoff:` 7 / `pending` 4。W1完了。W2-1(#5)tool化。S0 の完了は `pending` が 0 になった時点（`tool:` か `handoff:` のどちらかに必ず分類されている状態）。
