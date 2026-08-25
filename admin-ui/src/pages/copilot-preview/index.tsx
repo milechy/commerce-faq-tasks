@@ -132,12 +132,18 @@ type Card =
   // mode省略時は"match"（既存カードとの後方互換）。"design"はGID 1217084040141851:
   // 説明文から声を作る(Fish Audio Voice Design)。実音声が不要な点がmatchとの違い。
   // audioCandidatesはdesignのときだけ埋まり、recommendationsはmatchのときだけ埋まる。
+  // W3-2(docs/COPILOT_UI_PARITY.md §3.1 #9): "clone"は旧UI(StudioVoiceCloneSection.tsx)の
+  // 音声クローンの再現。match/designと異なり候補一覧を持たず、POST /voice-clone が
+  // 単発でvoice_idを確定・保存するため、status="done"になった時点で既にadoptedVoiceId
+  // が確定している(採用ボタンを経由しない)。新しいカード種別を機能ごとに増やさない方針
+  // (Asana制約)のため、既存カードにmode追加のみで対応する。fileNameはcloneのときだけ使う。
   | {
       kind: "avatarVoiceCandidates";
       configId: string;
       description: string;
       status: "matching" | "done" | "failed";
-      mode?: "match" | "design";
+      mode?: "match" | "design" | "clone";
+      fileName?: string;
       recommendations?: Array<{ id: string; title: string; description: string; score: number }>;
       audioCandidates?: Array<{ id: string; audioBase64: string; text: string | null }>;
       message?: string;
@@ -541,6 +547,23 @@ function validateAvatarPhotoFile(file: File): string | null {
   if (!AVATAR_PHOTO_MIME_TYPES.has(file.type)) return AVATAR_PHOTO_TYPE_ERROR;
   return null;
 }
+
+// ─── 音声クローンの受付判定・案内文 ───────────────────────────────────────────
+// バックエンド(src/api/admin/avatar/routes.ts ALLOWED_VOICE_MIME_TYPES)と同じ一覧に揃える。
+const MAX_VOICE_CLONE_FILE_SIZE = 10 * 1024 * 1024;
+const VOICE_CLONE_MIME_TYPES = new Set(["audio/mpeg", "audio/wav", "audio/mp4", "audio/x-m4a", "audio/m4a", "audio/ogg"]);
+const VOICE_CLONE_TYPE_ERROR = "対応していない音声形式です。MP3・WAV・MP4・OGGのファイルを送ってください。";
+const VOICE_CLONE_SIZE_ERROR = "ファイルが大きすぎます。10MB以下の音声にしてください。";
+const VOICE_CLONE_EMPTY_ERROR = "空のファイルは送信できませんでした。別の音声を試してください。";
+const VOICE_CLONE_GENERIC_ERROR = "音声クローンの作成に失敗しました。少し時間をおいてもう一度お試しください。";
+
+function validateVoiceCloneFile(file: File): string | null {
+  if (file.size === 0) return VOICE_CLONE_EMPTY_ERROR;
+  if (file.size > MAX_VOICE_CLONE_FILE_SIZE) return VOICE_CLONE_SIZE_ERROR;
+  if (!VOICE_CLONE_MIME_TYPES.has(file.type)) return VOICE_CLONE_TYPE_ERROR;
+  return null;
+}
+
 const AVATAR_VOICE_DESIGN_GENERIC_ERROR = "声を作成できませんでした。少し時間をおいてもう一度お試しください。";
 const AVATAR_VOICE_DESIGN_EMPTY_ERROR = "声を作成できませんでした。もう一度お試しください。";
 
@@ -1761,6 +1784,52 @@ export default function CopilotPreviewPage() {
     }
   };
 
+  // ─── 音声クローン(自分の声を添付してアバターの声にする) ───────────────────────
+  // W3-2(docs/COPILOT_UI_PARITY.md §3.1 #9): PDF取り込み・写真アップロードと同じく
+  // エージェントツール経由にせず、ファイル選択の瞬間に確定する。POST /voice-clone は
+  // 単発でvoice_idを確定・保存するため(adoptDesignedVoiceのような別ステップの採用は
+  // 無い)、成功時にそのままadoptedVoiceIdへ反映する。avatarVoiceCandidatesカードを
+  // mode="clone"で使い、新しいカード種別は増やさない(Asana制約)。
+  const cloneAvatarVoice = async (configId: string, avatarName: string, file: File) => {
+    const rejection = validateVoiceCloneFile(file);
+    if (rejection) {
+      push({ id: nextId(), role: "ai", card: { kind: "avatarVoiceCandidates", configId, description: "", status: "failed", mode: "clone", fileName: file.name, message: rejection } });
+      return;
+    }
+
+    const cardId = nextId();
+    push({ id: cardId, role: "ai", card: { kind: "avatarVoiceCandidates", configId, description: "", status: "matching", mode: "clone", fileName: file.name } });
+
+    try {
+      const form = new FormData();
+      // 旧UI(StudioVoiceCloneSection.tsx)はクローン名を店主に入力させるが、チャットでは
+      // 「選ばせない」方針(AVATAR_CHAT_MIGRATION.md §3)に沿ってアバター名から自動生成する。
+      form.append("name", `${avatarName}の声`.slice(0, 100));
+      form.append("audio", file);
+
+      const res = await fetchWithAuth(`${API_BASE}/v1/admin/avatar/configs/${configId}/voice-clone`, {
+        method: "POST",
+        body: form,
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { error?: string; message?: string } | null;
+        // plan_upgrade_required等はerrorがコード・messageが日本語文言(他の直叩きエンドポイントの
+        // {error:"<日本語>"}単一形式と異なる)。messageを優先し、無ければerrorをそのまま出す。
+        updateAvatarVoiceCard(cardId, { status: "failed", message: body?.message || body?.error || VOICE_CLONE_GENERIC_ERROR });
+        return;
+      }
+      const data = (await res.json()) as { voiceId: string };
+      updateAvatarVoiceCard(cardId, { status: "done", adoptedVoiceId: data.voiceId });
+      setRealActionCount((n) => n + 1);
+    } catch (err) {
+      const message =
+        (err as { message?: string } | null)?.message === "__AUTH_REQUIRED__"
+          ? AGENT_CHAT_AUTH_REQUIRED_MESSAGE
+          : VOICE_CLONE_GENERIC_ERROR;
+      updateAvatarVoiceCard(cardId, { status: "failed", message });
+    }
+  };
+
   const handlePdfDrop = (e: React.DragEvent) => {
     e.preventDefault();
     pdfDragCounterRef.current = 0;
@@ -1938,6 +2007,7 @@ export default function CopilotPreviewPage() {
                 onGenerateAvatarCandidates={generateAvatarCandidates}
                 onAdoptAvatarCandidate={adoptAvatarCandidate}
                 onUploadAvatarPhoto={uploadAvatarPhoto}
+                onCloneAvatarVoice={cloneAvatarVoice}
                 onMatchAvatarVoice={matchAvatarVoice}
                 onAdoptAvatarVoice={adoptAvatarVoice}
                 onDesignAvatarVoice={designAvatarVoice}
@@ -2193,6 +2263,7 @@ function MessageRow({
   onGenerateAvatarCandidates,
   onAdoptAvatarCandidate,
   onUploadAvatarPhoto,
+  onCloneAvatarVoice,
   onMatchAvatarVoice,
   onAdoptAvatarVoice,
   onDesignAvatarVoice,
@@ -2203,6 +2274,7 @@ function MessageRow({
   onGenerateAvatarCandidates: (configId: string, name: string) => void | Promise<void>;
   onAdoptAvatarCandidate: (cardMsgId: number, configId: string, imageUrl: string) => void | Promise<void>;
   onUploadAvatarPhoto: (configId: string, file: File) => void | Promise<void>;
+  onCloneAvatarVoice: (configId: string, avatarName: string, file: File) => void | Promise<void>;
   onMatchAvatarVoice: (configId: string, description: string) => void | Promise<void>;
   onAdoptAvatarVoice: (cardMsgId: number, configId: string, voiceId: string) => void | Promise<void>;
   onDesignAvatarVoice: (configId: string, instruction: string) => void | Promise<void>;
@@ -2234,6 +2306,7 @@ function MessageRow({
           onGenerateAvatarCandidates={onGenerateAvatarCandidates}
           onAdoptAvatarCandidate={onAdoptAvatarCandidate}
           onUploadAvatarPhoto={onUploadAvatarPhoto}
+          onCloneAvatarVoice={onCloneAvatarVoice}
           onMatchAvatarVoice={onMatchAvatarVoice}
           onAdoptAvatarVoice={onAdoptAvatarVoice}
           onDesignAvatarVoice={onDesignAvatarVoice}
@@ -2434,6 +2507,7 @@ function CardView({
   onGenerateAvatarCandidates,
   onAdoptAvatarCandidate,
   onUploadAvatarPhoto,
+  onCloneAvatarVoice,
   onMatchAvatarVoice,
   onAdoptAvatarVoice,
   onDesignAvatarVoice,
@@ -2445,6 +2519,7 @@ function CardView({
   onGenerateAvatarCandidates: (configId: string, name: string) => void | Promise<void>;
   onAdoptAvatarCandidate: (cardMsgId: number, configId: string, imageUrl: string) => void | Promise<void>;
   onUploadAvatarPhoto: (configId: string, file: File) => void | Promise<void>;
+  onCloneAvatarVoice: (configId: string, avatarName: string, file: File) => void | Promise<void>;
   onMatchAvatarVoice: (configId: string, description: string) => void | Promise<void>;
   onAdoptAvatarVoice: (cardMsgId: number, configId: string, voiceId: string) => void | Promise<void>;
   onDesignAvatarVoice: (configId: string, instruction: string) => void | Promise<void>;
@@ -2641,7 +2716,7 @@ function CardView({
         </CardShell>
       );
     case "avatarAdopted":
-      return <AvatarAdoptedCard card={card} onGenerate={onGenerateAvatarCandidates} onUploadPhoto={onUploadAvatarPhoto} onMatchVoice={onMatchAvatarVoice} onDesignVoice={onDesignAvatarVoice} />;
+      return <AvatarAdoptedCard card={card} onGenerate={onGenerateAvatarCandidates} onUploadPhoto={onUploadAvatarPhoto} onCloneVoice={onCloneAvatarVoice} onMatchVoice={onMatchAvatarVoice} onDesignVoice={onDesignAvatarVoice} />;
     case "avatarCandidates":
       return <AvatarCandidatesCard card={card} msgId={msgId} onGenerate={onGenerateAvatarCandidates} onAdopt={onAdoptAvatarCandidate} />;
     case "avatarPhotoUpload":
@@ -3345,12 +3420,14 @@ function AvatarAdoptedCard({
   card,
   onGenerate,
   onUploadPhoto,
+  onCloneVoice,
   onMatchVoice,
   onDesignVoice,
 }: {
   card: Extract<Card, { kind: "avatarAdopted" }>;
   onGenerate: (configId: string, name: string) => void | Promise<void>;
   onUploadPhoto: (configId: string, file: File) => void | Promise<void>;
+  onCloneVoice: (configId: string, avatarName: string, file: File) => void | Promise<void>;
   onMatchVoice: (configId: string, description: string) => void | Promise<void>;
   onDesignVoice: (configId: string, instruction: string) => void | Promise<void>;
 }) {
@@ -3358,6 +3435,7 @@ function AvatarAdoptedCard({
   const [busyVoice, setBusyVoice] = useState(false);
   const [busyDesignVoice, setBusyDesignVoice] = useState(false);
   const photoInputRef = useRef<HTMLInputElement>(null);
+  const voiceCloneInputRef = useRef<HTMLInputElement>(null);
   const handleGenerate = () => {
     setBusyImage(true);
     void Promise.resolve(onGenerate(card.configId, card.name)).finally(() => setBusyImage(false));
@@ -3370,6 +3448,15 @@ function AvatarAdoptedCard({
     const file = e.target.files?.[0];
     e.target.value = "";
     if (file) void onUploadPhoto(card.configId, file);
+  };
+  // W3-2: 音声クローンも同じ作法(選んだ瞬間に確定)。旧UIはEnterpriseプラン未満だと
+  // セクションごと隠すが、AVATAR_CHAT_MIGRATION.md §0決定3(アップセル導線は入口を
+  // 塞がない)に沿ってボタン自体は常に出し、プラン未達はアップロード後のエラーカードで
+  // サーバのplan_upgrade_requiredメッセージをそのまま案内する。
+  const handleVoiceCloneInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (file) void onCloneVoice(card.configId, card.name, file);
   };
   const handleMatchVoice = () => {
     setBusyVoice(true);
@@ -3387,7 +3474,7 @@ function AvatarAdoptedCard({
     <CardShell
       tone="good"
       hd={<><span>✅</span>アバター「{card.name}」を採用しました</>}
-      foot={<CardActionsNote note="AIでの生成・声の検索のたびに少額の費用が発生します（写真のアップロードは無料です）。気に入るまで何度でもやり直せます。" />}
+      foot={<CardActionsNote note="AIでの生成・声の検索・音声クローンのたびに少額の費用が発生します（写真のアップロードは無料です）。気に入るまで何度でもやり直せます。" />}
     >
       {card.imageUrl && (
         <img
@@ -3448,6 +3535,24 @@ function AvatarAdoptedCard({
           }}
         >
           {busyDesignVoice ? "声を作っています…" : "声を作る"}
+        </button>
+        <input
+          ref={voiceCloneInputRef}
+          type="file"
+          accept="audio/mpeg,audio/wav,audio/mp4,audio/x-m4a,audio/m4a,audio/ogg"
+          style={{ display: "none" }}
+          aria-hidden="true"
+          tabIndex={-1}
+          onChange={handleVoiceCloneInputChange}
+        />
+        <button
+          onClick={() => voiceCloneInputRef.current?.click()}
+          style={{
+            alignSelf: "flex-start", fontSize: 14.5, fontWeight: 700, padding: "10px 18px", borderRadius: 12, minHeight: 44,
+            border: "1px solid var(--border)", background: "transparent", color: "var(--foreground)", cursor: "pointer",
+          }}
+        >
+          自分の声をクローンする
         </button>
       </div>
     </CardShell>
@@ -3587,12 +3692,14 @@ function AvatarVoiceCard({
   const [adopting, setAdopting] = useState<string | null>(null);
   // GID 1217084040141851: mode省略時(既存カード)は"match"扱いで従来どおり動く。
   const isDesign = card.mode === "design";
+  const isClone = card.mode === "clone";
 
   if (card.status === "matching") {
     return (
-      <CardShell hd={<><span>🔊</span>{isDesign ? "声を作っています" : "合う声を探しています"}</>}>
+      <CardShell hd={<><span>🔊</span>{isClone ? "音声クローンを作成しています" : isDesign ? "声を作っています" : "合う声を探しています"}</>}>
+        {isClone && card.fileName && <Field k="ファイル" v={card.fileName} />}
         <div style={{ fontSize: 14, color: "var(--muted-foreground)", lineHeight: 1.7 }}>
-          少し時間がかかることがあります。このまま他の操作もできます。
+          {isClone ? "作成には30〜60秒ほどかかります。このまま他の操作もできます。" : "少し時間がかかることがあります。このまま他の操作もできます。"}
         </div>
       </CardShell>
     );
@@ -3602,24 +3709,45 @@ function AvatarVoiceCard({
     return (
       <CardShell
         tone="bad"
-        hd={<><span>🔊</span>{isDesign ? "声を作成できませんでした" : "声を検索できませんでした"}</>}
+        hd={<><span>🔊</span>{isClone ? "音声クローンを作成できませんでした" : isDesign ? "声を作成できませんでした" : "声を検索できませんでした"}</>}
         foot={
-          <div style={{ padding: "10px 18px", borderTop: "1px solid var(--border)" }}>
-            <button
-              onClick={() =>
-                void (isDesign ? onDesign(card.configId, card.description) : onMatch(card.configId, card.description))
-              }
-              style={{
-                fontSize: 13.5, fontWeight: 700, padding: "7px 16px", borderRadius: 999, minHeight: 36,
-                border: `1px solid ${AGENT_BORDER}`, background: AGENT_SOFT, color: AGENT, cursor: "pointer",
-              }}
-            >
-              もう一度試す
-            </button>
-          </div>
+          isClone ? (
+            // クローンはファイル添付が起点のため、テキストの説明を使ったonMatch/onDesignの
+            // 「もう一度試す」は成立しない(再度ファイルを選ぶ操作がボタンの外にある)。
+            <CardActionsNote note="会話はそのまま続けられます。別の音声ファイルを試すか、既存の声から探す・作ることもお使いいただけます。" />
+          ) : (
+            <div style={{ padding: "10px 18px", borderTop: "1px solid var(--border)" }}>
+              <button
+                onClick={() =>
+                  void (isDesign ? onDesign(card.configId, card.description) : onMatch(card.configId, card.description))
+                }
+                style={{
+                  fontSize: 13.5, fontWeight: 700, padding: "7px 16px", borderRadius: 999, minHeight: 36,
+                  border: `1px solid ${AGENT_BORDER}`, background: AGENT_SOFT, color: AGENT, cursor: "pointer",
+                }}
+              >
+                もう一度試す
+              </button>
+            </div>
+          )
         }
       >
+        {isClone && card.fileName && <Field k="ファイル" v={card.fileName} />}
         {card.message && <div style={{ fontSize: 15, color: "var(--foreground)", lineHeight: 1.7 }}>{card.message}</div>}
+      </CardShell>
+    );
+  }
+
+  if (isClone) {
+    // POST /voice-clone は単発でvoice_idを確定・保存するため、match/designのような
+    // 候補一覧からの採用ステップが無い。status="done"に達した時点でadoptedVoiceIdは
+    // 既に確定している。
+    return (
+      <CardShell tone="good" hd={<><span>✅</span>音声クローンを作成しました</>}>
+        {card.fileName && <Field k="ファイル" v={card.fileName} />}
+        <div style={{ fontSize: 14, color: "var(--muted-foreground)", lineHeight: 1.7 }}>
+          このアバターの声を新しいクローンに切り替えました。
+        </div>
       </CardShell>
     );
   }

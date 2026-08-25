@@ -512,7 +512,7 @@ handoff は出るが、店主はチャットを離れる。離れた先で「何
 | 6 | FAQ一覧のカテゴリ絞り込み | `tool:get_faq_list` |
 | 7 | FAQのタグ | `tool:add_faq,update_faq` |
 | 8 | アバター画像「写真をアップロード」 | `direct` |
-| 9 | 音声クローン | `handoff:avatar_studio` |
+| 9 | 音声クローン | `direct` |
 | 10 | 高品質画像の生成 | `handoff:avatar_premium` |
 | 11 | アバター新規作成ウィザード | `handoff:avatar_wizard` |
 | 12 | 会話分析の推移グラフ・低評価セッション | `tool:get_analytics_trend` |
@@ -521,4 +521,4 @@ handoff は出るが、店主はチャットを離れる。離れた先で「何
 | 15 | ご利用状況・お支払い | `tool:get_billing_summary` |
 | 16 | 集計期間90日 | `tool:get_analytics_summary,get_conversion_summary` |
 
-現在地（2026-08-25、W3-1完了時点）: `tool:` 12 / `handoff:` 3 / `direct` 1 / `pending` 0。**S0(可視化)達成** — 16件全てが `pending` から抜けた。W1・W2(全8件)完了に加え、W3-1(#8写真アップロード)は既存の画像候補生成・採用(`avatarCandidates`)と同じフロントエンド直叩きパターンで実装し `direct` に分類した(専用のチャットツールを持たない)。残るT3(#9,10,11 アバター音声クローン/高品質生成/新規作成ウィザード)が未着手(W3-2〜W3-4)。S0 の完了は `pending` が 0 になった時点（`tool:` / `handoff:` / `direct` のいずれかに必ず分類されている状態）。
+現在地（2026-08-25、W3-2完了時点）: `tool:` 12 / `handoff:` 2 / `direct` 2 / `pending` 0。S0(可視化)達成済み。W3-2(#9音声クローン)は既存の声の候補提示・採用カード(`avatarVoiceCandidates`)に `mode="clone"` を追加する形で実装し(新しいカード種別は増やさない)、`direct` に分類した。これで `docs/AVATAR_CHAT_MIGRATION.md` の層B(会話内カード)も完成。残るT3(#10,11 高品質生成/新規作成ウィザード)が未着手(W3-3〜W3-4)。

@@ -3364,6 +3364,127 @@ describe("CopilotPreviewPage — アバターの声の作成・採用(Voice Desi
   });
 });
 
+// W3-2(docs/COPILOT_UI_PARITY.md §3.1 #9): 自分の声をアバターにクローンする。
+// POST /voice-clone は単発でvoice_idを確定・保存するため(design-voiceのadoptのような
+// 別ステップの採用は無い)、match/designと同じavatarVoiceCandidatesカードをmode="clone"で使う。
+describe("CopilotPreviewPage — アバターの声のクローン(Voice Clone)", () => {
+  function mockAdoptedThenCloneEndpoint(clone?: () => Promise<Response>) {
+    vi.mocked(authFetch).mockReset();
+    vi.mocked(fetchWithAuth).mockReset();
+    mockNavigate.mockReset();
+    let agentCalls = 0;
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
+      if (String(url).includes("/v1/admin/agent/chat")) {
+        agentCalls += 1;
+        if (agentCalls === 1) return mockOk({ reply: "今週も順調です。", actions: [] });
+        return mockOk({
+          reply: "採用しました。",
+          actions: [
+            {
+              tool: "adopt_avatar_preset",
+              result: "アバター「Haruka」を採用しました。まだ公開はされていません。",
+              card: { kind: "avatar_adopted", configId: "cfg-1", name: "Haruka", imageUrl: null, description: "とても丁寧な性格です。" },
+            },
+          ],
+        });
+      }
+      return mockOk({});
+    });
+    vi.mocked(fetchWithAuth).mockImplementation(() => (clone ? clone() : mockOk({ voiceId: "fish-voice-clone-1" })));
+  }
+
+  async function sendAndGetVoiceCloneInput(): Promise<HTMLInputElement> {
+    renderPage();
+    await waitFor(() => expect(screen.getByText("今週も順調です。")).toBeTruthy());
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.change(getComposer(), { target: { value: "採用してください" } });
+    fireEvent.click(screen.getByLabelText("送信"));
+    await screen.findByRole("button", { name: "自分の声をクローンする" });
+    return document.querySelector('input[type="file"][accept^="audio/"]') as HTMLInputElement;
+  }
+
+  it("有効な音声を選ぶと即クローンされ、成功カードが描画される(アバター名からクローン名を自動生成する)", async () => {
+    mockAdoptedThenCloneEndpoint();
+    const input = await sendAndGetVoiceCloneInput();
+
+    fireEvent.change(input, { target: { files: [makeFile("me.mp3", "audio/mpeg", 2048)] } });
+
+    await waitFor(() => expect(screen.getByText("音声クローンを作成しました")).toBeTruthy());
+    expect(vi.mocked(fetchWithAuth)).toHaveBeenCalledTimes(1);
+    const [url, opts] = vi.mocked(fetchWithAuth).mock.calls[0]!;
+    expect(String(url)).toBe("http://localhost:3100/v1/admin/avatar/configs/cfg-1/voice-clone");
+    expect((opts as RequestInit).method).toBe("POST");
+    expect((opts as RequestInit).body).toBeInstanceOf(FormData);
+    const form = (opts as RequestInit).body as FormData;
+    expect(form.get("name")).toBe("Harukaの声");
+    expect(form.get("audio")).toBeTruthy();
+  });
+
+  it("10MBを超える音声は通信せずその場で拒否される", async () => {
+    mockAdoptedThenCloneEndpoint();
+    const input = await sendAndGetVoiceCloneInput();
+
+    fireEvent.change(input, { target: { files: [makeFile("big.mp3", "audio/mpeg", 11 * 1024 * 1024)] } });
+
+    await waitFor(() => expect(screen.getByText("音声クローンを作成できませんでした")).toBeTruthy());
+    expect(screen.getByText(/10MB以下/)).toBeTruthy();
+    expect(vi.mocked(fetchWithAuth)).not.toHaveBeenCalled();
+  });
+
+  it("対応していない音声形式は通信せずその場で拒否される", async () => {
+    mockAdoptedThenCloneEndpoint();
+    const input = await sendAndGetVoiceCloneInput();
+
+    fireEvent.change(input, { target: { files: [makeFile("me.txt", "text/plain", 1024)] } });
+
+    await waitFor(() => expect(screen.getByText("音声クローンを作成できませんでした")).toBeTruthy());
+    expect(screen.getByText(/MP3・WAV・MP4・OGG/)).toBeTruthy();
+    expect(vi.mocked(fetchWithAuth)).not.toHaveBeenCalled();
+  });
+
+  it("0バイトの音声は通信せずその場で拒否される", async () => {
+    mockAdoptedThenCloneEndpoint();
+    const input = await sendAndGetVoiceCloneInput();
+
+    fireEvent.change(input, { target: { files: [makeFile("empty.mp3", "audio/mpeg", 0)] } });
+
+    await waitFor(() => expect(screen.getByText("音声クローンを作成できませんでした")).toBeTruthy());
+    expect(screen.getByText(/空のファイル/)).toBeTruthy();
+  });
+
+  it("プラン未達(plan_upgrade_required)はサーバのmessageをそのまま案内する(errorコードを出さない)", async () => {
+    mockAdoptedThenCloneEndpoint(() =>
+      Promise.resolve({
+        ok: false,
+        status: 403,
+        json: () => Promise.resolve({ error: "plan_upgrade_required", message: "音声クローン機能はEnterpriseプランでご利用いただけます" }),
+      } as Response),
+    );
+    const input = await sendAndGetVoiceCloneInput();
+
+    fireEvent.change(input, { target: { files: [makeFile("me.mp3", "audio/mpeg", 2048)] } });
+
+    await waitFor(() => expect(screen.getByText("音声クローンを作成できませんでした")).toBeTruthy());
+    expect(screen.getByText("音声クローン機能はEnterpriseプランでご利用いただけます")).toBeTruthy();
+    expect(screen.queryByText("plan_upgrade_required")).toBeNull();
+  });
+
+  it("失敗しても無限スピナーにならずエラーカードで確定し、「もう一度試す」ボタンは出さない(再選択が必要なため)", async () => {
+    mockAdoptedThenCloneEndpoint(() =>
+      Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({ error: "internal_error" }) } as Response),
+    );
+    const input = await sendAndGetVoiceCloneInput();
+
+    fireEvent.change(input, { target: { files: [makeFile("me.wav", "audio/wav", 2048)] } });
+
+    await waitFor(() => expect(screen.getByText("音声クローンを作成できませんでした")).toBeTruthy());
+    expect(screen.queryByRole("button", { name: "もう一度試す" })).toBeNull();
+  });
+});
+
 // 想定ユーザーは100%日本語入力の店主。かな漢字変換の確定Enterで未変換のまま
 // 送信されてしまう不具合の回帰テスト(判定条件自体は lib/utils.test.ts で検証済み)。
 describe("CopilotPreviewPage — コンポーザのIME/改行", () => {
