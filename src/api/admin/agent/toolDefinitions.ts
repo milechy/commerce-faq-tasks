@@ -208,6 +208,11 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
             description: `カテゴリ（${FAQ_CATEGORY_IDS.join(' / ')} のいずれか、任意）`,
             enum: FAQ_CATEGORY_IDS,
           },
+          tags: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'タグ（任意、最大10個・1個30字以内）。分類・検索補助のための自由なラベル',
+          },
         },
         required: ['question', 'answer'],
       },
@@ -243,6 +248,13 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
             description:
               'true にするとAIの検索（RAG）対象から除外する。false で通常どおり検索対象に含める。' +
               '未指定なら既存の設定を維持する（他の項目を編集しただけで検索除外が解除されることはない）',
+          },
+          tags: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              'タグ（任意、最大10個・1個30字以内）。指定すると既存のタグを丸ごと置き換える。' +
+              '全て外したい場合は空配列を指定する。未指定なら既存のタグを維持する',
           },
         },
         required: ['id', 'question', 'answer'],
