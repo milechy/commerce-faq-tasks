@@ -53,6 +53,7 @@ export default function ChatHistorySessionPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [evaluation, setEvaluation] = useState<Evaluation | null>(null);
+  const [evaluationFetchFailed, setEvaluationFetchFailed] = useState(false);
   const [outcome, setOutcome] = useState<string | null>(null);
   const [outcomeRecordedAt, setOutcomeRecordedAt] = useState<string | null>(null);
   const [outcomeRecordedBy, setOutcomeRecordedBy] = useState<string | null>(null);
@@ -111,17 +112,26 @@ export default function ChatHistorySessionPage() {
   }, [sessionId]);
 
   // Judge評価を取得
+  // GID 1217808301732050: このAPIは0件を200+空配列で返す（＝未評価）。
+  // ここで !r.ok になるのは認証切れ・サーバエラー等の「本当の取得失敗」のみなので、
+  // 「未評価」と「取得失敗」を区別してJudge欄に伝える。
   useEffect(() => {
     if (!sessionId) return;
+    setEvaluationFetchFailed(false);
     authFetch(`${API_BASE}/v1/admin/evaluations/${sessionId}`)
       .then((r) => {
-        if (!r.ok) return null;
+        if (!r.ok) {
+          setEvaluationFetchFailed(true);
+          return null;
+        }
         return r.json() as Promise<{ evaluations?: Evaluation[] }>;
       })
       .then((data) => {
         setEvaluation(data?.evaluations?.[0] ?? null);
       })
-      .catch(() => {});
+      .catch(() => {
+        setEvaluationFetchFailed(true);
+      });
   }, [sessionId]);
 
   // テナントのconversion_typesを取得
@@ -508,6 +518,7 @@ export default function ChatHistorySessionPage() {
             isSuperAdmin={isSuperAdmin}
             setEvaluation={setEvaluation}
             sessionId={sessionId}
+            fetchFailed={evaluationFetchFailed}
           />
 
           {/* 営業結果入力（Client Adminのみ表示） */}

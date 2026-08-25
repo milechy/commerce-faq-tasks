@@ -25,11 +25,15 @@ export function JudgeEvaluationSection({
   isSuperAdmin,
   setEvaluation,
   sessionId,
+  fetchFailed = false,
 }: {
   evaluation: Evaluation | null;
   isSuperAdmin: boolean;
   setEvaluation: Dispatch<SetStateAction<Evaluation | null>>;
   sessionId?: string;
+  // GID 1217808301732050: 評価の初期取得(GET /v1/admin/evaluations/:sessionId)が
+  // 本当に失敗した場合のみ true。「未評価」（0件・200）とは区別する。
+  fetchFailed?: boolean;
 }) {
   const [triggering, setTriggering] = useState(false);
   const [triggerError, setTriggerError] = useState<string | null>(null);
@@ -72,11 +76,24 @@ export function JudgeEvaluationSection({
       </p>
       {evaluation == null ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 10, alignItems: "flex-start" }}>
-          <span style={{
-            display: "inline-flex", alignItems: "center", padding: "4px 12px",
-            borderRadius: 999, fontSize: 12, fontWeight: 700,
-            background: "rgba(107,114,128,0.15)", border: "1px solid rgba(107,114,128,0.3)", color: "var(--muted-foreground)",
-          }}>未評価</span>
+          {fetchFailed ? (
+            <span style={{
+              display: "inline-flex", alignItems: "center", padding: "4px 12px",
+              borderRadius: 999, fontSize: 12, fontWeight: 700,
+              background: "rgba(248,113,113,0.15)", border: "1px solid rgba(248,113,113,0.3)", color: "#fca5a5",
+            }}>⚠️ 取得に失敗しました</span>
+          ) : (
+            <span style={{
+              display: "inline-flex", alignItems: "center", padding: "4px 12px",
+              borderRadius: 999, fontSize: 12, fontWeight: 700,
+              background: "rgba(107,114,128,0.15)", border: "1px solid rgba(107,114,128,0.3)", color: "var(--muted-foreground)",
+            }}>未評価</span>
+          )}
+          {fetchFailed && (
+            <p style={{ margin: 0, fontSize: 12, color: "var(--muted-foreground)", lineHeight: 1.5 }}>
+              評価データの読み込みに失敗しました。少し時間をおいてページを再読み込みしてみてください 🙏
+            </p>
+          )}
           {sessionId && (
             <button
               type="button"
