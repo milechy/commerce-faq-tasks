@@ -25,7 +25,11 @@ jest.mock('../../../lib/db', () => ({
 }));
 
 jest.mock('../../../agent/llm/groqClient', () => ({
-  groqClient: { call: jest.fn().mockResolvedValue('[]') },
+  groqClient: {
+    call: jest.fn().mockResolvedValue('[]'),
+    // PR-1(2026-08-25収益監査): textToFaqs は callWithUsage に差し替え済み。
+    callWithUsage: jest.fn().mockResolvedValue({ content: '[]', usage: { prompt_tokens: 0, completion_tokens: 0 } }),
+  },
 }));
 jest.mock('../../../agent/llm/openaiEmbeddingClient', () => ({
   embedText: jest.fn().mockResolvedValue([0]),

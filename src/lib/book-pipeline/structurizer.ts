@@ -25,6 +25,14 @@ export interface StructuredChunk {
 export interface StructurizerDeps {
   groq?: typeof groqClient;
   schema?: SchemaField[];
+  /**
+   * PR-1(2026-08-25収益監査): チャンクごとのGroq呼び出しトークン消費を
+   * 呼び出し元(pipeline.ts)が集計するための副作用コールバック。
+   * 「1ジョブ=1行」の原則(書籍1冊で数百チャンクぶんのusage_logs行を作らない)を
+   * 守るため、trackUsage はここでは呼ばず、ジョブ単位でまとめて呼ぶ側に委ねる。
+   * API失敗・パース失敗などでusageが取得できなかったチャンクは呼ばれない。
+   */
+  onUsage?: (usage: { promptTokens: number; completionTokens: number }) => void;
 }
 
 const MODEL = GPT_OSS_120B;
@@ -136,7 +144,7 @@ export async function structurizeChunks(
     let structured: Omit<StructuredChunk, "chunkIndex" | "pageNumber" | "originalText">;
 
     try {
-      const raw = await client.call({
+      const { content: raw, usage: llmUsage } = await client.callWithUsage({
         model: MODEL,
         messages: [
           { role: "system", content: systemPrompt },
@@ -146,6 +154,13 @@ export async function structurizeChunks(
         maxTokens,
         tag: "book-structurize",
       });
+
+      if (llmUsage) {
+        deps.onUsage?.({
+          promptTokens: llmUsage.prompt_tokens,
+          completionTokens: llmUsage.completion_tokens,
+        });
+      }
 
       const parsed = parseStructuredResponse(raw, schema);
       if (parsed) {

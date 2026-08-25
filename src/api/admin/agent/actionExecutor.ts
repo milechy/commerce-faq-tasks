@@ -45,6 +45,7 @@ import { checkSaiMonthlyCostCeiling } from '../options/routes';
 import { submitSaiTask, getSaiTask } from '../../../lib/sai/saiClient';
 import { recordSaiTask, resolveSaiTaskTenant } from '../../../lib/sai/saiTaskRegistry';
 import { trackUsage } from '../../../lib/billing/usageTracker';
+import { GPT_OSS_120B } from '../../../config/groqModels';
 import { queryTenantPlan, planHasFeature, resolveShareForTenantPlan } from '../../../lib/billing/planFeatures';
 import { fetchBillingCostBreakdown, fetchBillingInvoices } from '../../../lib/billing/billingApi';
 import { fetchAnalyticsSummary, fetchAnalyticsTrend, fetchConversionSummary, fetchKnowledgeAttribution, fetchLowScoreSessions } from '../analytics/summaryQueries';
@@ -2481,6 +2482,21 @@ export async function executeToolCall(
           ? await callGroq8bSuggest(userMessage, aiMessage, knowledgeSection, existingRulesSection)
           : await callGroq8bSuggestFromText(freeText, knowledgeSection, existingRulesSection);
 
+        // PR-1(2026-08-25収益監査): callGroq8bSuggest/FromText はUI経路(tuning/routes.ts)
+        // では呼び出し元でtrackUsageされているが、agent経由(本ツール)は計上漏れていた。
+        // UI経路と同じ近似(文字数/4)・同じfeatureUsed='admin_tuning'に合わせる
+        // (精度改善は別課題。ここでは「計上ゼロ」を解消することが目的)。
+        const promptChars = anchorText.length + knowledgeSection.length + existingRulesSection.length;
+        const outputChars = JSON.stringify(suggestion).length;
+        trackUsage({
+          tenantId,
+          requestId: `admin-tuning-suggest-agent:${tenantId}:${Date.now()}`,
+          model: process.env.GROQ_MODEL_8B ?? GPT_OSS_120B,
+          inputTokens: Math.ceil(promptChars / 4),
+          outputTokens: Math.ceil(outputChars / 4),
+          featureUsed: 'admin_tuning',
+        });
+
         if (!suggestion.trigger_pattern && !suggestion.instruction) {
           return truncate('提案の生成に失敗しました。もう少し具体的に教えてください');
         }
@@ -3172,7 +3188,9 @@ export async function executeToolCall(
         );
         const existingQuestions = (existing.rows as { question: string }[]).map((r) => r.question);
 
-        const faqs = await textToFaqs(freeText, undefined, existingQuestions);
+        // PR-1(2026-08-25収益監査): agent経由のFAQ生成はUI経由(routes.ts)と違い
+        // usageが未指定で計上漏れていた。tenantId は上の if (!tenantId) で確定済み。
+        const faqs = await textToFaqs(freeText, undefined, existingQuestions, { tenantId });
         if (faqs.length === 0) {
           return truncate('FAQの下書き生成に失敗しました。もう少し具体的に教えてください');
         }

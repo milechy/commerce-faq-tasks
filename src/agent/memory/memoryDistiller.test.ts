@@ -5,9 +5,21 @@ import { distillAndPromote } from "./memoryDistiller";
 import { groqClient } from "../llm/groqClient";
 import { createLearnedMemoryRepository } from "./learnedMemoryRepository";
 
-jest.mock("../llm/groqClient", () => ({
-  groqClient: { call: jest.fn() },
-}));
+jest.mock("../llm/groqClient", () => {
+  // PR-1(2026-08-25収益監査): distillConversation は callWithUsage に差し替え済み。
+  // 既存テストは mockCall(文字列を返す) を使い続けられるよう、callWithUsage は
+  // call の戻り値を {content, usage} でラップするだけにする(既存テスト無改修)。
+  const api: { call: jest.Mock; callWithUsage: jest.Mock } = {
+    call: jest.fn(),
+    callWithUsage: jest.fn((...args: unknown[]) =>
+      api.call(...args).then((content: string) => ({
+        content,
+        usage: { prompt_tokens: 50, completion_tokens: 20 },
+      }))
+    ),
+  };
+  return { groqClient: api };
+});
 
 jest.mock("./learnedMemoryRepository", () => ({
   createLearnedMemoryRepository: jest.fn(),
@@ -25,6 +37,12 @@ jest.mock("../../lib/db", () => ({
 const mockGetNonConvertingOutcomes = jest.fn();
 jest.mock("../../api/admin/chat-history/chatHistoryRepository", () => ({
   getNonConvertingOutcomes: (...args: unknown[]) => mockGetNonConvertingOutcomes(...args),
+}));
+
+// PR-1(2026-08-25収益監査): 蒸留の計上先(trackUsage)をモック
+const mockTrackUsage = jest.fn();
+jest.mock("../../lib/billing/usageTracker", () => ({
+  trackUsage: (...args: unknown[]) => mockTrackUsage(...args),
 }));
 
 const mockCall = groqClient.call as jest.Mock;
@@ -123,6 +141,17 @@ describe("distillAndPromote", () => {
     expect(saved.answer).toBe("全車3ヶ月保証付きです");
     expect(saved.judgeScore).toBe(90);
     expect(saved.embedding).toHaveLength(1536); // ダミー埋め込み
+
+    // PR-1(2026-08-25収益監査): 蒸留のGroq原価がtrackUsageで計上されることを固定する。
+    expect(mockTrackUsage).toHaveBeenCalledTimes(1);
+    expect(mockTrackUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: "carnation",
+        featureUsed: "admin_tuning",
+        inputTokens: 50,
+        outputTokens: 20,
+      }),
+    );
   });
 
   it("蒸留が空Q&Aを返したら保存しない", async () => {
@@ -301,6 +330,7 @@ describe("D2: conversion_types をカスタマイズしたテナントでの境�
 
     expect(promoted).toBe(false); // 本来は成約かもしれないが、断定できないため昇格しない
     expect(mockCall).not.toHaveBeenCalled(); // Groq課金も発生しない
+    expect(mockTrackUsage).not.toHaveBeenCalled();
   });
 
   it("outcome が空文字なら昇格しない(未記録と同じ扱い)", async () => {

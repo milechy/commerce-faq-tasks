@@ -1,5 +1,6 @@
 // src/lib/book-pipeline/pipeline.test.ts
-// Phase44: 書籍チャンク構造化パイプライン テスト (10件)
+// Phase44: 書籍チャンク構造化パイプライン テスト (13件)
+// PR-1(2026-08-25収益監査)で11-13を追加(書籍構造化の計上テスト)。
 
 import { splitIntoChunks } from "./chunkSplitter";
 import { structurizeChunks } from "./structurizer";
@@ -31,6 +32,10 @@ import { analyzeContentType } from "./contentAnalyzer";
 const mockAnalyzeContentType = analyzeContentType as jest.MockedFunction<typeof analyzeContentType>;
 
 // Groq クライアントをモック
+// 注意: jest.mock ファクトリは import/const より先にホイストされて評価されるため、
+// ここではモジュールスコープの const を参照できない(TDZエラー)。JSON文字列は
+// ファクトリ内に直書きし、テスト本体で使う同値の定数(mockStructurizeJson)は
+// ファクトリの外側に別途定義する(小さな重複だが、フィクスチャデータなので許容)。
 jest.mock("../../agent/llm/groqClient", () => ({
   groqClient: {
     call: jest.fn().mockResolvedValue(
@@ -43,7 +48,34 @@ jest.mock("../../agent/llm/groqClient", () => ({
         confidence: 0.9,
       })
     ),
+    // PR-1(2026-08-25収益監査): structurizer.ts は callWithUsage に差し替え済み。
+    callWithUsage: jest.fn().mockResolvedValue({
+      content: JSON.stringify({
+        category: "テスト",
+        summary: "テスト要約",
+        keywords: ["kw1", "kw2"],
+        question: "テスト質問",
+        answer: "テスト回答",
+        confidence: 0.9,
+      }),
+      usage: { prompt_tokens: 40, completion_tokens: 20 },
+    }),
   },
+}));
+
+const mockStructurizeJson = JSON.stringify({
+  category: "テスト",
+  summary: "テスト要約",
+  keywords: ["kw1", "kw2"],
+  question: "テスト質問",
+  answer: "テスト回答",
+  confidence: 0.9,
+});
+
+// PR-1: 書籍構造化の計上先(trackUsage)をモック
+const mockTrackUsage = jest.fn();
+jest.mock("../billing/usageTracker", () => ({
+  trackUsage: (...args: unknown[]) => mockTrackUsage(...args),
 }));
 
 // encryptText をモック（平文返し）
@@ -124,11 +156,39 @@ describe("structurizer", () => {
 
   test("7: Groq が無効なJSONを返してもフォールバックする", async () => {
     const { groqClient } = await import("../../agent/llm/groqClient");
-    (groqClient.call as jest.Mock).mockResolvedValueOnce("invalid json response");
+    (groqClient.callWithUsage as jest.Mock).mockResolvedValueOnce({
+      content: "invalid json response",
+      usage: { prompt_tokens: 10, completion_tokens: 5 },
+    });
     const chunks = splitIntoChunks(makePages("あ".repeat(600)));
     const results = await structurizeChunks(chunks);
     expect(results[0].category).toBe("その他");
     expect(results[0].confidence).toBe(0);
+  });
+
+  // PR-1(2026-08-25収益監査): 書籍構造化の計上テスト
+  test("11: onUsageコールバックでチャンクごとのトークン消費が通知される", async () => {
+    const onUsage = jest.fn();
+    const chunks = splitIntoChunks(makePages("あ".repeat(1200))); // 複数チャンクになる長さ
+    expect(chunks.length).toBeGreaterThanOrEqual(2);
+    await structurizeChunks(chunks, { onUsage });
+    expect(onUsage).toHaveBeenCalledTimes(chunks.length);
+    expect(onUsage).toHaveBeenCalledWith({ promptTokens: 40, completionTokens: 20 });
+  });
+
+  test("12: usageが取得できないチャンクではonUsageを呼ばない", async () => {
+    const { groqClient } = await import("../../agent/llm/groqClient");
+    // 300文字は1チャンクにまとまる長さ(テスト1と同条件)。複数チャンクだと
+    // 2つ目以降がデフォルトのmockResolvedValue(usageあり)にフォールバックしてしまう。
+    (groqClient.callWithUsage as jest.Mock).mockResolvedValueOnce({
+      content: mockStructurizeJson,
+      usage: undefined,
+    });
+    const onUsage = jest.fn();
+    const chunks = splitIntoChunks(makePages("あ".repeat(300)));
+    expect(chunks).toHaveLength(1);
+    await structurizeChunks(chunks, { onUsage });
+    expect(onUsage).not.toHaveBeenCalled();
   });
 });
 
@@ -209,9 +269,10 @@ describe("runBookPipeline", () => {
     });
 
     const { groqClient } = await import("../../agent/llm/groqClient");
-    (groqClient.call as jest.Mock).mockResolvedValue(
-      JSON.stringify({ category: "テスト", summary: "要約", keywords: [], question: "Q", answer: "A", confidence: 0.9 })
-    );
+    (groqClient.callWithUsage as jest.Mock).mockResolvedValue({
+      content: JSON.stringify({ category: "テスト", summary: "要約", keywords: [], question: "Q", answer: "A", confidence: 0.9 }),
+      usage: { prompt_tokens: 40, completion_tokens: 20 },
+    });
 
     const mockSupabase = {} as any; // extractPdfText はモック済みなので不使用
 
@@ -245,5 +306,62 @@ describe("runBookPipeline", () => {
     await expect(
       runBookPipeline(999, { db: db as any })
     ).rejects.toThrow("not found");
+  });
+
+  // PR-1(2026-08-25収益監査): 書籍構造化はチャンク数によらず「1ジョブ=1行」で計上される。
+  test("13: 複数チャンクでもtrackUsageは1回だけ呼ばれ、全チャンクのトークンが合算される", async () => {
+    // このファイルは beforeEach でのモッククリアを行わない既存の流儀のため、
+    // 前段のテスト(9)が呼んだ分の呼び出し履歴が残る。このテスト自身の呼び出しだけを
+    // 見るために明示的にクリアする。
+    mockTrackUsage.mockClear();
+    mockExtractPdfText.mockResolvedValue({
+      pages: [{ pageNumber: 1, text: "あ".repeat(1200) }], // 複数チャンクになる長さ
+      pageCount: 1,
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const db = makeDb({
+      queryFn: (sql: string) => {
+        if (sql.includes("SELECT") && sql.includes("book_uploads")) {
+          return Promise.resolve({
+            rows: [{
+              id: 77,
+              tenant_id: "tenant-b",
+              storage_path: "tenant-b/test.pdf.enc",
+              encryption_iv: null,
+              status: "uploaded",
+            }],
+          });
+        }
+        if (sql.includes("INSERT INTO faq_embeddings")) {
+          return Promise.resolve({ rows: [{ id: 1 }] });
+        }
+        return Promise.resolve({ rows: [] });
+      },
+    });
+
+    const { groqClient } = await import("../../agent/llm/groqClient");
+    (groqClient.callWithUsage as jest.Mock).mockResolvedValue({
+      content: JSON.stringify({ category: "テスト", summary: "要約", keywords: [], question: "Q", answer: "A", confidence: 0.9 }),
+      usage: { prompt_tokens: 40, completion_tokens: 20 },
+    });
+
+    const result = await runBookPipeline(77, {
+      db: db as any,
+      supabase: {} as any,
+      embedAndStoreDeps: { embedFn: async () => Array(1536).fill(0.1) },
+    });
+
+    expect(result.chunkCount).toBeGreaterThanOrEqual(2);
+    expect(mockTrackUsage).toHaveBeenCalledTimes(1);
+    expect(mockTrackUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: "tenant-b",
+        requestId: "book-structurize:77",
+        featureUsed: "book_structurize",
+        inputTokens: 40 * result.chunkCount,
+        outputTokens: 20 * result.chunkCount,
+      }),
+    );
   });
 });
