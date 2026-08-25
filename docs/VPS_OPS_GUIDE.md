@@ -204,8 +204,15 @@ Phase69-2 で ES mapping に `is_published` / `is_excluded_from_search` を明�
 ssh root@65.108.159.161 "cd /opt/rajiuce && pnpm ts-node SCRIPTS/sync-es.ts --all"
 ```
 
-これにより全テナントの `faq_<tenantId>` インデックスが削除→再作成され、
-新しい mapping (`is_excluded_from_search: { type: 'boolean' }`) で再構築される。
+これにより全テナントの `faq_<tenantId>` alias が新しい実体indexへ張り替えられ
+（2026-06-06〜 alias-swap方式。削除→再作成ではない）、新しい mapping
+(`is_excluded_from_search: { type: 'boolean' }`) で再構築される。
+**書籍/OCRチャンク（faq_docsを持たないfaq_embeddings由来）は 2026-08-25 (P8是正) 以降、
+旧indexから実体コピーして引き継がれる。** それ以前のバージョンではFAQのみ再構築され、
+書籍知識がswapと同時に失われていた（新旧indexとも実体コピー元の旧indexが削除されるため
+取り戻せない不可逆な事故）。実行前に `[BOOK] 書籍/OCRチャンク: N件を確認` のログで
+対象件数を確認し、`[SUMMARY]` 行でFAQ・書籍とも全件成功していることを確認してから
+本番反映と判断すること。
 
 #### (c) 反映検証
 
@@ -231,7 +238,14 @@ ssh root@65.108.159.161 'curl -s "$ES_URL/faq_<tenantId>/_search" \
 #### ロールバック手順
 
 ES 同期失敗時:
-- DB は source-of-truth なので、ES 不整合があれば `sync-es.ts --all` で再同期可能
+- **DB が source-of-truth なのは faq_docs 由来の FAQ のみ。** 書籍/OCRチャンクは
+  faq_embeddings にしか実体が無く、DBから再構築できない（P8是正でsync-es.ts自体は
+  旧indexからの引き継ぎに対応したが、旧indexそのものが既に失われている場合は
+  書籍知識を復元する手段が無い）
+- ES 不整合があれば `sync-es.ts --all` で再同期可能（FAQ再構築 + 書籍/OCRチャンクの
+  旧indexからの引き継ぎ。旧index/aliasが存在しない状態での実行は書籍知識を
+  引き継げないため、事前に対象テナントの `faq_<tenantId>` alias/indexが
+  存在することを確認する）
 - API は fire-and-forget で 5xx を返さないため、Admin UI 操作は成功扱い
 
 DB マイグレーション失敗時:
