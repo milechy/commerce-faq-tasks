@@ -52,7 +52,7 @@ import { getAccessToken } from "../../components/knowledge/shared";
 import { useAuth, type OnboardingStageFlags } from "../../auth/useAuth";
 import { ONBOARDING_INDUSTRIES } from "../../components/onboarding/industryFaqTemplates";
 import { nextIncompleteStage } from "../../lib/landingDecision";
-import { PREVIEW_MODE_BANNER_HEIGHT } from "../../components/PreviewModeBanner";
+import { PREVIEW_MODE_BANNER_HEIGHT, PREVIEW_BANNER_HEIGHT_CSS_VAR } from "../../components/PreviewModeBanner";
 // 旧UI(AppSidebar)の共通シェル機能パリティ(残り4件)。既に独立コンポーネント化
 // 済みのものはそのままimportし、テーマ切替だけ common/ThemeToggle として新規に
 // 切り出した(旧UIとの共有コンポーネント。詳細は common/ThemeToggle.tsx 参照)。
@@ -1978,8 +1978,13 @@ export default function CopilotPreviewPage() {
         color: "var(--foreground)",
         fontFamily: "var(--font-sans, system-ui, sans-serif)",
         overflow: "hidden",
-        // previewMode中はPreviewModeBanner分の高さをcp-shellのheight計算から差し引く(index.css参照)
-        ["--cp-banner-h" as string]: previewMode ? `${PREVIEW_MODE_BANNER_HEIGHT}px` : "0px",
+        // previewMode中はPreviewModeBanner分の高さをcp-shellのheight計算から差し引く(index.css参照)。
+        // PreviewModeBannerが実測してdocumentElementに書き込むCSS変数を優先し、初回描画など
+        // まだ計測前の一瞬だけ定数値にフォールバックする(GID 1217808308055510: 固定値だけだと
+        // テナント名の長さ・折り返しでズレて後続のヘッダーに重なる)。
+        ["--cp-banner-h" as string]: previewMode
+          ? `var(${PREVIEW_BANNER_HEIGHT_CSS_VAR}, ${PREVIEW_MODE_BANNER_HEIGHT}px)`
+          : "0px",
       } as React.CSSProperties}
     >
       {/* モバイル: ドロワーが開いている間の背景オーバーレイ。外側タップで閉じる */}
@@ -2008,7 +2013,11 @@ export default function CopilotPreviewPage() {
         <div style={{ padding: "0 2px" }}>
           <AppSwitcher onSeedQuery={(query) => void sendReal(query)} />
         </div>
-        <PreviewBadge />
+        {/* GID 1217808308055510: 「PROTOTYPE」バッジはsuper_adminの検証用ラベル。
+            テナント本人の通常アクセス(previewMode=false)では出さない — この画面は
+            チャット・ファーストUIとしてテナントにも表示されうるため、常時表示だと
+            製品が試作品に見えてしまう。 */}
+        {previewMode && <PreviewBadge />}
         {CATEGORIES.map((c) => {
           const locked = busy && c.key !== active;
           const count = c.badge ? railCounts[c.badge] : undefined;

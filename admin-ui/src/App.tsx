@@ -1,7 +1,7 @@
 import React from "react";
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { AppSidebar, MobileHeader, MobileBottomBar } from "./components/AppSidebar";
-import { PreviewModeBanner, PREVIEW_MODE_BANNER_HEIGHT } from "./components/PreviewModeBanner";
+import { PreviewModeBanner, PREVIEW_MODE_BANNER_HEIGHT, PREVIEW_BANNER_HEIGHT_CSS_VAR } from "./components/PreviewModeBanner";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import "./App.css";
 import { LangProvider } from "./i18n/LangContext";
@@ -47,6 +47,12 @@ import { AdminAgentUIProvider, useAdminAgentUI } from "./contexts/AdminAgentUICo
 import { supabaseConfigured } from "./lib/supabaseClient";
 import { isChatFirstDefaultEnabled } from "./lib/chatFirstDefault";
 import { computeLandingDecision } from "./lib/landingDecision";
+
+// バナーはPREVIEW_MODE_BANNER_HEIGHT前提でスペーサーを組むと、テナント名の長さ等で
+// 実際の描画高さがズレたときに後続コンテンツと重なる(GID 1217808308055510)。
+// PreviewModeBannerが実測して書き込むCSS変数を優先し、初回描画などまだ計測前の
+// 一瞬だけ定数値にフォールバックする。
+const PREVIEW_SPACER_HEIGHT = `var(${PREVIEW_BANNER_HEIGHT_CSS_VAR}, ${PREVIEW_MODE_BANNER_HEIGHT}px)`;
 
 // ─── 層2: Supabase 未設定ガード ───────────────────────────────────────────────
 // supabaseConfigured=false の場合、Reactはマウントできるが
@@ -162,7 +168,7 @@ function AppInner() {
     return (
       <>
         {previewMode && <PreviewModeBanner />}
-        {previewMode && <div style={{ height: PREVIEW_MODE_BANNER_HEIGHT }} />}
+        {previewMode && <div style={{ height: PREVIEW_SPACER_HEIGHT }} />}
         <CopilotPreviewPage />
       </>
     );
@@ -183,7 +189,7 @@ function AppInner() {
       {isAdmin && <AppSidebar />}
       <div className="app-main">
         <PreviewModeBanner />
-        {previewMode && <div style={{ height: PREVIEW_MODE_BANNER_HEIGHT }} />}
+        {previewMode && <div style={{ height: PREVIEW_SPACER_HEIGHT }} />}
         {isAdmin && <MobileHeader />}
         {isAdmin && <MobileBottomBar />}
         <Routes>
