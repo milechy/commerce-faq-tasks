@@ -40,6 +40,15 @@
  * チェック1・2と違い、これは billing_enabled のテナント有無に関係なく常時評価する
  * （スキーマの欠落はテナントの利用状況とは独立した事実であり、対象0件で沈黙してよい
  * 理由が無い）。
+ *
+ * ■ チェック4: staleReportedRows（WARNING）
+ * PR-4(2026-08-25収益監査): invoice.payment_succeeded/payment_failed は
+ * billing_status を 'reported' → 'paid'/'failed' に遷移させる(stripeWebhook.ts)。
+ * この遷移が効いていれば 'reported' は短期間で解消されるはず。長期間
+ * 'reported' のまま残っている行は、webhookが届いていない
+ * (エンドポイント未登録・署名不一致・tenant_id解決失敗・stripe_subscriptions
+ * の対応行欠落等)可能性が高い。billing_enabled のテナント有無とは無関係に
+ * 常時評価する(チェック3と同じ理由)。
  */
 import type { Pool } from "pg";
 import type pino from "pino";
@@ -56,6 +65,9 @@ export interface BillingHealthViolation {
 const UNSTAMPED_RATIO_THRESHOLD = 0.05; // 5%
 const UNSTAMPED_MIN_SAMPLE = 20; // これ未満のサンプル数では判定しない(低トラフィック時の誤検知防止)
 const UNSTAMPED_WINDOW = "24 hours";
+// Stripeのメータードビリング請求は通常、月次サイクルの確定から数日内に確定・決済される。
+// 30日は1サイクル分の猶予を見た値(進行中の請求サイクルを誤検知しないため)。
+const STALE_REPORTED_DAYS = 30;
 
 /**
  * 現時点の不変条件を評価する。副作用(Slack送信)を持たない純粋な検査関数。
@@ -150,6 +162,26 @@ export async function checkBillingHealth(
         `SCRIPTS/ci-billing-schema.sh の FILES 配列で確認し、人間が適用してください` +
         `（migration の自動実行は禁止）。欠落したまま運用すると INSERT が無言で` +
         `失敗し、利用記録・請求が静かに止まります。`,
+    });
+  }
+
+  // ── チェック4: 決済webhookが反映されないまま滞留している行 ──────────────
+  const staleReportedResult = await db.query(
+    `SELECT COUNT(*)::integer AS cnt, MIN(created_at) AS oldest
+       FROM usage_logs
+      WHERE billing_status = 'reported'
+        AND created_at < NOW() - INTERVAL '${STALE_REPORTED_DAYS} days'`
+  );
+  const staleReportedCount = staleReportedResult.rows[0]?.cnt ?? 0;
+  if (staleReportedCount > 0) {
+    violations.push({
+      id: "billing_stale_reported_rows",
+      level: "WARNING",
+      message:
+        `usage_logs に 'reported' のまま${STALE_REPORTED_DAYS}日以上滞留している行が ` +
+        `${staleReportedCount}件あります（最古: ${staleReportedResult.rows[0]?.oldest ?? "不明"}）。` +
+        `invoice.payment_succeeded/payment_failed webhook が届いていない可能性があります` +
+        `（Stripe側のエンドポイント登録・署名検証・stripe_subscriptions の対応行を確認してください）。`,
     });
   }
 

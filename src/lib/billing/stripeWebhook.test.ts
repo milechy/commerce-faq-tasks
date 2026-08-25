@@ -1,5 +1,13 @@
 // src/lib/billing/stripeWebhook.test.ts
 // Phase32: Stripe Webhook署名検証・イベント処理テスト
+//
+// PR-4(2026-08-25収益監査): _handlePaymentSucceeded/_handlePaymentFailed は
+// 従来 usage_logs.stripe_subscription_id で突合していたが、この列への書き込みは
+// リポジトリ全体で0件のため常に0行更新の恒久 no-op だった。旧テストは
+// mockDb.query に渡された SQL 文字列の一致だけを見ており、実際の更新行数を
+// 検証していなかったため、この no-op のまま緑が続いていた(禁止51)。
+// 本ファイルはパターンマッチ式のDBモック(billingHealthCheck.test.ts / stripeSync.test.ts
+// と同じ流儀)に書き換え、更新行数(rowCount)を明示的にアサートする。
 
 import { createStripeWebhookHandler } from './stripeWebhook';
 
@@ -30,10 +38,44 @@ function makeReqRes(overrides: {
   return { req, res };
 }
 
+/**
+ * パターンマッチ式のDBモック。既定はすべて「健全系」の応答
+ * (claim獲得成功・subscription→tenant解決成功・billing_status更新1行・completed_atマーク成功)。
+ * 個別テストは overrides で一部だけ差し替える。
+ */
+function makeDb(overrides: Record<string, (sql: string, params: unknown[]) => unknown> = {}) {
+  const merged: Record<string, (sql: string, params: unknown[]) => unknown> = {
+    'INSERT INTO stripe_webhook_events': () => ({ rowCount: 1, rows: [{ event_id: 'claimed' }] }),
+    'SELECT tenant_id FROM stripe_subscriptions': () => ({ rowCount: 1, rows: [{ tenant_id: 'tenant-1' }] }),
+    "billing_status = 'paid'":   () => ({ rowCount: 1, rows: [] }),
+    "billing_status = 'failed'": () => ({ rowCount: 1, rows: [] }),
+    'SET completed_at':          () => ({ rowCount: 1, rows: [] }),
+    'is_active = false':         () => ({ rowCount: 1, rows: [] }),
+    ...overrides,
+  };
+  return {
+    query: jest.fn().mockImplementation((sql: string, params: unknown[] = []) => {
+      for (const [pattern, handler] of Object.entries(merged)) {
+        if (sql.includes(pattern)) return Promise.resolve(handler(sql, params));
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    }),
+  };
+}
+
+/** period_start/period_end 付きの標準的な invoice オブジェクトを作る。 */
+function makeInvoice(overrides: Record<string, unknown> = {}) {
+  return {
+    id:           'inv_001',
+    subscription: 'sub_abc123',
+    amount_due:   1000,
+    period_start: 1748736000, // 2025-06-01T00:00:00Z
+    period_end:   1751328000, // 2025-07-01T00:00:00Z
+    ...overrides,
+  };
+}
+
 describe('createStripeWebhookHandler', () => {
-  // rowCount: 1 が既定 = stripe_webhook_events への冪等INSERTが「新規」として通る状態。
-  // 重複挙動を検証するテストでは個別に rowCount: 0 をmockする。
-  const mockDb     = { query: jest.fn().mockResolvedValue({ rowCount: 1, rows: [] }) };
   const mockLogger = {
     warn:  jest.fn(),
     error: jest.fn(),
@@ -53,8 +95,16 @@ describe('createStripeWebhookHandler', () => {
     delete process.env.STRIPE_WEBHOOK_SECRET;
   });
 
+  function mockConstructEventOnce(event: any) {
+    const stripeMock = require('stripe');
+    stripeMock.mockImplementationOnce(() => ({
+      webhooks: { constructEvent: jest.fn().mockReturnValue(event) },
+    }));
+  }
+
   it('stripe-signature ヘッダーがない場合は 400 を返す', async () => {
-    const handler = createStripeWebhookHandler(mockDb as any, mockLogger);
+    const db = makeDb();
+    const handler = createStripeWebhookHandler(db as any, mockLogger);
     const { req, res } = makeReqRes({ headers: {} });
 
     await handler(req, res);
@@ -65,7 +115,8 @@ describe('createStripeWebhookHandler', () => {
 
   it('STRIPE_WEBHOOK_SECRET が未設定の場合は 500 を返す', async () => {
     delete process.env.STRIPE_WEBHOOK_SECRET;
-    const handler = createStripeWebhookHandler(mockDb as any, mockLogger);
+    const db = makeDb();
+    const handler = createStripeWebhookHandler(db as any, mockLogger);
     const { req, res } = makeReqRes({ headers: { 'stripe-signature': 'sig_xxx' } });
 
     await handler(req, res);
@@ -75,7 +126,6 @@ describe('createStripeWebhookHandler', () => {
   });
 
   it('署名検証に失敗した場合は 400 を返す', async () => {
-    // stripe.webhooks.constructEvent が例外を投げるようにモック
     const stripeMock = require('stripe');
     stripeMock.mockImplementationOnce(() => ({
       webhooks: {
@@ -85,7 +135,8 @@ describe('createStripeWebhookHandler', () => {
       },
     }));
 
-    const handler = createStripeWebhookHandler(mockDb as any, mockLogger);
+    const db = makeDb();
+    const handler = createStripeWebhookHandler(db as any, mockLogger);
     const { req, res } = makeReqRes({
       body:    Buffer.from('{"type":"test"}'),
       headers: { 'stripe-signature': 'invalid_sig' },
@@ -98,79 +149,207 @@ describe('createStripeWebhookHandler', () => {
     expect(mockLogger.warn).toHaveBeenCalled();
   });
 
-  it('invoice.payment_succeeded イベントで billing_status を paid に更新する', async () => {
-    const invoice = {
-      id:           'inv_001',
-      subscription: 'sub_abc123',
-      amount_due:   1000,
-    };
-    const event = { id: 'evt_001', type: 'invoice.payment_succeeded', data: { object: invoice } };
+  describe('invoice.payment_succeeded', () => {
+    it('★本題★ subscription→tenant_id を解決し、実際の更新行数(rowCount)がログに反映される(禁止51: SQL文字列一致だけで緑にしない)', async () => {
+      const invoice = makeInvoice();
+      const event = { id: 'evt_001', type: 'invoice.payment_succeeded', data: { object: invoice } };
+      mockConstructEventOnce(event);
 
-    const stripeMock = require('stripe');
-    stripeMock.mockImplementationOnce(() => ({
-      webhooks: {
-        constructEvent: jest.fn().mockReturnValue(event),
-      },
-    }));
+      // 実際に3行が更新されたことをシミュレートする(rowCount=3)。
+      // 旧実装(stripe_subscription_id突合)は常にrowCount=0だったため、
+      // ここでrowCount>0が返ることそのものが本題の回帰防止になる。
+      const db = makeDb({
+        "billing_status = 'paid'": () => ({ rowCount: 3, rows: [] }),
+      });
+      const handler = createStripeWebhookHandler(db as any, mockLogger);
+      const { req, res } = makeReqRes({
+        body:    Buffer.from(JSON.stringify(event)),
+        headers: { 'stripe-signature': 'valid_sig' },
+      });
 
-    const handler = createStripeWebhookHandler(mockDb as any, mockLogger);
-    const { req, res } = makeReqRes({
-      body:    Buffer.from(JSON.stringify(event)),
-      headers: { 'stripe-signature': 'valid_sig' },
+      await handler(req, res);
+
+      expect(res._status).toBe(200);
+      expect(res._body).toEqual({ received: true });
+
+      // subscription → tenant_id 解決クエリが実行された
+      expect(db.query).toHaveBeenCalledWith(
+        expect.stringContaining('SELECT tenant_id FROM stripe_subscriptions'),
+        ['sub_abc123']
+      );
+      // usage_logs の更新は tenant_id + 期間で行われる(stripe_subscription_idではない)
+      expect(db.query).toHaveBeenCalledWith(
+        expect.stringMatching(/billing_status = 'paid'/),
+        ['tenant-1', '2025-06-01T00:00:00.000Z', '2025-07-01T00:00:00.000Z']
+      );
+      // ★更新行数そのものをアサートする★
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        expect.objectContaining({ tenantId: 'tenant-1', updatedRows: 3 }),
+        '[webhook] payment_succeeded: billing_status → paid'
+      );
     });
 
-    await handler(req, res);
+    it('subscriptionに対応するtenant_idがstripe_subscriptionsに無ければ更新せずwarnする(例外にしない)', async () => {
+      const invoice = makeInvoice({ subscription: 'sub_unknown' });
+      const event = { id: 'evt_002', type: 'invoice.payment_succeeded', data: { object: invoice } };
+      mockConstructEventOnce(event);
 
-    expect(res._status).toBe(200);
-    expect(res._body).toEqual({ received: true });
-    expect(mockDb.query).toHaveBeenCalledWith(
-      expect.stringContaining("billing_status = 'paid'"),
-      ['sub_abc123']
-    );
+      const db = makeDb({
+        'SELECT tenant_id FROM stripe_subscriptions': () => ({ rowCount: 0, rows: [] }),
+      });
+      const handler = createStripeWebhookHandler(db as any, mockLogger);
+      const { req, res } = makeReqRes({
+        body:    Buffer.from(JSON.stringify(event)),
+        headers: { 'stripe-signature': 'valid_sig' },
+      });
+
+      await handler(req, res);
+
+      expect(res._status).toBe(200);
+      expect(db.query).not.toHaveBeenCalledWith(
+        expect.stringMatching(/billing_status = 'paid'/),
+        expect.anything()
+      );
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ subscriptionId: 'sub_unknown', eventType: 'payment_succeeded' }),
+        expect.stringContaining('no tenant found')
+      );
+    });
+
+    it('invoiceにperiod_start/period_endが無ければ更新せずwarnする(境界値: 突合キーが無いケース)', async () => {
+      const invoice = makeInvoice({ period_start: undefined, period_end: undefined });
+      const event = { id: 'evt_003', type: 'invoice.payment_succeeded', data: { object: invoice } };
+      mockConstructEventOnce(event);
+
+      const db = makeDb();
+      const handler = createStripeWebhookHandler(db as any, mockLogger);
+      const { req, res } = makeReqRes({
+        body:    Buffer.from(JSON.stringify(event)),
+        headers: { 'stripe-signature': 'valid_sig' },
+      });
+
+      await handler(req, res);
+
+      expect(res._status).toBe(200);
+      // subscription検索にすら進まない(先にperiod欠落で弾く)
+      expect(db.query).not.toHaveBeenCalledWith(
+        expect.stringContaining('SELECT tenant_id FROM stripe_subscriptions'),
+        expect.anything()
+      );
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ eventType: 'payment_succeeded' }),
+        expect.stringContaining('period_start/period_end')
+      );
+    });
+
+    it('subscriptionIdが無いinvoiceは何も更新せずwarnする', async () => {
+      const invoice = makeInvoice({ subscription: undefined });
+      const event = { id: 'evt_004', type: 'invoice.payment_succeeded', data: { object: invoice } };
+      mockConstructEventOnce(event);
+
+      const db = makeDb();
+      const handler = createStripeWebhookHandler(db as any, mockLogger);
+      const { req, res } = makeReqRes({
+        body:    Buffer.from(JSON.stringify(event)),
+        headers: { 'stripe-signature': 'valid_sig' },
+      });
+
+      await handler(req, res);
+
+      expect(res._status).toBe(200);
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ invoiceId: 'inv_001', eventType: 'payment_succeeded' }),
+        expect.stringContaining('no subscription id')
+      );
+    });
+
+    it('更新対象が0件(既にpaid等)でもエラーにならずrowCount:0がログに残る', async () => {
+      const invoice = makeInvoice();
+      const event = { id: 'evt_005', type: 'invoice.payment_succeeded', data: { object: invoice } };
+      mockConstructEventOnce(event);
+
+      const db = makeDb({
+        "billing_status = 'paid'": () => ({ rowCount: 0, rows: [] }),
+      });
+      const handler = createStripeWebhookHandler(db as any, mockLogger);
+      const { req, res } = makeReqRes({
+        body:    Buffer.from(JSON.stringify(event)),
+        headers: { 'stripe-signature': 'valid_sig' },
+      });
+
+      await handler(req, res);
+
+      expect(res._status).toBe(200);
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        expect.objectContaining({ updatedRows: 0 }),
+        '[webhook] payment_succeeded: billing_status → paid'
+      );
+    });
   });
 
-  it('invoice.payment_failed イベントで warn ログを出す', async () => {
-    const invoice = {
-      id:           'inv_002',
-      subscription: 'sub_abc456',
-      amount_due:   2000,
-    };
-    const event = { id: 'evt_002', type: 'invoice.payment_failed', data: { object: invoice } };
+  describe('invoice.payment_failed', () => {
+    it('billing_statusをfailedに更新し、更新行数がログに残る(CHECK制約に定義済みだが従来どこからも書かれていなかった)', async () => {
+      const invoice = makeInvoice({ id: 'inv_002', subscription: 'sub_abc456', amount_due: 2000 });
+      const event = { id: 'evt_006', type: 'invoice.payment_failed', data: { object: invoice } };
+      mockConstructEventOnce(event);
 
-    const stripeMock = require('stripe');
-    stripeMock.mockImplementationOnce(() => ({
-      webhooks: {
-        constructEvent: jest.fn().mockReturnValue(event),
-      },
-    }));
+      const db = makeDb({
+        "billing_status = 'failed'": () => ({ rowCount: 2, rows: [] }),
+      });
+      const handler = createStripeWebhookHandler(db as any, mockLogger);
+      const { req, res } = makeReqRes({
+        body:    Buffer.from(JSON.stringify(event)),
+        headers: { 'stripe-signature': 'valid_sig' },
+      });
 
-    const handler = createStripeWebhookHandler(mockDb as any, mockLogger);
-    const { req, res } = makeReqRes({
-      body:    Buffer.from(JSON.stringify(event)),
-      headers: { 'stripe-signature': 'valid_sig' },
+      await handler(req, res);
+
+      expect(res._status).toBe(200);
+      expect(db.query).toHaveBeenCalledWith(
+        expect.stringMatching(/billing_status = 'failed'/),
+        ['tenant-1', '2025-06-01T00:00:00.000Z', '2025-07-01T00:00:00.000Z']
+      );
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ tenantId: 'tenant-1', updatedRows: 2 }),
+        '[webhook] payment_failed: billing_status → failed'
+      );
     });
 
-    await handler(req, res);
+    it('subscriptionからtenant_idが解決できなくてもSlack通知は送る(通知はDB突合の成否と独立)', async () => {
+      const invoice = makeInvoice({ id: 'inv_002', subscription: 'sub_unknown', amount_due: 2000 });
+      const event = { id: 'evt_007', type: 'invoice.payment_failed', data: { object: invoice } };
+      mockConstructEventOnce(event);
 
-    expect(res._status).toBe(200);
-    expect(mockLogger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ invoiceId: 'inv_002', subscriptionId: 'sub_abc456' }),
-      expect.any(String)
-    );
+      const db = makeDb({
+        'SELECT tenant_id FROM stripe_subscriptions': () => ({ rowCount: 0, rows: [] }),
+      });
+      const handler = createStripeWebhookHandler(db as any, mockLogger);
+      const { req, res } = makeReqRes({
+        body:    Buffer.from(JSON.stringify(event)),
+        headers: { 'stripe-signature': 'valid_sig' },
+      });
+
+      await handler(req, res);
+
+      expect(res._status).toBe(200);
+      expect(db.query).not.toHaveBeenCalledWith(
+        expect.stringMatching(/billing_status = 'failed'/),
+        expect.anything()
+      );
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ invoiceId: 'inv_002', subscriptionId: 'sub_unknown' }),
+        '[webhook] payment_failed'
+      );
+    });
   });
 
   it('customer.subscription.deleted イベントでテナントを非アクティブ化する', async () => {
     const subscription = { id: 'sub_deleted_001' };
     const event = { id: 'evt_003', type: 'customer.subscription.deleted', data: { object: subscription } };
+    mockConstructEventOnce(event);
 
-    const stripeMock = require('stripe');
-    stripeMock.mockImplementationOnce(() => ({
-      webhooks: {
-        constructEvent: jest.fn().mockReturnValue(event),
-      },
-    }));
-
-    const handler = createStripeWebhookHandler(mockDb as any, mockLogger);
+    const db = makeDb();
+    const handler = createStripeWebhookHandler(db as any, mockLogger);
     const { req, res } = makeReqRes({
       body:    Buffer.from(JSON.stringify(event)),
       headers: { 'stripe-signature': 'valid_sig' },
@@ -179,7 +358,7 @@ describe('createStripeWebhookHandler', () => {
     await handler(req, res);
 
     expect(res._status).toBe(200);
-    expect(mockDb.query).toHaveBeenCalledWith(
+    expect(db.query).toHaveBeenCalledWith(
       expect.stringContaining('is_active = false'),
       ['sub_deleted_001']
     );
@@ -196,15 +375,12 @@ describe('createStripeWebhookHandler', () => {
     const CLAIM_SQL = 'ON CONFLICT (event_id) DO UPDATE';
 
     it('処理権の獲得を event.id / event.type / stale閾値 を渡す単一クエリで行う', async () => {
-      const invoice = { id: 'inv_010', subscription: 'sub_idem_001', amount_due: 500 };
+      const invoice = makeInvoice({ id: 'inv_010', subscription: 'sub_idem_001', amount_due: 500 });
       const event = { id: 'evt_idem_001', type: 'invoice.payment_succeeded', data: { object: invoice } };
+      mockConstructEventOnce(event);
 
-      const stripeMock = require('stripe');
-      stripeMock.mockImplementationOnce(() => ({
-        webhooks: { constructEvent: jest.fn().mockReturnValue(event) },
-      }));
-
-      const handler = createStripeWebhookHandler(mockDb as any, mockLogger);
+      const db = makeDb();
+      const handler = createStripeWebhookHandler(db as any, mockLogger);
       const { req, res } = makeReqRes({
         body:    Buffer.from(JSON.stringify(event)),
         headers: { 'stripe-signature': 'valid_sig' },
@@ -213,28 +389,26 @@ describe('createStripeWebhookHandler', () => {
       await handler(req, res);
 
       expect(res._status).toBe(200);
-      expect(mockDb.query).toHaveBeenCalledWith(
+      expect(db.query).toHaveBeenCalledWith(
         expect.stringContaining(CLAIM_SQL),
         ['evt_idem_001', 'invoice.payment_succeeded', '15']
       );
       // 完了済み/処理中を弾く条件が落ちていないこと（これが無いと二重実行に戻る）
-      expect(mockDb.query).toHaveBeenCalledWith(
+      expect(db.query).toHaveBeenCalledWith(
         expect.stringContaining('completed_at IS NULL'),
         expect.anything()
       );
     });
 
     it('処理権を獲得できなければ（完了済み or 他リクエストが処理中）副作用をスキップし duplicate:true を返す', async () => {
-      const invoice = { id: 'inv_011', subscription: 'sub_idem_002', amount_due: 700 };
+      const invoice = makeInvoice({ id: 'inv_011', subscription: 'sub_idem_002', amount_due: 700 });
       const event = { id: 'evt_idem_002', type: 'invoice.payment_succeeded', data: { object: invoice } };
+      mockConstructEventOnce(event);
 
       // claim の条件付きUPSERTが0行 = 完了済み、または他リクエストが処理中
-      const dedupDb = { query: jest.fn().mockResolvedValue({ rowCount: 0, rows: [] }) };
-
-      const stripeMock = require('stripe');
-      stripeMock.mockImplementationOnce(() => ({
-        webhooks: { constructEvent: jest.fn().mockReturnValue(event) },
-      }));
+      const dedupDb = makeDb({
+        'INSERT INTO stripe_webhook_events': () => ({ rowCount: 0, rows: [] }),
+      });
 
       const handler = createStripeWebhookHandler(dedupDb as any, mockLogger);
       const { req, res } = makeReqRes({
@@ -249,7 +423,7 @@ describe('createStripeWebhookHandler', () => {
       // claim の1クエリだけ。ハンドラにも completed_at マークにも進まない
       expect(dedupDb.query).toHaveBeenCalledTimes(1);
       expect(dedupDb.query).not.toHaveBeenCalledWith(
-        expect.stringContaining("billing_status = 'paid'"),
+        expect.stringMatching(/billing_status = 'paid'/),
         expect.anything()
       );
     });
@@ -257,13 +431,15 @@ describe('createStripeWebhookHandler', () => {
     it('[回帰] 同一event.idが並行到達しても、処理権を獲得した側だけが副作用を実行する（二重通知の防止）', async () => {
       // 実装が claim(条件付きUPSERT) ではなく「INSERT成否 → 別クエリでSELECT」に
       // 戻ると、2つ目も completed_at IS NULL を見て処理してしまいSlack通知が二重に飛ぶ。
-      const invoice = { id: 'inv_race', subscription: 'sub_race', amount_due: 1200 };
+      const invoice = makeInvoice({ id: 'inv_race', subscription: 'sub_race', amount_due: 1200 });
       const event = { id: 'evt_race_001', type: 'invoice.payment_failed', data: { object: invoice } };
 
       const raceDb = {
         query: jest
           .fn()
           .mockResolvedValueOnce({ rowCount: 1, rows: [{ event_id: 'evt_race_001' }] }) // A: claim獲得
+          .mockResolvedValueOnce({ rowCount: 1, rows: [{ tenant_id: 'tenant-1' }] })    // A: subscription→tenant解決
+          .mockResolvedValueOnce({ rowCount: 1, rows: [] })                              // A: billing_status='failed'更新
           .mockResolvedValueOnce({ rowCount: 1, rows: [] })                              // A: completed_atマーク
           .mockResolvedValueOnce({ rowCount: 0, rows: [] }),                             // B: claim失敗(Aが処理中)
       };
@@ -288,15 +464,21 @@ describe('createStripeWebhookHandler', () => {
 
       expect(resA._body).toEqual({ received: true });
       expect(resB._body).toEqual({ received: true, duplicate: true });
-      // payment_failed のハンドラ（Slack通知経路）に到達したのはA側の1回だけ
-      const failedWarns = (mockLogger.warn as jest.Mock).mock.calls.filter(
-        ([arg]) => arg && typeof arg === 'object' && arg.invoiceId === 'inv_race'
+      // payment_failed のハンドラ（Slack通知経路）に到達したのはA側の1回だけ。
+      // '[webhook] payment_failed' 本体ログと 'billing_status → failed' ログの
+      // 2種類が出るが、いずれもA側のみ・B側では出ないことを見る(msg単位で絞る)。
+      const initialFailedWarns = (mockLogger.warn as jest.Mock).mock.calls.filter(
+        ([arg, msg]) => arg?.invoiceId === 'inv_race' && msg === '[webhook] payment_failed'
       );
-      expect(failedWarns).toHaveLength(1);
+      const statusUpdateWarns = (mockLogger.warn as jest.Mock).mock.calls.filter(
+        ([arg, msg]) => arg?.invoiceId === 'inv_race' && msg === '[webhook] payment_failed: billing_status → failed'
+      );
+      expect(initialFailedWarns).toHaveLength(1);
+      expect(statusUpdateWarns).toHaveLength(1);
     });
 
     it('署名不正の場合は処理権の獲得より前に拒否される（DBに触れない）', async () => {
-      const dedupDb = { query: jest.fn().mockResolvedValue({ rowCount: 1, rows: [] }) };
+      const dedupDb = makeDb();
       const stripeMock = require('stripe');
       stripeMock.mockImplementationOnce(() => ({
         webhooks: {
@@ -319,16 +501,17 @@ describe('createStripeWebhookHandler', () => {
     });
 
     it('同一event.idが連続で2回配信された場合、1回目は処理され2回目は重複扱いになる', async () => {
-      const invoice = { id: 'inv_012', subscription: 'sub_idem_003', amount_due: 300 };
+      const invoice = makeInvoice({ id: 'inv_012', subscription: 'sub_idem_003', amount_due: 300 });
       const event = { id: 'evt_idem_003', type: 'invoice.payment_succeeded', data: { object: invoice } };
 
       const sequentialDb = {
         query: jest
           .fn()
-          .mockResolvedValueOnce({ rowCount: 1, rows: [{ event_id: 'x' }] }) // #1 claim獲得
-          .mockResolvedValueOnce({ rowCount: 5, rows: [] })                  // #1 billing_status更新
-          .mockResolvedValueOnce({ rowCount: 1, rows: [] })                  // #1 completed_atマーク
-          .mockResolvedValueOnce({ rowCount: 0, rows: [] }),                 // #2 claim失敗(完了済み)
+          .mockResolvedValueOnce({ rowCount: 1, rows: [{ event_id: 'x' }] })          // #1 claim獲得
+          .mockResolvedValueOnce({ rowCount: 1, rows: [{ tenant_id: 'tenant-1' }] })  // #1 subscription→tenant解決
+          .mockResolvedValueOnce({ rowCount: 5, rows: [] })                            // #1 billing_status更新(5行)
+          .mockResolvedValueOnce({ rowCount: 1, rows: [] })                            // #1 completed_atマーク
+          .mockResolvedValueOnce({ rowCount: 0, rows: [] }),                           // #2 claim失敗(完了済み)
       };
 
       const stripeMock = require('stripe');
@@ -351,23 +534,29 @@ describe('createStripeWebhookHandler', () => {
 
       expect(res1._body).toEqual({ received: true });
       expect(res2._body).toEqual({ received: true, duplicate: true });
-      expect(sequentialDb.query).toHaveBeenCalledTimes(4);
+      expect(sequentialDb.query).toHaveBeenCalledTimes(5);
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        expect.objectContaining({ updatedRows: 5 }),
+        '[webhook] payment_succeeded: billing_status → paid'
+      );
     });
 
     it('[修正確認] ハンドラが失敗しても completed_at が付かないため、stale claim 経過後の再送で副作用が再試行される', async () => {
-      // 1回目: claim獲得 → billing_status更新が失敗 → completed_atはマークされない(500)
+      // 1回目: claim獲得 → subscription解決 → billing_status更新が失敗 → completed_atはマークされない(500)
       // 2回目(再送): 前回claimがstale閾値を過ぎているので再獲得でき、再試行して成功する。
-      const invoice = { id: 'inv_013', subscription: 'sub_poison', amount_due: 999 };
+      const invoice = makeInvoice({ id: 'inv_013', subscription: 'sub_poison', amount_due: 999 });
       const event = { id: 'evt_poison_001', type: 'invoice.payment_succeeded', data: { object: invoice } };
 
       const recoveringDb = {
         query: jest
           .fn()
-          .mockResolvedValueOnce({ rowCount: 1, rows: [{ event_id: 'x' }] })  // #1 claim獲得
-          .mockRejectedValueOnce(new Error('DB connection lost'))             // #1 billing_status更新: 失敗
-          .mockResolvedValueOnce({ rowCount: 1, rows: [{ event_id: 'x' }] })  // #2 claim再獲得(stale)
-          .mockResolvedValueOnce({ rowCount: 1, rows: [] })                   // #2 billing_status更新: 成功
-          .mockResolvedValueOnce({ rowCount: 1, rows: [] }),                  // #2 completed_atマーク
+          .mockResolvedValueOnce({ rowCount: 1, rows: [{ event_id: 'x' }] })          // #1 claim獲得
+          .mockResolvedValueOnce({ rowCount: 1, rows: [{ tenant_id: 'tenant-1' }] })  // #1 subscription→tenant解決
+          .mockRejectedValueOnce(new Error('DB connection lost'))                      // #1 billing_status更新: 失敗
+          .mockResolvedValueOnce({ rowCount: 1, rows: [{ event_id: 'x' }] })          // #2 claim再獲得(stale)
+          .mockResolvedValueOnce({ rowCount: 1, rows: [{ tenant_id: 'tenant-1' }] })  // #2 subscription→tenant解決
+          .mockResolvedValueOnce({ rowCount: 1, rows: [] })                            // #2 billing_status更新: 成功
+          .mockResolvedValueOnce({ rowCount: 1, rows: [] }),                           // #2 completed_atマーク
       };
 
       const stripeMock = require('stripe');
@@ -392,10 +581,12 @@ describe('createStripeWebhookHandler', () => {
       expect(res2._status).toBe(200);
       expect(res2._body).toEqual({ received: true });
 
+      // jest の mock.calls は「呼ばれたこと」を記録する(rejectしたかどうかは無関係)ため、
+      // 1回目(失敗)・2回目(成功)の両方の呼び出しが記録に残る。
       const billingUpdateCalls = recoveringDb.query.mock.calls.filter(([sql]) =>
-        typeof sql === 'string' && sql.includes("billing_status = 'paid'")
+        typeof sql === 'string' && /billing_status = 'paid'/.test(sql)
       );
-      expect(billingUpdateCalls).toHaveLength(2); // 1回目(失敗)・2回目(成功)の両方試行された
+      expect(billingUpdateCalls).toHaveLength(2); // 1回目(失敗して例外)・2回目(成功)の両方が試行された
       const markCompletedCalls = recoveringDb.query.mock.calls.filter(([sql]) =>
         typeof sql === 'string' && sql.includes('SET completed_at')
       );
@@ -403,15 +594,16 @@ describe('createStripeWebhookHandler', () => {
     });
 
     it('completed_atマーク自体がDB断で失敗した場合、500を返して再送に委ねる（副作用は実行済みなので再試行で重複しうることを明示的に固定）', async () => {
-      const invoice = { id: 'inv_015', subscription: 'sub_markfail', amount_due: 450 };
+      const invoice = makeInvoice({ id: 'inv_015', subscription: 'sub_markfail', amount_due: 450 });
       const event = { id: 'evt_markfail_001', type: 'invoice.payment_succeeded', data: { object: invoice } };
 
       const markFailDb = {
         query: jest
           .fn()
-          .mockResolvedValueOnce({ rowCount: 1, rows: [{ event_id: 'x' }] }) // claim獲得
-          .mockResolvedValueOnce({ rowCount: 1, rows: [] })                  // billing_status更新: 成功
-          .mockRejectedValueOnce(new Error('DB connection lost')),           // completed_atマーク: 失敗
+          .mockResolvedValueOnce({ rowCount: 1, rows: [{ event_id: 'x' }] })          // claim獲得
+          .mockResolvedValueOnce({ rowCount: 1, rows: [{ tenant_id: 'tenant-1' }] })  // subscription→tenant解決
+          .mockResolvedValueOnce({ rowCount: 1, rows: [] })                            // billing_status更新: 成功
+          .mockRejectedValueOnce(new Error('DB connection lost')),                     // completed_atマーク: 失敗
       };
 
       const stripeMock = require('stripe');
@@ -434,7 +626,7 @@ describe('createStripeWebhookHandler', () => {
     });
 
     it('処理権の獲得クエリ自体がDBエラーで失敗した場合、200を返さずエラーとして扱う', async () => {
-      const invoice = { id: 'inv_014', subscription: 'sub_dberr', amount_due: 100 };
+      const invoice = makeInvoice({ id: 'inv_014', subscription: 'sub_dberr', amount_due: 100 });
       const event = { id: 'evt_dberr_001', type: 'invoice.payment_succeeded', data: { object: invoice } };
 
       const failingDb = {
