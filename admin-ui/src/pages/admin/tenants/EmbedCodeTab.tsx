@@ -86,9 +86,13 @@ export default function EmbedCodeTab({ tenant, apiKeys }: { tenant: TenantDetail
   const brandingHidden = planHasFeature(tenant.plan, "hide_branding");
 
   const handleIssueClick = () => {
-    // 既に有効なキーがある状態での発行は、そのキーを即座に無効化する
-    // （tenant-context.ts の registerTenant がテナントあたり1キーを上書きするため）。
-    // 稼働中のウィジェットが止まることを誤操作前に明示する。
+    // POST /v1/admin/tenants/:id/keys は addTenantApiKey()（tenant-context.ts）で
+    // 既存キーを失効させずに新キーを追加する無停止ローテーション(PR #824/#836)。
+    // registerTenant による上書きは、テナントが in-memory 未登録(DB-onlyかつ
+    // アクティブなキーが1本も無い)場合の初回登録にのみ使われ、その場合は
+    // 壊す既存の稼働ウィジェットがそもそも存在しない。
+    // それでも確認を挟むのは「意図せず何本もキーが増える」ことへの誤操作防止であり、
+    // ウィジェット停止を警告するものではない。
     if (activeKey && !window.confirm(t("tenant_detail.embed_reissue_confirm"))) {
       return;
     }

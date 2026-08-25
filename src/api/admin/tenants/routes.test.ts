@@ -4,7 +4,7 @@
 import express from "express";
 import request from "supertest";
 import { registerTenantAdminRoutes } from "./routes";
-import { registerTenant, setTenantApiKeyExpiry, revokeTenantApiKey } from "../../../lib/tenant-context";
+import { registerTenant, setTenantApiKeyExpiry, revokeTenantApiKey, addTenantApiKey } from "../../../lib/tenant-context";
 
 // --------------------------------------------------------------------------
 // モック
@@ -932,6 +932,45 @@ describe("POST /v1/admin/tenants/:id/keys — in-memory登録がDBの現行設�
       })
     );
     expect(setTenantApiKeyExpiry).toHaveBeenCalledWith("tenant-a", null);
+  });
+
+  // super_admin が「新しいキーを発行」を押した場合の無停止ローテーション回帰ガード
+  // (GID 1217810338900393)。tenant-context.ts の addTenantApiKey() は、テナントが
+  // 既に in-memory 登録済み(= アクティブなキーを1本以上持つ = 稼働中の可能性がある)
+  // 場合に true を返し、その場合ハンドラは registerTenant() を呼ばない。
+  // registerTenant() が呼ばれるのは addTenantApiKey() が false を返す場合、つまり
+  // in-memory 未登録(DB-onlyかつアクティブなキーが1本も無い)場合のみであり、その時点で
+  // 壊す既存の稼働ウィジェットはそもそも存在しない。
+  it("in-memory登録済み(既存キーあり)のテナントでは addTenantApiKey で新キーを追加し、既存の主キーを上書きする registerTenant を呼ばない（無停止ローテーション）", async () => {
+    (addTenantApiKey as jest.Mock).mockReturnValueOnce(true);
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValueOnce({
+        rows: [{
+          id: "tenant-a",
+          name: "テストテナント",
+          plan: "growth",
+          is_active: true,
+          features: { avatar: true, voice: true, rag: true },
+          allowed_origins: ["https://shop.example.com"],
+        }],
+        rowCount: 1,
+      })
+      .mockResolvedValueOnce({
+        rows: [{ id: "key-3", tenant_id: "tenant-a", key_prefix: "rjc_newk9999", is_active: true, created_at: new Date().toISOString(), expires_at: null }],
+        rowCount: 1,
+      });
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "super_admin"))
+      .post("/v1/admin/tenants/tenant-a/keys")
+      .set("Authorization", "Bearer dummy")
+      .send({});
+
+    expect(res.status).toBe(201);
+    expect(addTenantApiKey).toHaveBeenCalledWith("tenant-a", expect.any(String), null);
+    expect(registerTenant).not.toHaveBeenCalled();
+    expect(setTenantApiKeyExpiry).not.toHaveBeenCalled();
   });
 
   it("expires_at 指定時に setTenantApiKeyExpiry へ渡す", async () => {
