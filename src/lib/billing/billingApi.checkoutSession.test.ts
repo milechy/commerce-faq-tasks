@@ -13,10 +13,12 @@ import pino from "pino";
 import { registerBillingAdminRoutes } from "./billingApi";
 
 const mockCheckoutSessionsCreate = jest.fn();
+const mockPortalSessionsCreate = jest.fn();
 
 jest.mock("stripe", () => {
   return jest.fn().mockImplementation(() => ({
     checkout: { sessions: { create: (...args: unknown[]) => mockCheckoutSessionsCreate(...args) } },
+    billingPortal: { sessions: { create: (...args: unknown[]) => mockPortalSessionsCreate(...args) } },
   }));
 }, { virtual: true });
 
@@ -35,11 +37,21 @@ function makeApp(db: any, role: Role, tenantId = "tenant-a") {
   return app;
 }
 
-function makeDb(tenant: { plan: string | null } | null) {
+function makeDb(
+  tenant: { plan: string | null; tenantContactEmail?: string | null } | null,
+  opts: { activeSubscriptionCustomerId?: string } = {},
+) {
   return {
     query: jest.fn(async (sql: string) => {
       if (sql.includes("SELECT id, name, tenant_contact_email, plan FROM tenants")) {
-        return tenant ? { rows: [{ id: "tenant-a", name: "テストテナント", tenant_contact_email: null, plan: tenant.plan }] } : { rows: [] };
+        return tenant
+          ? { rows: [{ id: "tenant-a", name: "テストテナント", tenant_contact_email: tenant.tenantContactEmail ?? null, plan: tenant.plan }] }
+          : { rows: [] };
+      }
+      if (sql.includes("FROM stripe_subscriptions") && sql.includes("is_active = true")) {
+        return opts.activeSubscriptionCustomerId
+          ? { rows: [{ stripe_customer_id: opts.activeSubscriptionCustomerId }] }
+          : { rows: [] };
       }
       return { rows: [] };
     }),
@@ -72,6 +84,7 @@ beforeEach(() => {
   process.env.STRIPE_PRICE_STARTER_TEXT = "price_starter_text";
   process.env.BILLING_PORTAL_RETURN_URL = "https://app.example.com/billing";
   mockCheckoutSessionsCreate.mockResolvedValue({ id: "cs_test_1", url: "https://checkout.stripe.com/cs_test_1" });
+  mockPortalSessionsCreate.mockResolvedValue({ id: "bps_test_1", url: "https://billing.stripe.com/session/bps_test_1" });
 });
 
 afterEach(() => {
@@ -202,5 +215,64 @@ describe("POST /v1/admin/my-tenant/billing/checkout-session", () => {
       .send({});
 
     expect(res.status).toBe(404);
+  });
+
+  it("tenant_contact_email が設定されていれば customer_email として渡す", async () => {
+    const db = makeDb({ plan: "standard", tenantContactEmail: "owner@example.com" });
+    await request(makeApp(db, "client_admin"))
+      .post("/v1/admin/my-tenant/billing/checkout-session")
+      .set("Authorization", "Bearer dummy")
+      .send({});
+
+    const arg = mockCheckoutSessionsCreate.mock.calls[0][0];
+    expect(arg.customer_email).toBe("owner@example.com");
+  });
+
+  // ★このブロックが本エンドポイントの最重要リグレッションガード★
+  // 二重クリック・ネットワーク遅延中の再送・古いUI状態での再訪問のいずれでも
+  // 「テナントごとに1本のはずのStripe契約」を複数作ってしまうと二重請求になる。
+  describe("冪等性 — 既にアクティブな契約があるテナントの再訪問(GID Checkout重複防止)", () => {
+    it("既にアクティブな契約がある場合は新規Checkoutを作らず、Billing Portalへ誘導する", async () => {
+      const db = makeDb({ plan: "standard" }, { activeSubscriptionCustomerId: "cus_existing" });
+      const res = await request(makeApp(db, "client_admin"))
+        .post("/v1/admin/my-tenant/billing/checkout-session")
+        .set("Authorization", "Bearer dummy")
+        .send({});
+
+      expect(res.status).toBe(200);
+      expect(res.body.url).toBe("https://billing.stripe.com/session/bps_test_1");
+      expect(res.body.alreadyOnboarded).toBe(true);
+      expect(mockCheckoutSessionsCreate).not.toHaveBeenCalled();
+      expect(mockPortalSessionsCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ customer: "cus_existing" })
+      );
+    });
+
+    // 既存の停止済み(is_active=false)契約は「既にアクティブ」に該当しない。
+    // free_ad解約後の再アップグレード等、正当に新しいCheckoutが必要なケースを
+    // 誤ってブロックしない。
+    it("既存契約が is_active=false(解約済み)なら通常どおり新規Checkoutを作る", async () => {
+      const db = makeDb({ plan: "standard" }); // activeSubscriptionCustomerId 省略 = is_active=true の行なし
+      const res = await request(makeApp(db, "client_admin"))
+        .post("/v1/admin/my-tenant/billing/checkout-session")
+        .set("Authorization", "Bearer dummy")
+        .send({});
+
+      expect(res.status).toBe(200);
+      expect(mockCheckoutSessionsCreate).toHaveBeenCalledTimes(1);
+      expect(mockPortalSessionsCreate).not.toHaveBeenCalled();
+    });
+
+    it("Portalセッション作成が失敗したら500を返し、Checkoutへフォールバックしない(二重契約より安全側)", async () => {
+      mockPortalSessionsCreate.mockRejectedValue(new Error("stripe portal error"));
+      const db = makeDb({ plan: "standard" }, { activeSubscriptionCustomerId: "cus_existing" });
+      const res = await request(makeApp(db, "client_admin"))
+        .post("/v1/admin/my-tenant/billing/checkout-session")
+        .set("Authorization", "Bearer dummy")
+        .send({});
+
+      expect(res.status).toBe(500);
+      expect(mockCheckoutSessionsCreate).not.toHaveBeenCalled();
+    });
   });
 });

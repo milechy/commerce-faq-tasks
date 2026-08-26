@@ -42,11 +42,11 @@ export type SubscriptionSyncStatus =
   | 'synced'
   /** 既に目標構成と一致していた(再送・連打)。 */
   | 'no_change'
-  /** free_ad / enterprise で、そもそも自動請求の対象外。サブスクも無い。 */
+  /** free_ad で、そもそも自動請求の対象外(倍率0で永久に$0)。サブスクも無い。 */
   | 'not_billable_plan'
   /** free_ad へ落ちたので、既存サブスクを期末解約に予約した。 */
   | 'scheduled_cancel'
-  /** enterprise は個別交渉。既存サブスクには触らず、人手での組み直しが要る。 */
+  /** enterprise は個別交渉。サブスクの有無を問わず、人手での契約・組み直しが要る。 */
   | 'manual_plan'
   /** 有料プランなのにアクティブなサブスクが無い。テナントを決済登録へ誘導する。 */
   | 'no_subscription'
@@ -153,12 +153,21 @@ export async function syncSubscriptionItemsToPlan(
   }
 
   if (plan === 'enterprise') {
-    if (!subscriptionId) return { status: 'not_billable_plan' };
-    // 個別交渉の内容(値引き・特別枠)を自動処理で踏み潰さない。人が直すべき状態として鳴らす。
+    // ★subscription の有無にかかわらず manual_plan(要対応)★
+    // not_billable_plan は「請求が発生しないので何もしなくてよい」を意味し free_ad
+    // 専用の値(倍率0で永久に$0)。enterprise は個別契約なので、subscription が
+    // 無いのは「未契約のまま権能だけ開いている」状態そのもの — free_ad と違って
+    // 放置してよい状態ではない。ここを not_billable_plan にすると、セルフサービスで
+    // starter/growth から enterprise へ自己申告した瞬間に voice_clone / deep_research /
+    // sai_task が開通するのに、誰にも「営業が要る」と鳴らないまま黙って進む
+    // (このファイル自体の目的=「押せるが金は動かない」を防ぐ、と正面から矛盾する)。
     logger.warn(
       { tenantId, subscriptionId },
-      '[subscriptionSync] enterprise は個別契約のため item を自動変更しない — ' +
-        'Stripe ダッシュボードで契約内容に合わせて組み直すこと',
+      subscriptionId
+        ? '[subscriptionSync] enterprise は個別契約のため item を自動変更しない — ' +
+          'Stripe ダッシュボードで契約内容に合わせて組み直すこと'
+        : '[subscriptionSync] enterprise へ変更されたが Stripe 契約が存在しない — ' +
+          '個別契約の締結(または Stripe ダッシュボードでの手動セットアップ)が必要',
     );
     return { status: 'manual_plan' };
   }

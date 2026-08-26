@@ -5,7 +5,7 @@
 //   - free_ad の制約（上限・バッジ・共有プール必須）を出すこと
 //   - 「即時反映」と言わないこと（CLAUDE.md 禁止38: ウィジェットは最大24hキャッシュ）
 //   - tenantId を body に載せないこと（CLAUDE.md 禁止1）
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { PlanSection } from "./PlanSection";
 import { authFetch } from "../../../lib/api";
@@ -22,6 +22,12 @@ vi.mock("../../../auth/useAuth", () => ({
 
 const asClientAdmin = () => mockUseAuth.mockReturnValue({ user: { role: "client_admin" } });
 
+// window.location はjsdomで代入不可なので defineProperty で差し替える。
+// ★beforeEach/afterEachで確実に復元する★ テスト内で手動save/restoreすると、
+// アサーション失敗(waitForのタイムアウト等)で復元コードまで到達せず、以降の
+// テストへ状態が漏れる(originalLocationが壊れた値のまま次のテストへ持ち越る)。
+const originalLocation = window.location;
+
 beforeEach(() => {
   vi.clearAllMocks();
   asClientAdmin();
@@ -29,6 +35,11 @@ beforeEach(() => {
     ok: true,
     json: async () => ({ plan: "growth" }),
   });
+  Object.defineProperty(window, "location", { value: { href: "" }, writable: true, configurable: true });
+});
+
+afterEach(() => {
+  Object.defineProperty(window, "location", { value: originalLocation, writable: true, configurable: true });
 });
 
 function renderSection(
@@ -428,10 +439,6 @@ describe("PlanSection", () => {
         .mockResolvedValueOnce({ ok: true, json: async () => ({ plan: "growth", billing_sync: "no_subscription" }) })
         .mockResolvedValueOnce({ ok: true, json: async () => ({ url: "https://checkout.stripe.com/cs_test_1" }) });
 
-      const originalLocation = window.location;
-      // jsdom の location は代入不可なので defineProperty で差し替える
-      Object.defineProperty(window, "location", { value: { href: "" }, writable: true });
-
       renderSection("starter");
       fireEvent.click(screen.getByRole("button", { name: /Growth/ }));
       fireEvent.click(screen.getByRole("button", { name: /Growth に変更する/ }));
@@ -443,8 +450,38 @@ describe("PlanSection", () => {
       const [url, init] = (authFetch as unknown as ReturnType<typeof vi.fn>).mock.calls[1];
       expect(url).toContain("/v1/admin/my-tenant/billing/checkout-session");
       expect(init.method).toBe("POST");
+    });
 
-      Object.defineProperty(window, "location", { value: originalLocation, writable: true });
+    // ★イレギュラーな操作: 二重クリック★
+    // 遷移(window.location.href代入)が完了する前にボタンを連打すると、
+    // Checkoutセッションが複数回作られ、バックエンド側の冪等性チェックに
+    // 頼らずともフロント側で1回に抑えられているべき。
+    it("「お支払い設定へ進む」を連打しても Checkout セッション作成は1回しか呼ばれない", async () => {
+      let resolveCheckout: (v: unknown) => void = () => {};
+      (authFetch as unknown as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ plan: "growth", billing_sync: "no_subscription" }) })
+        .mockImplementationOnce(
+          () => new Promise((resolve) => { resolveCheckout = resolve; })
+        );
+
+      renderSection("starter");
+      fireEvent.click(screen.getByRole("button", { name: /Growth/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Growth に変更する/ }));
+      await waitFor(() => expect(screen.getByRole("button", { name: "お支払い設定へ進む" })).toBeTruthy());
+
+      const checkoutBtn = screen.getByRole("button", { name: "お支払い設定へ進む" });
+      fireEvent.click(checkoutBtn);
+      fireEvent.click(checkoutBtn); // レスポンスが返る前に連打
+      fireEvent.click(checkoutBtn);
+
+      resolveCheckout({ ok: true, json: async () => ({ url: "https://checkout.stripe.com/cs_test_1" }) });
+      await waitFor(() => expect(window.location.href).toBe("https://checkout.stripe.com/cs_test_1"));
+
+      // 1回目(プラン変更のPUT)を除き、checkout-session へのPOSTは1回のみ
+      const checkoutCalls = (authFetch as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(
+        ([url]: [string]) => url.includes("/checkout-session")
+      );
+      expect(checkoutCalls).toHaveLength(1);
     });
 
     it("Checkoutセッション作成が失敗したらエラーを表示し、遷移しない", async () => {

@@ -8,7 +8,7 @@
 // 3. 当期に数量を報告済みの metered item を消す = その分の売上が黙って消える
 // 4. free_ad へ降りたのにサブスクが生き続ける = 使っていない基本料を請求し続ける
 
-import { syncSubscriptionItemsToPlan, needsBillingAttention } from "./subscriptionSync";
+import { syncSubscriptionItemsToPlan, syncSubscriptionForTenant, needsBillingAttention } from "./subscriptionSync";
 
 const silentLogger = { debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn() };
 
@@ -209,6 +209,23 @@ describe("syncSubscriptionItemsToPlan", () => {
     expect(stripe.subscriptions.retrieve).not.toHaveBeenCalled();
   });
 
+  // ★リグレッション回帰テスト(バグ修正)★
+  // 旧実装は enterprise かつ subscription が無い場合 not_billable_plan(=要対応なし)を
+  // 返しており、starter/growth からセルフサービスで enterprise へ自己申告すると
+  // voice_clone/deep_research/sai_task が無警告で開通していた。free_ad と違い
+  // enterprise の「サブスクが無い」は「何もしなくてよい」ではなく「未契約のまま
+  // 権能だけ開いている」ことを意味するため、manual_plan(要対応)を返すべき。
+  it("enterprise へ自己申告してもサブスクが無ければ manual_plan(要対応)を返す — not_billable_plan にしない", async () => {
+    const db = makeDb(null);
+    const stripe = makeStripe([]);
+
+    const result = await syncSubscriptionItemsToPlan(db, stripe, silentLogger, "tenant-a", "enterprise");
+
+    expect(result.status).toBe("manual_plan");
+    expect(needsBillingAttention(result)).toBe(true);
+    expect(stripe.subscriptions.retrieve).not.toHaveBeenCalled();
+  });
+
   it("price の env が欠けていれば price_not_configured を返し、Stripe を触らない", async () => {
     delete process.env.STRIPE_PRICE_GROWTH_AVATAR_OVERAGE;
     const db = makeDb("sub_1");
@@ -247,6 +264,185 @@ describe("syncSubscriptionItemsToPlan", () => {
     ) as any;
     expect(updateCall).toBeDefined();
     expect(updateCall[1][0]).toBe("price_std_base");
+  });
+
+  // ★downgrade方向の逆テスト★ これまでのテストは upgrade(standard→growth)方向しか
+  // 見ていなかった。growth→starter は「基本料(licensed)を消す」「metered は残す」の
+  // 両方が同時に起きる、最も条件分岐が絡む経路。
+  it("growth → starter への降格で基本料(licensed)は消し、growthのmetered(text/avatar)は残す", async () => {
+    const db = makeDb("sub_1");
+    const stripe = makeStripe([
+      licensedItem("si_base", "price_growth_base"),
+      meteredItem("si_text", "price_growth_text"),
+      meteredItem("si_avatar", "price_growth_avatar"),
+    ]);
+
+    const result = await syncSubscriptionItemsToPlan(db, stripe, silentLogger, "tenant-a", "starter");
+
+    expect(result.status).toBe("synced");
+    expect(result.addedPrices).toEqual(["price_starter_text"]);
+    expect(result.removedItemIds).toEqual(["si_base"]);
+    const updateArg = stripe.subscriptions.update.mock.calls[0][1] as any;
+    expect(updateArg.items).toEqual(
+      expect.arrayContaining([
+        { price: "price_starter_text" },
+        { id: "si_base", deleted: true },
+      ]),
+    );
+    // growth時代のmetered itemを巻き添えで消していないこと(消すと当期の報告済み数量が飛ぶ)
+    expect(updateArg.items).not.toContainEqual({ id: "si_text", deleted: true });
+    expect(updateArg.items).not.toContainEqual({ id: "si_avatar", deleted: true });
+  });
+
+  // ★イレギュラーな操作: 二重クリック・遅い回線での連打★
+  // 「Growth に変更する」を2回連続で押す(1回目のPUTがまだ完了していないうちに
+  // ボタンが再度押せてしまう、等)を想定し、同じ syncSubscriptionItemsToPlan を
+  // 状態を引き継いだまま2回連続で呼んでも、2回目は安全に no_change へ収束すること。
+  it("同じプランへの同期を連続2回呼んでも、2回目は no_change に収束する(連打への耐性)", async () => {
+    const db = makeDb("sub_1");
+    let items = [meteredItem("si_text", "price_starter_text")];
+    const stripe = {
+      subscriptions: {
+        retrieve: jest.fn(async (..._args: unknown[]) => ({ items: { data: items }, cancel_at_period_end: false })),
+        update: jest.fn(async (_id: string, patch: any) => {
+          // 実際のStripeを模して、update後は retrieve が新しい構成を返すようにする。
+          if (patch.items) {
+            const toDelete = new Set(
+              patch.items.filter((i: any) => i.deleted).map((i: any) => i.id),
+            );
+            const toAdd = patch.items.filter((i: any) => !i.deleted);
+            items = [
+              ...items.filter((i) => !toDelete.has(i.id)),
+              ...toAdd.map((i: any) => meteredItem(`si_${i.price}`, i.price)),
+            ];
+          }
+          return {};
+        }),
+      },
+    };
+
+    const first = await syncSubscriptionItemsToPlan(db, stripe, silentLogger, "tenant-a", "standard");
+    expect(first.status).toBe("synced");
+
+    const second = await syncSubscriptionItemsToPlan(db, stripe, silentLogger, "tenant-a", "standard");
+    expect(second.status).toBe("no_change");
+    // 2回目は不要な Stripe update を追加で発行していない
+    expect(stripe.subscriptions.update).toHaveBeenCalledTimes(1);
+  });
+
+  // ★複数回の free_ad 往復★ 初回の往復テストは1回分しか確認していなかった。
+  // 実運用では「試しにfree_adに落として、やっぱり戻す」を繰り返すテナントがいうる。
+  it("free_ad との往復を複数回繰り返しても、都度正しく解約予約/解除する", async () => {
+    const db = makeDb("sub_1");
+    let cancelAtPeriodEnd = false;
+    const items = [
+      licensedItem("si_base", "price_std_base"),
+      meteredItem("si_text", "price_std_text"),
+      meteredItem("si_avatar", "price_std_avatar"),
+    ];
+    const stripe = {
+      subscriptions: {
+        retrieve: jest.fn(async (..._args: unknown[]) => ({ items: { data: items }, cancel_at_period_end: cancelAtPeriodEnd })),
+        update: jest.fn(async (_id: string, patch: any) => {
+          if (typeof patch.cancel_at_period_end === "boolean") cancelAtPeriodEnd = patch.cancel_at_period_end;
+          return {};
+        }),
+      },
+    };
+
+    const down1 = await syncSubscriptionItemsToPlan(db, stripe, silentLogger, "tenant-a", "free_ad");
+    expect(down1.status).toBe("scheduled_cancel");
+    expect(cancelAtPeriodEnd).toBe(true);
+
+    const up1 = await syncSubscriptionItemsToPlan(db, stripe, silentLogger, "tenant-a", "standard");
+    expect(up1.status).toBe("synced");
+    expect(cancelAtPeriodEnd).toBe(false);
+
+    const down2 = await syncSubscriptionItemsToPlan(db, stripe, silentLogger, "tenant-a", "free_ad");
+    expect(down2.status).toBe("scheduled_cancel");
+    expect(cancelAtPeriodEnd).toBe(true);
+
+    const up2 = await syncSubscriptionItemsToPlan(db, stripe, silentLogger, "tenant-a", "standard");
+    expect(up2.status).toBe("synced");
+    expect(cancelAtPeriodEnd).toBe(false);
+  });
+
+  // ★Stripeのレスポンスが壊れている/展開が足りない防御★
+  // items.data そのものが欠けている(仕様変更・APIバージョン差異等)場合でも落ちない。
+  it("subscription.items が丸ごと欠けていてもクラッシュせず空扱いにする", async () => {
+    const db = makeDb("sub_1");
+    const stripe = {
+      subscriptions: {
+        retrieve: jest.fn(async (..._args: unknown[]) => ({})), // items も cancel_at_period_end も無い
+        update: jest.fn(async (..._args: unknown[]) => ({})),
+      },
+    };
+
+    const result = await syncSubscriptionItemsToPlan(db, stripe, silentLogger, "tenant-a", "starter");
+
+    expect(result.status).toBe("synced");
+    expect(result.addedPrices).toEqual(["price_starter_text"]);
+  });
+});
+
+describe("syncSubscriptionForTenant(ラッパー — HTTPルートが実際に呼ぶ関数)", () => {
+  // ★このラッパー自体は subscriptionSync.test.ts の他のテストでは検証されない★
+  // routes.test.ts は STRIPE_SECRET_KEY が常に未設定の環境で動くため
+  // stripe_not_configured 分岐しか通らない。ここでは 'stripe' パッケージを
+  // モックして、実際に Stripe クライアントが組み立てられる経路を直接検証する。
+  const mockRetrieve = jest.fn();
+  const mockUpdate = jest.fn();
+
+  jest.mock("stripe", () => {
+    return jest.fn().mockImplementation(() => ({
+      subscriptions: { retrieve: (...a: unknown[]) => mockRetrieve(...a), update: (...a: unknown[]) => mockUpdate(...a) },
+    }));
+  }, { virtual: true });
+
+  const savedStripeKey = process.env.STRIPE_SECRET_KEY;
+
+  afterEach(() => {
+    if (savedStripeKey === undefined) delete process.env.STRIPE_SECRET_KEY;
+    else process.env.STRIPE_SECRET_KEY = savedStripeKey;
+    mockRetrieve.mockReset();
+    mockUpdate.mockReset();
+  });
+
+  it("STRIPE_SECRET_KEY が未設定なら Stripe を一切呼ばず stripe_not_configured を返す", async () => {
+    delete process.env.STRIPE_SECRET_KEY;
+    const db = makeDb(null);
+
+    const result = await syncSubscriptionForTenant(db, silentLogger, "tenant-a", "standard");
+
+    expect(result.status).toBe("stripe_not_configured");
+    expect(mockRetrieve).not.toHaveBeenCalled();
+  });
+
+  it("STRIPE_SECRET_KEY 設定時は実際に Stripe クライアントを組み立てて同期する", async () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_dummy";
+    const db = makeDb("sub_1");
+    mockRetrieve.mockResolvedValue({
+      items: { data: [licensedItem("si_base", "price_std_base"), meteredItem("si_text", "price_std_text"), meteredItem("si_avatar", "price_std_avatar")] },
+      cancel_at_period_end: false,
+    });
+
+    const result = await syncSubscriptionForTenant(db, silentLogger, "tenant-a", "standard");
+
+    expect(result.status).toBe("no_change");
+    expect(mockRetrieve).toHaveBeenCalledWith("sub_1");
+  });
+
+  // ★プランは既にCOMMIT済み★ ここで例外が外に漏れると、呼び出し元のHTTPルートが
+  // 500を返し「プラン変更に失敗しました」という嘘の表示になる(実際はプラン変更自体は
+  // 成功している)。同期処理側のどんな失敗も戻り値に閉じ込めることを直接固定する。
+  it("内部で例外が起きても例外を外に漏らさず failed を返す", async () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_dummy";
+    const db = makeDb("sub_1");
+    mockRetrieve.mockRejectedValue(new Error("network error"));
+
+    const result = await syncSubscriptionForTenant(db, silentLogger, "tenant-a", "standard");
+
+    expect(result.status).toBe("failed");
   });
 });
 

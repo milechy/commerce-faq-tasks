@@ -569,6 +569,38 @@ export function registerBillingAdminRoutes(
           id: string; name: string; tenant_contact_email: string | null; plan: string | null;
         };
 
+        const stripe = getStripe(stripeKey);
+
+        // ★冪等性チェック(このブロックが本エンドポイントの最重要ガード)★
+        // ここが無いと、二重クリック・ネットワーク遅延中の再送・「支払い設定へ進む」
+        // バナーが古いまま残っている状態での再訪問のいずれでも、テナントごとに
+        // 1本のはずの Stripe Customer/Subscription が複数作られうる(= 二重請求)。
+        // /billing/onboard(super_admin経路)が同じ理由で existing チェックを持つのと
+        // 同じ配慮を、こちらのセルフサービス経路にも適用する。
+        //
+        // 既にアクティブな契約がある場合は新規 Checkout を作らず、Billing Portal
+        // (支払い方法の変更・請求書確認ができる Stripe 保護下の画面)へ誘導する。
+        // フロント側は「Checkoutのurl」も「Portalのurl」も同じ `url` フィールドで
+        // 受け取り、そのままリダイレクトするだけでよい(呼び出し元に分岐を持たせない)。
+        const existing = await db.query(
+          `SELECT stripe_customer_id FROM stripe_subscriptions
+            WHERE tenant_id = $1 AND is_active = true LIMIT 1`,
+          [tenantId]
+        );
+        if (existing.rows.length > 0) {
+          const stripeCustomerId = existing.rows[0].stripe_customer_id as string;
+          const portalSession = await stripe.billingPortal.sessions.create({
+            customer: stripeCustomerId,
+            return_url: process.env.BILLING_PORTAL_RETURN_URL ?? 'https://example.com',
+          });
+          logger.info(
+            { tenantId, plan: tenant.plan },
+            '[billingApi] checkout-session: 既にアクティブな契約があるためPortalへ誘導した(新規Checkoutは作らない)'
+          );
+          res.json({ ok: true, url: portalSession.url, alreadyOnboarded: true });
+          return;
+        }
+
         // プラン→price は planPricing.ts が唯一の出どころ(禁止6)。
         // オンボード(super_admin)経路と同じ関数を通す。
         const priceResult = getSubscriptionItemPrices(tenant.plan, billingCycle);
@@ -599,7 +631,6 @@ export function registerBillingAdminRoutes(
           return;
         }
 
-        const stripe = getStripe(stripeKey);
         const returnBase = process.env.BILLING_PORTAL_RETURN_URL ?? 'https://example.com';
 
         // ★base(基本料・licensed)には quantity:1 を明示、text/avatarOverage(metered)には

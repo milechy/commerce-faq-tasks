@@ -1294,6 +1294,34 @@ describe("PUT /v1/admin/my-tenant/plan — 停止中テナントのブロック(
 
     expect(res.status).toBe(200);
   });
+
+  // undefined と明示的な true を区別する。上のテストが「列が無い環境」を、
+  // こちらは「通常時(is_active=trueが明示的に返る環境)」を表す。
+  it("is_active=true が明示的に返っても通常どおり変更できる", async () => {
+    const { db } = makePlanTxDb({ beforeRow: { plan: "starter", is_active: true } });
+    const res = await request(makeApp(db, "client_admin"))
+      .put("/v1/admin/my-tenant/plan")
+      .set("Authorization", "Bearer dummy")
+      .send({ plan: "growth" });
+
+    expect(res.status).toBe(200);
+  });
+
+  // ★イレギュラーな操作: 停止中に free_ad へ「降格」しようとする★
+  // free_ad ブロック(blockFreeAdTransition)は DB接続前に弾くため、is_active
+  // チェック(DB接続後)より先に評価される。停止中テナントでも free_ad拒否の
+  // メッセージが優先されることを固定する(2つのガードの優先順位を明示)。
+  it("停止中かつfree_adへの変更では、free_adブロックがis_activeチェックより先に評価される", async () => {
+    const { db, connect } = makePlanTxDb({ beforeRow: { plan: "starter", is_active: false } });
+    const res = await request(makeApp(db, "client_admin"))
+      .put("/v1/admin/my-tenant/plan")
+      .set("Authorization", "Bearer dummy")
+      .send({ plan: "free_ad" });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("free_ad_plan_not_yet_available");
+    expect(connect).not.toHaveBeenCalled(); // DB接続すら発生しない
+  });
 });
 
 describe("PUT /v1/admin/my-tenant/plan — billing_sync の可視化", () => {
@@ -1829,5 +1857,48 @@ describe("PATCH /v1/admin/tenants/:id — 降格時の features 整合", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.billing_sync).toBeUndefined();
+  });
+
+  // ★意図的な非対称性(PUTとは違う)を固定する★
+  // PUT /v1/admin/my-tenant/plan(テナント自己申告)は is_active=false を403で弾くが、
+  // このPATCHルート(super_admin)には同じチェックを入れていない。理由: PATCHは
+  // plan と is_active を同一リクエストで同時に送れる(停止中テナントを「再開しつつ
+  // プランも直す」一括操作を admin が行う正当な導線)。ここで beforeの is_active
+  // だけを見て機械的にブロックすると、その一括操作ができなくなる。
+  // このテストは「直すべき見落とし」ではなく「意図してPUTと差をつけた設計」を
+  // 将来の変更から守るために存在する。
+  it("super_adminは停止中(is_active=false)のテナントでも、plan単体のPATCHでプラン変更できる(PUTとの意図的な非対称)", async () => {
+    const db = {
+      query: jest.fn()
+        .mockResolvedValueOnce({ rows: [{ id: "tenant-a", plan: "starter", features: {}, billing_enabled: false, is_active: false }], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: [{ ...RETURNING_ROW, plan: "growth", is_active: false }], rowCount: 1 })
+        .mockResolvedValue({ rows: [], rowCount: 1 }),
+    };
+    const res = await request(makeApp(db, "super_admin"))
+      .patch("/v1/admin/tenants/tenant-a")
+      .set("Authorization", "Bearer dummy")
+      .send({ plan: "growth" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.plan).toBe("growth");
+  });
+
+  // 上と対をなす正当な一括操作: 停止中テナントを「再開」と「プラン変更」を
+  // 同一PATCHで同時に行える。
+  it("super_adminは停止中テナントの再開(is_active:true)とプラン変更を同一PATCHで同時に行える", async () => {
+    const db = {
+      query: jest.fn()
+        .mockResolvedValueOnce({ rows: [{ id: "tenant-a", plan: "starter", features: {}, billing_enabled: false, is_active: false }], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: [{ ...RETURNING_ROW, plan: "growth", is_active: true }], rowCount: 1 })
+        .mockResolvedValue({ rows: [], rowCount: 1 }),
+    };
+    const res = await request(makeApp(db, "super_admin"))
+      .patch("/v1/admin/tenants/tenant-a")
+      .set("Authorization", "Bearer dummy")
+      .send({ plan: "growth", is_active: true });
+
+    expect(res.status).toBe(200);
+    expect(res.body.plan).toBe("growth");
+    expect(res.body.is_active).toBe(true);
   });
 });

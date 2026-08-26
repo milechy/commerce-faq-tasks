@@ -480,6 +480,87 @@ describe('createStripeWebhookHandler', () => {
         expect.any(String)
       );
     });
+
+    // mode が省略されている(undefined)場合。'payment' と明示された場合だけでなく、
+    // Stripe の他リソース由来の予期しないペイロード形も安全側(何もしない)に倒す。
+    it('mode が省略されていれば何もしない', async () => {
+      const session = { id: 'cs_test_5', customer: 'cus_abc', subscription: 'sub_abc', metadata: { tenant_id: 'tenant-a' } };
+      const event = { id: 'evt_checkout_5', type: 'checkout.session.completed', data: { object: session } };
+      mockConstructEventOnce(event);
+
+      const db = makeDb();
+      const handler = createStripeWebhookHandler(db as any, mockLogger);
+      const { req, res } = makeReqRes({
+        body:    Buffer.from(JSON.stringify(event)),
+        headers: { 'stripe-signature': 'valid_sig' },
+      });
+
+      await handler(req, res);
+
+      expect(res._status).toBe(200);
+      expect(db.query).not.toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO stripe_subscriptions'),
+        expect.anything()
+      );
+    });
+
+    // customer が明示的に null(Stripeの型上は起こり得るフィールド)。
+    // "?." の連鎖が undefined へ落ちて欠落判定に正しく合流することを確認する。
+    it('customer が null なら記録せずエラーログを出す', async () => {
+      const session = { id: 'cs_test_6', mode: 'subscription', customer: null, subscription: 'sub_abc', metadata: { tenant_id: 'tenant-a' } };
+      const event = { id: 'evt_checkout_6', type: 'checkout.session.completed', data: { object: session } };
+      mockConstructEventOnce(event);
+
+      const db = makeDb();
+      const handler = createStripeWebhookHandler(db as any, mockLogger);
+      const { req, res } = makeReqRes({
+        body:    Buffer.from(JSON.stringify(event)),
+        headers: { 'stripe-signature': 'valid_sig' },
+      });
+
+      await handler(req, res);
+
+      expect(res._status).toBe(200);
+      expect(db.query).not.toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO stripe_subscriptions'),
+        expect.anything()
+      );
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: 'cs_test_6', customerId: undefined }),
+        expect.any(String)
+      );
+    });
+
+    // ★イレギュラーな操作: Stripeが同じ実体を異なるevent.idで2回送ってくる★
+    // (例: 期限切れ寸前のCheckoutセッションを開き直して再度完了させた等)。
+    // event.id が異なるため _claimWebhookEvent の重複排除には引っかからないが、
+    // ON CONFLICT(tenant_id)のUPSERTなのでテーブル側は1行のまま安全に上書きされる。
+    it('同一テナント・同一subscriptionに対し異なるevent.idで2回配信されても1行に収束する', async () => {
+      const session1 = { id: 'cs_test_7a', mode: 'subscription', customer: 'cus_abc', subscription: 'sub_abc', metadata: { tenant_id: 'tenant-a' } };
+      const session2 = { id: 'cs_test_7b', mode: 'subscription', customer: 'cus_abc', subscription: 'sub_abc', metadata: { tenant_id: 'tenant-a' } };
+      const event1 = { id: 'evt_checkout_7a', type: 'checkout.session.completed', data: { object: session1 } };
+      const event2 = { id: 'evt_checkout_7b', type: 'checkout.session.completed', data: { object: session2 } };
+
+      const db = makeDb({ 'INSERT INTO stripe_subscriptions': () => ({ rowCount: 1, rows: [] }) });
+      const handler = createStripeWebhookHandler(db as any, mockLogger);
+
+      mockConstructEventOnce(event1);
+      const { req: req1, res: res1 } = makeReqRes({ body: Buffer.from(JSON.stringify(event1)), headers: { 'stripe-signature': 'valid_sig' } });
+      await handler(req1, res1);
+
+      mockConstructEventOnce(event2);
+      const { req: req2, res: res2 } = makeReqRes({ body: Buffer.from(JSON.stringify(event2)), headers: { 'stripe-signature': 'valid_sig' } });
+      await handler(req2, res2);
+
+      expect(res1._status).toBe(200);
+      expect(res2._status).toBe(200);
+      const insertCalls = db.query.mock.calls.filter(
+        ([sql]: [string]) => typeof sql === 'string' && sql.includes('INSERT INTO stripe_subscriptions')
+      );
+      expect(insertCalls).toHaveLength(2); // 2回とも実行される(ON CONFLICTで1行に収束するのはDB側の責務)
+      expect(insertCalls[0][1]).toEqual(['tenant-a', 'cus_abc', 'sub_abc']);
+      expect(insertCalls[1][1]).toEqual(['tenant-a', 'cus_abc', 'sub_abc']);
+    });
   });
 
   describe('冪等性: event.id の重複と並行配信', () => {
