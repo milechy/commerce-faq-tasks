@@ -274,5 +274,66 @@ describe("POST /v1/admin/my-tenant/billing/checkout-session", () => {
       expect(res.status).toBe(500);
       expect(mockCheckoutSessionsCreate).not.toHaveBeenCalled();
     });
+
+    // ★上の existing チェックは TOCTOU(SELECTとcreateの間にロックが無い)★
+    // ほぼ同時の2リクエストは両方とも「既存契約なし」を見て通過しうるため、
+    // 最終防衛線として Stripe の冪等キーを渡す。ここが外れると、同時実行時に
+    // Customer/Subscription が2本作られる(=二重請求)。
+    describe("Stripe冪等キー(TOCTOUの最終防衛線)", () => {
+      it("checkout.sessions.create に idempotencyKey を渡す", async () => {
+        const db = makeDb({ plan: "standard" });
+        await request(makeApp(db, "client_admin"))
+          .post("/v1/admin/my-tenant/billing/checkout-session")
+          .set("Authorization", "Bearer dummy")
+          .send({});
+
+        const options = mockCheckoutSessionsCreate.mock.calls[0][1];
+        expect(options).toBeDefined();
+        expect(typeof options.idempotencyKey).toBe("string");
+        expect(options.idempotencyKey).toContain("tenant-a");
+      });
+
+      // 連打(数百ms〜数秒)は同一キーに畳まれ、Stripe側で1回に収束する。
+      it("短時間の連続リクエストでは同じ idempotencyKey になる", async () => {
+        const db = makeDb({ plan: "standard" });
+        const app = makeApp(db, "client_admin");
+
+        await request(app).post("/v1/admin/my-tenant/billing/checkout-session").set("Authorization", "Bearer dummy").send({});
+        await request(app).post("/v1/admin/my-tenant/billing/checkout-session").set("Authorization", "Bearer dummy").send({});
+
+        const key1 = mockCheckoutSessionsCreate.mock.calls[0][1].idempotencyKey;
+        const key2 = mockCheckoutSessionsCreate.mock.calls[1][1].idempotencyKey;
+        expect(key1).toBe(key2);
+      });
+
+      // ★テナント固定キーにしていないことの確認★
+      // 固定にすると「離脱して後日やり直す」がStripe側で24時間ブロックされる。
+      // プランが違えば別の契約なので、必ず別キーでなければならない。
+      it("プランが違えば別の idempotencyKey になる(別契約を同一キーで潰さない)", async () => {
+        const app1 = makeApp(makeDb({ plan: "standard" }), "client_admin");
+        const app2 = makeApp(makeDb({ plan: "growth" }), "client_admin");
+
+        await request(app1).post("/v1/admin/my-tenant/billing/checkout-session").set("Authorization", "Bearer dummy").send({});
+        await request(app2).post("/v1/admin/my-tenant/billing/checkout-session").set("Authorization", "Bearer dummy").send({});
+
+        const key1 = mockCheckoutSessionsCreate.mock.calls[0][1].idempotencyKey;
+        const key2 = mockCheckoutSessionsCreate.mock.calls[1][1].idempotencyKey;
+        expect(key1).not.toBe(key2);
+      });
+
+      it("テナントが違えば別の idempotencyKey になる(テナント境界)", async () => {
+        const app1 = makeApp(makeDb({ plan: "standard" }), "client_admin", "tenant-a");
+        const app2 = makeApp(makeDb({ plan: "standard" }), "client_admin", "tenant-b");
+
+        await request(app1).post("/v1/admin/my-tenant/billing/checkout-session").set("Authorization", "Bearer dummy").send({});
+        await request(app2).post("/v1/admin/my-tenant/billing/checkout-session").set("Authorization", "Bearer dummy").send({});
+
+        const key1 = mockCheckoutSessionsCreate.mock.calls[0][1].idempotencyKey;
+        const key2 = mockCheckoutSessionsCreate.mock.calls[1][1].idempotencyKey;
+        expect(key1).not.toBe(key2);
+        expect(key1).toContain("tenant-a");
+        expect(key2).toContain("tenant-b");
+      });
+    });
   });
 });

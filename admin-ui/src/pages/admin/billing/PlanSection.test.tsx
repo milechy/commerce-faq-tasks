@@ -44,7 +44,8 @@ afterEach(() => {
 
 function renderSection(
   currentPlan: "free_ad" | "starter" | "standard" | "growth" | "enterprise" | null,
-  planStatus?: "loading" | "error" | "ready"
+  planStatus?: "loading" | "error" | "ready",
+  billingStatus?: "ok" | "no_subscription" | null
 ) {
   const onChanged = vi.fn();
   const showToast = vi.fn();
@@ -52,6 +53,7 @@ function renderSection(
     <PlanSection
       currentPlan={currentPlan}
       planStatus={planStatus}
+      billingStatus={billingStatus}
       onChanged={onChanged}
       showToast={showToast}
     />
@@ -497,6 +499,80 @@ describe("PlanSection", () => {
       fireEvent.click(screen.getByRole("button", { name: "お支払い設定へ進む" }));
 
       await waitFor(() => expect(screen.getByText("Checkoutセッションの作成に失敗しました")).toBeTruthy());
+    });
+  });
+
+  // ★リロードで案内が消える問題への対応(B-1)★
+  // billingSyncPending はプラン変更のレスポンス由来なのでリロードで消える。
+  // それだけだと「決済未登録」というサーバ側の事実が画面から失われ、テナントは
+  // 請求が始まっていないことに気づけないまま使い続ける(CLAUDE.md 禁止50)。
+  // 親が既に取得済みの billingStatus を下ろして、リロード後も出し続ける。
+  describe("billingStatus によるリロード後の継続表示", () => {
+    it("有料プランかつ billingStatus=no_subscription なら、プラン変更をしていなくても案内を出す", () => {
+      renderSection("growth", "ready", "no_subscription");
+      expect(screen.getByText(/お支払い設定の確認が必要です/)).toBeTruthy();
+      expect(screen.getByRole("button", { name: "お支払い設定へ進む" })).toBeTruthy();
+    });
+
+    it("billingStatus=ok なら案内を出さない", () => {
+      renderSection("growth", "ready", "ok");
+      expect(screen.queryByText(/お支払い設定の確認が必要です/)).toBeNull();
+    });
+
+    // 未取得(null)を「契約なし」と誤認しない。取得前に一瞬「支払い設定が必要」が
+    // 出ると、実際は契約済みのテナントを無用に不安にさせる(fail-safeの向き)。
+    it("billingStatus=null(未取得)では案内を出さない", () => {
+      renderSection("growth", "ready", null);
+      expect(screen.queryByText(/お支払い設定の確認が必要です/)).toBeNull();
+    });
+
+    // ★free_ad/enterprise は「契約が無いのが正常」★
+    // ここを分けないと、無料プランのテナントに永久に「支払い設定が必要」と
+    // 表示され続ける(サーバは正しく no_subscription を返すため)。
+    it("free_ad では billingStatus=no_subscription でも案内を出さない(契約が無いのが正常)", () => {
+      renderSection("free_ad", "ready", "no_subscription");
+      expect(screen.queryByText(/お支払い設定の確認が必要です/)).toBeNull();
+    });
+
+    it("enterprise では billingStatus=no_subscription でも案内を出さない(個別契約のため)", () => {
+      renderSection("enterprise", "ready", "no_subscription");
+      expect(screen.queryByText(/お支払い設定の確認が必要です/)).toBeNull();
+    });
+
+    // ★優先順位★ プラン変更直後は親の再取得がまだ走っておらず billingStatus が
+    // 古い(ok のまま)。この瞬間はプラン変更レスポンス由来の値の方が新しいので、
+    // そちらを優先しなければ「変更したのに案内が出ない」ことになる。
+    it("プラン変更直後は、古い billingStatus=ok より変更レスポンスの billing_sync を優先する", async () => {
+      (authFetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ok: true,
+        json: async () => ({ plan: "growth", billing_sync: "no_subscription" }),
+      });
+      const { onChanged } = renderSection("starter", "ready", "ok");
+
+      fireEvent.click(screen.getByRole("button", { name: /Growth/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Growth に変更する/ }));
+
+      await waitFor(() => expect(onChanged).toHaveBeenCalledWith("growth"));
+      expect(screen.getByText(/お支払い設定の確認が必要です/)).toBeTruthy();
+    });
+
+    // 逆向き: サーバは no_subscription を返しているが、たった今のプラン変更は
+    // 正常に同期できた(synced)。この場合は最新の synced を採って案内を消す。
+    it("変更レスポンスが synced なら、古い billingStatus=no_subscription より優先して案内を消す", async () => {
+      (authFetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ok: true,
+        json: async () => ({ plan: "growth", billing_sync: "synced" }),
+      });
+      const { onChanged } = renderSection("starter", "ready", "no_subscription");
+
+      // 変更前はサーバ由来の案内が出ている
+      expect(screen.getByText(/お支払い設定の確認が必要です/)).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: /Growth/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Growth に変更する/ }));
+
+      await waitFor(() => expect(onChanged).toHaveBeenCalledWith("growth"));
+      expect(screen.queryByText(/お支払い設定の確認が必要です/)).toBeNull();
     });
   });
 });

@@ -643,6 +643,19 @@ export function registerBillingAdminRoutes(
           priceResult.prices.avatarOverage ? { price: priceResult.prices.avatarOverage } : null,
         ].filter((item): item is { price: string; quantity?: number } => item !== null);
 
+        // ★冪等キー — 上の existing チェックの TOCTOU を Stripe 側で塞ぐ★
+        // existing チェック(SELECT)と本 create の間にロックが無いため、ほぼ同時に
+        // 2リクエストが来ると両方が「既存契約なし」を見て、Customer/Subscription が
+        // 2本作られうる(= 二重請求)。DBロックで直そうとすると Stripe API 呼び出しを
+        // トランザクション内に抱えることになり、Stripe が遅いときに接続を占有する。
+        // 「同じ意図のリクエストが複数届く」問題は Stripe の冪等キーが本来の解。
+        //
+        // ★キーに分単位の時刻を含める理由★
+        // テナント固定キーにすると Stripe 側で24時間同じレスポンスが返るため、
+        // 「一度Checkoutを離脱して、後で気が変わってやり直す」が丸一日ブロックされる。
+        // 分で丸めることで、連打・二重送信(数百ms〜数秒)は同一キーに畳みつつ、
+        // 正当なやり直しは次の分から通る。
+        const idempotencyWindow = Math.floor(Date.now() / 60_000);
         const session = await stripe.checkout.sessions.create({
           mode: 'subscription',
           customer_email: tenant.tenant_contact_email ?? undefined,
@@ -653,6 +666,8 @@ export function registerBillingAdminRoutes(
           subscription_data: {
             metadata: { tenant_id: tenantId, plan: tenant.plan ?? '', billing_cycle: billingCycle },
           },
+        }, {
+          idempotencyKey: `billing:checkout:${tenantId}:${tenant.plan ?? ''}:${billingCycle}:${idempotencyWindow}`,
         });
 
         logger.info(
