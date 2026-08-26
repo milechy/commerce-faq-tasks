@@ -15,6 +15,22 @@ import {
   resolveShareForPlan,
   resolveShareForTenantPlan,
 } from "./planFeatures";
+import type { GatedFeature } from "./planFeatures";
+
+// ゲート一覧を各テストで書き写すと、新しいゲートを足したときに片方だけ更新されて
+// 「新ゲートだけ fail-safe が検証されていない」状態になる。1箇所に置く。
+const ALL_GATED_FEATURES: readonly GatedFeature[] = [
+  "avatar",
+  "avatar_customize",
+  "voice_clone",
+  "analytics",
+  "conversion",
+  "deep_research",
+  "premium_avatar",
+  "sai_task",
+  "pre_dispatch",
+  "hide_branding",
+];
 
 describe("planHasFeature", () => {
   it.each([
@@ -43,6 +59,24 @@ describe("planHasFeature", () => {
     ["starter", "hide_branding", false],
     ["growth", "hide_branding", true],
     ["enterprise", "hide_branding", true],
+    // standard(starterとgrowthの間)。開くのは avatar だけで、他は全て growth 以上のまま。
+    // ★ここが Standard(¥9,800)の商品性そのもの★
+    ["starter", "avatar", false],
+    ["standard", "avatar", true],
+    ["standard", "avatar_customize", false],
+    ["standard", "premium_avatar", false],
+    ["standard", "analytics", false],
+    ["standard", "conversion", false],
+    ["standard", "hide_branding", false],
+    ["standard", "voice_clone", false],
+    ["standard", "deep_research", false],
+    ["standard", "sai_task", false],
+    ["standard", "pre_dispatch", false],
+    // avatar_customize(自社アバターの作成)は Growth 以上。
+    ["free_ad", "avatar_customize", false],
+    ["starter", "avatar_customize", false],
+    ["growth", "avatar_customize", true],
+    ["enterprise", "avatar_customize", true],
     // free_ad(starterより下の最下段)はどのゲートも通らない
     ["free_ad", "avatar", false],
     ["free_ad", "voice_clone", false],
@@ -64,22 +98,57 @@ describe("planHasFeature", () => {
   // 同じ判定結果になること」で新しい最下段への変化を捉える。文字列としての
   // 落とし先そのものは getTenantPlan/queryTenantPlan のテスト((b)(c))で直接検証する。
   it("未知のplan文字列はfree_ad扱い(fail-safe) — free_adと同じ判定結果になる", () => {
-    for (const feature of [
-      "avatar", "voice_clone", "analytics", "conversion",
-      "deep_research", "premium_avatar", "sai_task", "pre_dispatch", "hide_branding",
-    ] as const) {
+    for (const feature of ALL_GATED_FEATURES) {
       expect(planHasFeature("unknown-plan", feature)).toBe(planHasFeature("free_ad", feature));
     }
   });
 
   it("null/undefinedはfree_ad扱い — free_adと同じ判定結果になる", () => {
-    for (const feature of [
-      "avatar", "voice_clone", "analytics", "conversion",
-      "deep_research", "premium_avatar", "sai_task", "pre_dispatch", "hide_branding",
-    ] as const) {
+    for (const feature of ALL_GATED_FEATURES) {
       expect(planHasFeature(null, feature)).toBe(planHasFeature("free_ad", feature));
       expect(planHasFeature(undefined, feature)).toBe(planHasFeature("free_ad", feature));
     }
+  });
+});
+
+// CLAUDE.md 禁止55「段の間に挿入する場合は、既存プランの PLAN_RANK の相対順序が
+// 崩れていないかを必ず確認する」。PLAN_RANK は非公開なので、順序そのものではなく
+// 「順序から導かれる観測可能な性質」で固定する。standard に growth と同じ序数を
+// 与えるような取り違えは、この describe が検出する（個別ゲートの表だけでは、
+// standard の行を足した本人が同じ勘違いのまま期待値も書いてしまい検出できない）。
+describe("PLAN_RANK の相対順序（standard を starter と growth の間に挿入した回帰）", () => {
+  // 上位プランは下位プランの機能を必ず包含する = ランクが単調増加している証明。
+  it("free_ad ⊂ starter ⊂ standard ⊂ growth ⊂ enterprise で機能集合が単調に増える", () => {
+    const ORDER = ["free_ad", "starter", "standard", "growth", "enterprise"] as const;
+    const featuresOf = (plan: string) => ALL_GATED_FEATURES.filter((f) => planHasFeature(plan, f));
+
+    for (let i = 0; i < ORDER.length - 1; i++) {
+      const lower = featuresOf(ORDER[i]);
+      const higher = featuresOf(ORDER[i + 1]);
+      for (const f of lower) {
+        expect(higher).toContain(f);
+      }
+    }
+  });
+
+  it("standard は starter より真に多く、growth より真に少ない機能を持つ(同格に潰れていない)", () => {
+    const count = (plan: string) => ALL_GATED_FEATURES.filter((f) => planHasFeature(plan, f)).length;
+    expect(count("starter")).toBeLessThan(count("standard"));
+    expect(count("standard")).toBeLessThan(count("growth"));
+  });
+
+  it("standard で開くのは avatar だけ(値引きではなくアバター開放が目的)", () => {
+    const gained = ALL_GATED_FEATURES.filter(
+      (f) => planHasFeature("standard", f) && !planHasFeature("starter", f),
+    );
+    expect(gained).toEqual(["avatar"]);
+  });
+
+  it("growth で追加されるものに avatar_customize が含まれる(Standardとの差別化の実体)", () => {
+    const gained = ALL_GATED_FEATURES.filter(
+      (f) => planHasFeature("growth", f) && !planHasFeature("standard", f),
+    );
+    expect(gained).toContain("avatar_customize");
   });
 });
 
@@ -91,7 +160,7 @@ describe("getTenantPlan", () => {
     tenantPlanCache.clear();
   });
 
-  it("DBのplan列をそのまま返す(4値とも)", async () => {
+  it("DBのplan列をそのまま返す(5値とも)", async () => {
     // 同一tenantIdでの連続呼び出しはTTLキャッシュに乗るため、
     // DBの値をそのまま返す挙動そのものを検証するには都度クリアする
     // (キャッシュそのものの挙動は下の「TTLキャッシュ」describeで検証する)。
@@ -103,12 +172,27 @@ describe("getTenantPlan", () => {
     expect(await getTenantPlan("tenant-a")).toBe("starter");
     tenantPlanCache.clear();
 
+    // ★queryTenantPlan の allowlist に standard が無いと、standard テナントが
+    // 恒久的に free_ad へ落ちて契約済みの機能が全て閉じる(DB障害時ではなく常時)。★
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan: "standard" }] });
+    expect(await getTenantPlan("tenant-a")).toBe("standard");
+    tenantPlanCache.clear();
+
     mockQuery.mockResolvedValueOnce({ rows: [{ plan: "growth" }] });
     expect(await getTenantPlan("tenant-a")).toBe("growth");
     tenantPlanCache.clear();
 
     mockQuery.mockResolvedValueOnce({ rows: [{ plan: "enterprise" }] });
     expect(await getTenantPlan("tenant-a")).toBe("enterprise");
+  });
+
+  // allowlist 落ちは「free_ad へ倒れる」という fail-safe と見分けがつかないため、
+  // 文字列一致だけでなく「アバターが使えること」まで見て実害の有無で固定する。
+  it("standard テナントは avatar が開き avatar_customize は閉じたままになる", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan: "standard" }] });
+    const plan = await getTenantPlan("tenant-standard");
+    expect(planHasFeature(plan, "avatar")).toBe(true);
+    expect(planHasFeature(plan, "avatar_customize")).toBe(false);
   });
 
   // (b) fail-safe 3箇所のうち2つ目(queryTenantPlanのallowlist)の回帰検知。
@@ -121,6 +205,11 @@ describe("getTenantPlan", () => {
     tenantPlanCache.clear();
 
     mockQuery.mockResolvedValueOnce({ rows: [{ plan: "typo-plan" }] });
+    expect(await getTenantPlan("tenant-a")).toBe("free_ad");
+    tenantPlanCache.clear();
+
+    // standard を allowlist に足したことで大文字・前後空白まで通るようになっていないこと。
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan: "Standard" }] });
     expect(await getTenantPlan("tenant-a")).toBe("free_ad");
   });
 
@@ -235,10 +324,21 @@ describe("queryTenantPlanResult", () => {
     mockQuery.mockReset();
   });
 
-  it("既知の4値はそのまま返す", async () => {
-    for (const plan of ["free_ad", "starter", "growth", "enterprise"] as const) {
+  // ★queryTenantPlan とは別関数・別の allowlist なので、プラン段を足すと
+  // 片方だけ直して片方を取り残す事故が起きる。ここで standard を含めて固定する。
+  // 取り残すと、standard テナントの請求倍率が「未確定(null)」に落ちる
+  // (usageTracker が queryTenantPlanResult を使うため。.claude/rules/billing.md §4)。
+  it("既知の5値はそのまま返す(standard を含む)", async () => {
+    for (const plan of ["free_ad", "starter", "standard", "growth", "enterprise"] as const) {
       mockQuery.mockResolvedValueOnce({ rows: [{ plan }] });
       expect(await queryTenantPlanResult({ query: mockQuery }, "tenant-a")).toBe(plan);
+    }
+  });
+
+  it("未知の文字列は standard を足した後も null のまま(allowlist が緩んでいない)", async () => {
+    for (const plan of ["Standard", "standard ", "std", "premium"]) {
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan }] });
+      expect(await queryTenantPlanResult({ query: mockQuery }, "tenant-a")).toBeNull();
     }
   });
 

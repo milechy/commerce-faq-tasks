@@ -18,12 +18,23 @@
 
 /**
  * プラン倍率: Stripe に報告する数量に乗じる（リクエスト課金 × プラン別単価）。
- * admin-ui PLAN_OPTIONS と一致（Free(広告表示) ×0 / Starter ×1.0 / Growth ×1.5 / Enterprise ×2.5）。
+ * admin-ui PLAN_OPTIONS と一致
+ * （Free(広告表示) ×0 / Starter ×1.0 / Standard ×1.25 / Growth ×1.5 / Enterprise ×2.5）。
  * free_ad の 0 は原価をR2Cが負担する広告原資プランであることを表す。
+ *
+ * ★これは「テキスト」の倍率であって、アバターの分単価には使えない★
+ * 確定価格（.claude/rules/billing.md §7）ではテキスト超過が
+ * ¥20 →（×1.25）¥25 →（×1.5）¥30 と倍率どおりに整合する一方、
+ * アバターの超過は Standard ¥100/分 → Growth ¥80/分 と**逆向きに下がる**
+ * （上位プランほど分単価を下げるアップセル誘因。CLAUDE.md 禁止56）。
+ * したがってアバターの分単価をここの倍率から算出すると、必ず向きが反転する。
+ * 分単価はプランごとの定数として別に持つこと（本PRのスコープ外。
+ * 課金計算の書き換えは computeExpectedBilling 側の別PRが担当する）。
  */
 export const PLAN_MULTIPLIERS: Record<string, number> = {
   free_ad: 0,
   starter: 1.0,
+  standard: 1.25,
   growth: 1.5,
   enterprise: 2.5,
 };

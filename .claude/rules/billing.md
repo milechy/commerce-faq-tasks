@@ -17,7 +17,7 @@ paths:
 ```
 請求数量 = Σ( 単位数 × その行の plan_multiplier )   ※ billable = true の行のみ
 単位数   = 1 行 = 1 リクエスト（anam_session のみ 秒→分の切り上げ）
-倍率     = free_ad 0 / starter 1.0 / growth 1.5 / enterprise 2.5
+倍率     = free_ad 0 / starter 1.0 / standard 1.25 / growth 1.5 / enterprise 2.5
 ```
 
 - **`cost_total_cents` は請求額ではない。** 原価 × マージン（USD セント）であり、
@@ -127,10 +127,13 @@ Growth は ¥80/分（×0.8）で、**上位プランほど分単価が下がる
 | `voice_clone` | ✗ | ✗ | ✗ | ✗ | ✓ |
 | `analytics` / `conversion` / `hide_branding` | ✗ | ✗ | ✗ | ✓ | ✓ |
 
-★ `avatar_customize` は**未実装**。`generationRoutes.ts` / `falGenerationRoutes.ts`
-（画像生成・声マッチング・プロンプト生成）は現在**ロール認可のみでプランゲートが無い**ため、
-Standard を追加する前にここへゲートを入れないと「既定のみ」が成立しない。
-`avatar` の最低プランも `growth` → `standard` に下げる必要がある。
+★ `avatar_customize` は実装済み（`src/api/admin/avatar/avatarCustomizeGate.ts` が唯一の判定）。
+`generationRoutes.ts` の4ルート（generate-image / match-voice / design-voice / generate-prompt）と
+`falGenerationRoutes.ts` の1ルートが、外部APIを呼ぶ前にこのゲートを通す。
+以前はロール認可のみだったため、client_admin なら全プランで素通りしていた。
+**`avatar` と `avatar_customize` を1つのゲートに統合しないこと** —
+統合すると、Standard の売り（既定アバターで安く始められる）か
+Growth の売り（自社アバターを作れる）のどちらかが必ず消える。
 
 §1 の実装は **リクエスト単位**（`usage_logs` の行数）のままなので、**上記の課金単位とはまだ接続されていない**。
 なお原価試算で使われていた「1会話 ≒ 5ターン」は**実測で否定されている** — 本番 90 日の実データでは

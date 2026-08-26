@@ -7,7 +7,7 @@ import type { GPT_OSS_120B } from '../config/groqModels';
 export interface TenantConfig {
   tenantId: string;
   name: string;
-  plan: "free_ad" | "starter" | "growth" | "enterprise";
+  plan: "free_ad" | "starter" | "standard" | "growth" | "enterprise";
   features: { avatar: boolean; voice: boolean; rag: boolean; event_tracking?: boolean };
   security: {
     apiKeyHash: string;

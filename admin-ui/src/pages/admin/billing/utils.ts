@@ -18,6 +18,19 @@ export function fmtNum(n: number): string {
   return n.toLocaleString("ja-JP");
 }
 
+/**
+ * プラン倍率の表示（`×` は呼び出し側が付ける）。
+ *
+ * 従来は各画面が `multiplier.toFixed(1)` を直書きしていたが、Standard(×1.25)の
+ * 追加でこれが「×1.3」と誤表示になる。倍率はテナントへの請求単価そのものなので、
+ * 丸めて実際と違う数字を出さない(CLAUDE.md 禁止54: 価格表記と課金実装を割らない)。
+ * 既存プラン(0 / 1.0 / 1.5 / 2.5)の見た目は1桁のまま変えず、小数第2位が要る
+ * 値だけ2桁にする。
+ */
+export function fmtPlanMultiplier(multiplier: number): string {
+  return Number.isInteger(multiplier * 10) ? multiplier.toFixed(1) : multiplier.toFixed(2);
+}
+
 export function fmtDate(dateStr: string): string {
   const s = dateStr.slice(0, 10); // normalize ISO to "YYYY-MM-DD"
   const [y, m, d] = s.split("-");

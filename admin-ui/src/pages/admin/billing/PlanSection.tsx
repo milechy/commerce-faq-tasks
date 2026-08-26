@@ -17,7 +17,7 @@ import { useAuth } from "../../../auth/useAuth";
 import type { TenantPlan } from "../../../auth/useAuth";
 import { GATED_FEATURE_LABELS, planFeatureDelta } from "../../../lib/planFeatures";
 import { PLAN_OPTIONS } from "../tenants/types";
-import { CARD, BTN_LINK } from "./utils";
+import { CARD, BTN_LINK, fmtPlanMultiplier } from "./utils";
 
 /**
  * S5b(PR #918): free_ad への遷移はサーバ側で一時的に 403 ブロック中。
@@ -119,7 +119,7 @@ export function PlanSection({
         )}
         {planStatus === "ready" && currentOption && (
           <span style={{ color: "#a78bfa", marginLeft: 8 }}>
-            対話単価 ×{currentOption.multiplier.toFixed(1)}
+            対話単価 ×{fmtPlanMultiplier(currentOption.multiplier)}
           </span>
         )}
       </p>
@@ -171,7 +171,7 @@ export function PlanSection({
             >
               <span style={{ display: "block", fontWeight: 700, fontSize: 14 }}>
                 {opt.label}{" "}
-                <span style={{ color: "#a78bfa" }}>×{opt.multiplier.toFixed(1)}</span>
+                <span style={{ color: "#a78bfa" }}>×{fmtPlanMultiplier(opt.multiplier)}</span>
                 {isCurrent && (
                   <span style={{ marginLeft: 6, fontSize: 11, color: "var(--muted-foreground)" }}>
                     （利用中）
@@ -213,8 +213,8 @@ export function PlanSection({
             </p>
             <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, color: "var(--muted-foreground)", lineHeight: 1.7 }}>
               <li>
-                対話単価が ×{currentOption?.multiplier.toFixed(1) ?? "—"} から{" "}
-                ×{targetOption.multiplier.toFixed(1)} になります。
+                対話単価が ×{currentOption ? fmtPlanMultiplier(currentOption.multiplier) : "—"} から{" "}
+                ×{fmtPlanMultiplier(targetOption.multiplier)} になります。
               </li>
               <li>変更前にご利用いただいた分は、変更前の単価のまま請求されます（遡って変わりません）。</li>
               {targetOption.value === "free_ad" && (

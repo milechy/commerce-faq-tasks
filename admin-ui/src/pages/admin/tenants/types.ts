@@ -1,15 +1,19 @@
 import type * as React from "react";
 import type { CSSProperties } from "react";
 
-// プラン定義（バックエンド planValues と一致: free_ad/starter/growth/enterprise）
+// プラン定義（バックエンド planValues と一致: free_ad/starter/standard/growth/enterprise）
 // free_ad は starter よりさらに下の最下段(広告原資の無料プラン)。
-export type TenantPlan = "free_ad" | "starter" | "growth" | "enterprise";
+// standard は starter と growth の間(既定アバターの利用可・自社カスタム作成は不可)。
+export type TenantPlan = "free_ad" | "starter" | "standard" | "growth" | "enterprise";
 
 // GID 1216944004404664: LP未記載機能の正式プラン組み入れに合わせてdescを更新。
 // Starterは有人エスカレーション/未回答質問/お客様への声がけ/心理学Sales AI/API連携が無ゲートで含まれる。
+// multiplier は src/lib/billing/planPricing.ts の PLAN_MULTIPLIERS と一致させること
+// (ズレると画面の説明と実請求が食い違う)。
 export const PLAN_OPTIONS: { value: TenantPlan; label: string; multiplier: number; desc: string }[] = [
   { value: "free_ad",    label: "Free（広告表示）", multiplier: 0,   desc: "テキストチャットのみ・月200会話まで（アバター/音声なし）。「Powered by R2C」バッジ表示中" },
   { value: "starter",    label: "Starter",    multiplier: 1.0, desc: "小規模サイト向け（〜500対話/月）" },
+  { value: "standard",   label: "Standard",   multiplier: 1.25, desc: "既定アバター利用可・カスタム不可・¥9,800/月" },
   { value: "growth",     label: "Growth",     multiplier: 1.5, desc: "成長期のビジネス向け（〜3,000対話/月・AIアバター/Analytics/A-Bテスト/プレミアムアバター生成）" },
   { value: "enterprise", label: "Enterprise", multiplier: 2.5, desc: "大規模・高品質要求向け（無制限・音声クローン/ディープリサーチ/Sai代行/事前ディスパッチ）" },
 ];

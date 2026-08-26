@@ -28,6 +28,22 @@ describe("planHasFeature", () => {
     ["starter", "hide_branding", false],
     ["growth", "hide_branding", true],
     ["enterprise", "hide_branding", true],
+    // standard(starterとgrowthの間)。開くのは avatar だけで、他は全て growth 以上のまま。
+    ["standard", "avatar", true],
+    ["standard", "avatar_customize", false],
+    ["standard", "premium_avatar", false],
+    ["standard", "analytics", false],
+    ["standard", "conversion", false],
+    ["standard", "hide_branding", false],
+    ["standard", "voice_clone", false],
+    ["standard", "deep_research", false],
+    ["standard", "sai_task", false],
+    ["standard", "pre_dispatch", false],
+    // avatar_customize(自社アバターの作成)は Growth 以上
+    ["free_ad", "avatar_customize", false],
+    ["starter", "avatar_customize", false],
+    ["growth", "avatar_customize", true],
+    ["enterprise", "avatar_customize", true],
     // free_ad(starterより下の最下段)はどのゲートも通らない
     ["free_ad", "avatar", false],
     ["free_ad", "voice_clone", false],
@@ -191,6 +207,31 @@ describe("planFeatureDelta（プラン変更の確認画面に出す増減）", 
 
   it("同じプランなら増減なし", () => {
     expect(planFeatureDelta("growth", "growth")).toEqual({ gained: [], lost: [] });
+  });
+
+  // Standard は「アバターを開放するが、カスタム作成は開放しない」段。
+  // 確認画面がこの2つを取り違えると、テナントは「自社アバターを作れる」と
+  // 誤解して契約する(CLAUDE.md 禁止54: 価格表記と実装を割らない)。
+  it("starter → standard で増えるのは avatar だけ(avatar_customize は増えない)", () => {
+    const { gained, lost } = planFeatureDelta("starter", "standard");
+    expect(gained).toEqual(["avatar"]);
+    expect(lost).toEqual([]);
+  });
+
+  it("standard → growth で avatar_customize が増える(アバターは既に持っているので増分に出ない)", () => {
+    const { gained, lost } = planFeatureDelta("standard", "growth");
+    expect(gained).toContain("avatar_customize");
+    expect(gained).not.toContain("avatar");
+    expect(lost).toEqual([]);
+  });
+
+  // ★降格の警告が最も効く場面★ growth → standard で「アバターごと失う」と
+  // 誤表示すると、使えるものを使えないと伝えることになる。
+  it("growth → standard で失うのは avatar_customize 等であって avatar ではない", () => {
+    const { gained, lost } = planFeatureDelta("growth", "standard");
+    expect(lost).toContain("avatar_customize");
+    expect(lost).not.toContain("avatar");
+    expect(gained).toEqual([]);
   });
 
   // ★fail-safe の向き★ plan未確定(null)を free_ad と同一視すると

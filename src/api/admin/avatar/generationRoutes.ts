@@ -10,6 +10,8 @@ import { z } from "zod";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 import { roleAuthMiddleware, requireRole, resolveEffectiveTenantId, type AuthedReq } from "../../middleware/roleAuth";
 import { trackUsage } from "../../../lib/billing/usageTracker";
+import { getPool } from "../../../lib/db";
+import { avatarCustomizeDenial } from "./avatarCustomizeGate";
 import { logger } from '../../../lib/logger';
 import { containsBannedWord } from '../../../lib/contentGuard';
 
@@ -97,6 +99,26 @@ function avatarGenAuthzLogger(req: Request, _res: Response, next: NextFunction):
 const AVATAR_GEN_AUTHZ = [roleAuthMiddleware, avatarGenAuthzLogger, requireRole(...AVATAR_GEN_ALLOWED_ROLES)];
 
 // ---------------------------------------------------------------------------
+// Plan gate (avatar_customize)
+// ---------------------------------------------------------------------------
+//
+// このファイルの4ルートはいずれも「自社アバターを作り込む」操作なので Growth 以上。
+// Standard は R2C の既定アバターをそのまま使う段で、ここには入れない。
+// ロール認可(AVATAR_GEN_AUTHZ)だけでは client_admin なら誰でも通ってしまい、
+// Standard の「既定のみ」が成立しない。
+//
+// ミドルウェアではなく各ハンドラ内で呼ぶのは、premium_avatar ゲートと同じ順序
+// (body検証400 → テナント解決400 → プラン403)を保つため。順序を変えると、
+// 不正なbodyが403として返るなど、呼び出し側の切り分けが変わる。
+async function denyIfCannotCustomize(req: Request, res: Response, tenantId: string): Promise<boolean> {
+  const isSuperAdmin = (req as AuthedReq).user?.role === "super_admin";
+  const denial = await avatarCustomizeDenial(getPool(), isSuperAdmin, tenantId);
+  if (!denial) return false;
+  res.status(403).json(denial);
+  return true;
+}
+
+// ---------------------------------------------------------------------------
 // Route registration
 // ---------------------------------------------------------------------------
 
@@ -128,6 +150,7 @@ export function registerAvatarGenerationRoutes(app: Express, _db: any): void {
       if (!tenantId) {
         return res.status(400).json({ error: "テナント情報が取得できません" });
       }
+      if (await denyIfCannotCustomize(req, res, tenantId)) return;
       const requestId: string =
         (req as AvatarReq).requestId ?? crypto.randomUUID();
 
@@ -272,6 +295,7 @@ Output ONLY the English prompt, nothing else.`,
       if (!tenantId) {
         return res.status(400).json({ error: "テナント情報が取得できません" });
       }
+      if (await denyIfCannotCustomize(req, res, tenantId)) return;
       const requestId: string =
         (req as AvatarReq).requestId ?? crypto.randomUUID();
 
@@ -410,6 +434,7 @@ JSONのみ返してください。`,
       if (!tenantId) {
         return res.status(400).json({ error: "テナント情報が取得できません" });
       }
+      if (await denyIfCannotCustomize(req, res, tenantId)) return;
       const requestId: string =
         (req as AvatarReq).requestId ?? crypto.randomUUID();
 
@@ -512,6 +537,7 @@ JSONのみ返してください。`,
       if (!tenantId) {
         return res.status(400).json({ error: "テナント情報が取得できません" });
       }
+      if (await denyIfCannotCustomize(req, res, tenantId)) return;
       const requestId: string =
         (req as AvatarReq).requestId ?? crypto.randomUUID();
 

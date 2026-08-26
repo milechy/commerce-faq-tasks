@@ -32,7 +32,7 @@ beforeEach(() => {
 });
 
 function renderSection(
-  currentPlan: "free_ad" | "starter" | "growth" | "enterprise" | null,
+  currentPlan: "free_ad" | "starter" | "standard" | "growth" | "enterprise" | null,
   planStatus?: "loading" | "error" | "ready"
 ) {
   const onChanged = vi.fn();
@@ -67,7 +67,35 @@ describe("PlanSection", () => {
     renderSection("starter");
     fireEvent.click(screen.getByRole("button", { name: /Growth/ }));
     expect(screen.getByText("使えるようになる機能")).toBeTruthy();
-    expect(screen.getByText("AIアバター")).toBeTruthy();
+    expect(screen.getByText("AIアバター（R2C既定アバター）")).toBeTruthy();
+    expect(screen.getByText("アバターの作成・カスタマイズ")).toBeTruthy();
+  });
+
+  // Standard は「既定アバターは使えるが、自社アバターは作れない」段。
+  // ラベルが両方とも「AIアバター」だと、この2つが確認画面で区別できず、
+  // テナントは Growth 相当を期待して Standard を選ぶ(CLAUDE.md 禁止54)。
+  it("starter → Standard では既定アバターだけが増え、カスタマイズは増えない", () => {
+    renderSection("starter");
+    fireEvent.click(screen.getByRole("button", { name: /Standard/ }));
+    expect(screen.getByText("使えるようになる機能")).toBeTruthy();
+    expect(screen.getByText("AIアバター（R2C既定アバター）")).toBeTruthy();
+    expect(screen.queryByText("アバターの作成・カスタマイズ")).toBeNull();
+  });
+
+  it("Growth → Standard の降格で失うのはカスタマイズであって、アバター本体ではない", () => {
+    renderSection("growth");
+    fireEvent.click(screen.getByRole("button", { name: /Standard/ }));
+    expect(screen.getByText("使えなくなる機能")).toBeTruthy();
+    expect(screen.getByText("アバターの作成・カスタマイズ")).toBeTruthy();
+    expect(screen.queryByText("AIアバター（R2C既定アバター）")).toBeNull();
+  });
+
+  // Standard(×1.25)を toFixed(1) で出すと「×1.3」になり、画面の説明と
+  // 実請求が食い違う。倍率は請求単価そのものなので丸めない。
+  it("Standard の倍率は ×1.25 と表示される(×1.3 に丸めない)", () => {
+    renderSection("standard");
+    expect(screen.getByText(/対話単価 ×1\.25/)).toBeTruthy();
+    expect(screen.queryByText(/×1\.3(?!\d)/)).toBeNull();
   });
 
   it("ダウングレードでは失う機能を名指しで出す", () => {

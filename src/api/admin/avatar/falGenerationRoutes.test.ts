@@ -26,6 +26,13 @@ jest.mock("../../../lib/billing/usageTracker", () => ({
   trackUsage: (...args: any[]) => mockTrackUsage(...args),
 }));
 
+// avatar_customize ゲートが queryTenantPlan 経由で参照する。
+// 既定は growth（＝ゲートを通す）。ゲートそのものを見る describe だけが上書きする。
+const mockQuery = jest.fn();
+jest.mock("../../../lib/db", () => ({
+  getPool: () => ({ query: mockQuery }),
+}));
+
 const mockFetch = jest.fn();
 global.fetch = mockFetch;
 
@@ -58,6 +65,7 @@ const FAL_OK_RESPONSE = {
 describe("POST /v1/admin/avatar/fal/generate", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockQuery.mockResolvedValue({ rows: [{ plan: "growth" }] });
     process.env.FAL_KEY = "test-fal-key";
   });
 
@@ -280,6 +288,7 @@ describe("POST /v1/admin/avatar/fal/generate — Supabase Storage の保存先",
   // fetch 呼び出しが残り、「呼ばれていないこと」の検証が通らなくなる）。
   beforeEach(() => {
     jest.clearAllMocks();
+    mockQuery.mockResolvedValue({ rows: [{ plan: "growth" }] });
     process.env.FAL_KEY = "test-fal-key";
   });
 
@@ -350,5 +359,105 @@ describe("POST /v1/admin/avatar/fal/generate — Supabase Storage の保存先",
     expect(res.status).toBe(400);
     expect(uploadedPaths).toHaveLength(0);
     expect(mockFetch).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// avatar_customize（Growth〜）のプランゲート
+// ---------------------------------------------------------------------------
+//
+// fal.ai の Flux Pro 画像生成は「自社アバターを作る」操作なので Growth 以上。
+// Standard(¥9,800)は R2C の既定アバターをそのまま使う段で、ここは通さない。
+// ゲート導入前はロール認可のみで、client_admin なら全プランで素通りしていた。
+describe("POST /v1/admin/avatar/fal/generate — avatar_customize プランゲート", () => {
+  const VALID_PROMPT = "Professional portrait of a Japanese woman, bust shot, smiling";
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    process.env.FAL_KEY = "test-fal-key";
+  });
+
+  afterEach(() => {
+    delete process.env.FAL_KEY;
+  });
+
+  it("standardプランは403(plan_upgrade_required)で拒否され、fal.aiを呼ばない", async () => {
+    mockQuery.mockResolvedValue({ rows: [{ plan: "standard" }] });
+
+    const res = await request(makeApp("tenant-a", "client_admin"))
+      .post("/v1/admin/avatar/fal/generate")
+      .send({ prompt: VALID_PROMPT });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("plan_upgrade_required");
+    // 原価の発生前に落ちていること
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockTrackUsage).not.toHaveBeenCalled();
+  });
+
+  it("案内文は Growth への変更と、Standard でも既定アバターが使えることの両方を伝える", async () => {
+    mockQuery.mockResolvedValue({ rows: [{ plan: "standard" }] });
+
+    const res = await request(makeApp("tenant-a", "client_admin"))
+      .post("/v1/admin/avatar/fal/generate")
+      .send({ prompt: VALID_PROMPT });
+
+    expect(res.body.message).toContain("Growth");
+    expect(res.body.message).toContain("Standard");
+  });
+
+  it.each(["free_ad", "starter"])("%s プランも403で拒否される", async (plan) => {
+    mockQuery.mockResolvedValue({ rows: [{ plan }] });
+
+    const res = await request(makeApp("tenant-a", "client_admin"))
+      .post("/v1/admin/avatar/fal/generate")
+      .send({ prompt: VALID_PROMPT });
+
+    expect(res.status).toBe(403);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("plan取得がDB障害で失敗した場合もfail-safeで403(プラン外機能を開かない)", async () => {
+    mockQuery.mockRejectedValue(new Error("db down"));
+
+    const res = await request(makeApp("tenant-a", "client_admin"))
+      .post("/v1/admin/avatar/fal/generate")
+      .send({ prompt: VALID_PROMPT });
+
+    expect(res.status).toBe(403);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it.each(["growth", "enterprise"])("%s プランは生成できる(過剰ブロックの対検証)", async (plan) => {
+    mockQuery.mockResolvedValue({ rows: [{ plan }] });
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => FAL_OK_RESPONSE });
+
+    const res = await request(makeApp("tenant-a", "client_admin"))
+      .post("/v1/admin/avatar/fal/generate")
+      .send({ prompt: VALID_PROMPT });
+
+    expect(res.status).toBe(200);
+  });
+
+  it("super_adminはプラン照会自体をせずバイパスする(原価の出るサポート業務を止めない)", async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => FAL_OK_RESPONSE });
+
+    const res = await request(makeApp("", "super_admin"))
+      .post("/v1/admin/avatar/fal/generate?tenant=tenant-b")
+      .send({ prompt: VALID_PROMPT });
+
+    expect(res.status).toBe(200);
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  it("テナント不明の400はプラン判定より先に返る(切り分けの順序を保つ)", async () => {
+    mockQuery.mockResolvedValue({ rows: [{ plan: "standard" }] });
+
+    const res = await request(makeApp("", "super_admin"))
+      .post("/v1/admin/avatar/fal/generate")
+      .send({ prompt: VALID_PROMPT });
+
+    expect(res.status).toBe(400);
+    expect(mockQuery).not.toHaveBeenCalled();
   });
 });

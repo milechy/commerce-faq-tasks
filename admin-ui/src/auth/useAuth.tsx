@@ -17,10 +17,11 @@ export interface AuthUser {
 
 // LP(r2c.biz)料金表のプラン。backendのplanValues(src/api/admin/tenants/routes.ts)と一致させること。
 // free_ad は starter よりさらに下の最下段(広告原資の無料プラン)。
+// standard は starter と growth の間(既定アバターの利用可・自社カスタム作成は不可)。
 // この型は admin-ui/src/lib/planFeatures.ts の PLAN_RANK と
 // admin-ui/src/pages/admin/tenants/types.ts の TenantPlan/PLAN_OPTIONS からも
 // 独立に定義されており(既知の三重化)、プラン段を増やす際は3箇所とも直すこと。
-export type TenantPlan = "free_ad" | "starter" | "growth" | "enterprise";
+export type TenantPlan = "free_ad" | "starter" | "standard" | "growth" | "enterprise";
 
 // Asana 1217040702572796(P6): オンボーディング4段階。単一の情報源は
 // src/api/admin/agent/onboardingStage.ts(バックエンド)。admin-ui とは別パッケージ
