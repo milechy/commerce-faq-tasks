@@ -146,4 +146,13 @@ describe("src/index.ts 配線の不変条件（ソース構造検査）", () => 
       expect(block).toMatch(/logger\.warn\(.*STRIPE_SECRET_KEY/s);
     });
   });
+
+  // P1-11(2026-08-26レビュー): billingReconciliationMonitorが導入時に
+  // cron/systemd timerのいずれにも登録されず孤立していた(厳格レビューで発覚)
+  // のと同じ事故を、billingSyncReconciliationMonitorで再発させない。
+  describe("billing_sync 日次照合monitorの起動配線", () => {
+    it("billingSyncReconciliationMonitor.start() 経由で起動プロセスへ配線されている", () => {
+      expect(source).toMatch(/billingSyncReconciliationMonitor\.start\(\s*db\s*,\s*logger\s*\)/);
+    });
+  });
 });

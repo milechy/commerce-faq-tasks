@@ -6,6 +6,7 @@ import { recordWidgetSeenOnce } from "./lib/onboardingWidgetSeen";
 import { alertEngine } from "./lib/alerts/alertEngine";
 import { billingHealthMonitor } from "./lib/billing/billingHealthCheck";
 import { billingReconciliationMonitor } from "./lib/billing/billingReconciliation";
+import { billingSyncReconciliationMonitor } from "./lib/billing/billingSyncReconciliation";
 import { fetchSchemaHealth } from "./api/admin/analytics/schemaHealth";
 import { SalesLogWriter, setGlobalSalesLogWriter } from "./agent/orchestrator/sales/salesLogWriter";
 import { createSalesLogNotionSink } from "./integrations/notion/salesLogNotionSink";
@@ -842,6 +843,16 @@ async function startServer() {
   if (db) {
     billingReconciliationMonitor.start(db, logger);
     logger.info("[startup] Billing reconciliation monitor started (24h interval)");
+  }
+
+  // billing_sync 日次照合(P1-11、2026-08-26レビュー本筋対応)。プラン変更時
+  // オンデマンドのsyncSubscriptionForTenantだけでは、webhook取りこぼし・
+  // Stripeダッシュボードでの手動変更等でtenants.planとStripeの実態がズレても
+  // 次のプラン変更まで誰も気づけない。billingReconciliationMonitorと同じく
+  // 起動プロセスへ配線し、cron登録という人間の運用に依存しない形にする。
+  if (db) {
+    billingSyncReconciliationMonitor.start(db, logger);
+    logger.info("[startup] Billing sync reconciliation monitor started (24h interval)");
   }
 
   // Phase70K: pipelineQueue self-heal — PM2再起動で stuck した job を自動復旧
