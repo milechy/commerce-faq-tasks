@@ -368,6 +368,120 @@ describe('createStripeWebhookHandler', () => {
     );
   });
 
+  describe('checkout.session.completed', () => {
+    // ★このテストが守っている事故★
+    // client_admin セルフサービスの Checkout 完了を webhook で拾い損ねると、
+    // カードを登録したテナントの stripe_subscriptions 行が永久に作られず、
+    // syncSubscriptionItemsToPlan が「no_subscription」を返し続ける。
+
+    it('mode: subscription かつ metadata.tenant_id ありで stripe_subscriptions へ UPSERT する', async () => {
+      const session = {
+        id: 'cs_test_1',
+        mode: 'subscription',
+        customer: 'cus_abc',
+        subscription: 'sub_abc',
+        metadata: { tenant_id: 'tenant-a' },
+      };
+      const event = { id: 'evt_checkout_1', type: 'checkout.session.completed', data: { object: session } };
+      mockConstructEventOnce(event);
+
+      const db = makeDb({
+        'INSERT INTO stripe_subscriptions': () => ({ rowCount: 1, rows: [] }),
+      });
+      const handler = createStripeWebhookHandler(db as any, mockLogger);
+      const { req, res } = makeReqRes({
+        body:    Buffer.from(JSON.stringify(event)),
+        headers: { 'stripe-signature': 'valid_sig' },
+      });
+
+      await handler(req, res);
+
+      expect(res._status).toBe(200);
+      expect(db.query).toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO stripe_subscriptions'),
+        ['tenant-a', 'cus_abc', 'sub_abc']
+      );
+    });
+
+    // 展開済み(オブジェクト)の customer/subscription も文字列と同様に扱える。
+    it('customer/subscription がオブジェクトで展開されていても id を取り出す', async () => {
+      const session = {
+        id: 'cs_test_2',
+        mode: 'subscription',
+        customer: { id: 'cus_xyz' },
+        subscription: { id: 'sub_xyz' },
+        metadata: { tenant_id: 'tenant-b' },
+      };
+      const event = { id: 'evt_checkout_2', type: 'checkout.session.completed', data: { object: session } };
+      mockConstructEventOnce(event);
+
+      const db = makeDb({
+        'INSERT INTO stripe_subscriptions': () => ({ rowCount: 1, rows: [] }),
+      });
+      const handler = createStripeWebhookHandler(db as any, mockLogger);
+      const { req, res } = makeReqRes({
+        body:    Buffer.from(JSON.stringify(event)),
+        headers: { 'stripe-signature': 'valid_sig' },
+      });
+
+      await handler(req, res);
+
+      expect(db.query).toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO stripe_subscriptions'),
+        ['tenant-b', 'cus_xyz', 'sub_xyz']
+      );
+    });
+
+    // mode: payment(単発決済)等は対象外。誤ってサブスク行を作らない。
+    it('mode が subscription 以外なら何もしない', async () => {
+      const session = { id: 'cs_test_3', mode: 'payment', customer: 'cus_abc', metadata: {} };
+      const event = { id: 'evt_checkout_3', type: 'checkout.session.completed', data: { object: session } };
+      mockConstructEventOnce(event);
+
+      const db = makeDb();
+      const handler = createStripeWebhookHandler(db as any, mockLogger);
+      const { req, res } = makeReqRes({
+        body:    Buffer.from(JSON.stringify(event)),
+        headers: { 'stripe-signature': 'valid_sig' },
+      });
+
+      await handler(req, res);
+
+      expect(res._status).toBe(200);
+      expect(db.query).not.toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO stripe_subscriptions'),
+        expect.anything()
+      );
+    });
+
+    // ★越境事故防止★ metadata.tenant_id が無ければ、どのテナントの支払いか
+    // 特定できない。黙ってどこかに紐付けるより、記録せず鳴らす方が安全。
+    it('metadata.tenant_id が無ければ記録せずエラーログを出す', async () => {
+      const session = { id: 'cs_test_4', mode: 'subscription', customer: 'cus_abc', subscription: 'sub_abc', metadata: {} };
+      const event = { id: 'evt_checkout_4', type: 'checkout.session.completed', data: { object: session } };
+      mockConstructEventOnce(event);
+
+      const db = makeDb();
+      const handler = createStripeWebhookHandler(db as any, mockLogger);
+      const { req, res } = makeReqRes({
+        body:    Buffer.from(JSON.stringify(event)),
+        headers: { 'stripe-signature': 'valid_sig' },
+      });
+
+      await handler(req, res);
+
+      expect(res._status).toBe(200);
+      expect(db.query).not.toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO stripe_subscriptions'),
+        expect.anything()
+      );
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: 'cs_test_4' }),
+        expect.any(String)
+      );
+    });
+  });
+
   describe('冪等性: event.id の重複と並行配信', () => {
     // 処理権の獲得は単一の条件付きUPSERTで行う（INSERT成否を見てから別クエリで
     // 状態をSELECTする方式だと、並行到達した2リクエストが両方「未完了だから再試行」と

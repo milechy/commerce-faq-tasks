@@ -113,6 +113,9 @@ async function _handleStripeEvent(event: any, db: any, logger: pino.Logger): Pro
     case 'customer.subscription.deleted':
       await _handleSubscriptionDeleted(event.data.object, db, logger);
       break;
+    case 'checkout.session.completed':
+      await _handleCheckoutSessionCompleted(event.data.object, db, logger);
+      break;
     default:
       logger.debug({ eventType: event.type }, '[webhook] unhandled event type, ignored');
   }
@@ -264,6 +267,63 @@ async function _handleSubscriptionDeleted(
   );
 
   await _sendSlackAlert({ type: 'subscription_deleted', subscriptionId }, logger);
+}
+
+/**
+ * client_admin セルフサービスの Checkout(mode: 'subscription')完了を記録する。
+ *
+ * ★なぜ webhook 側で記録するか、Checkoutセッション作成側で書き込まないか★
+ * Checkout の customer/subscription 確定はカード情報入力を挟む Stripe 側の非同期
+ * フローで、セッション作成のレスポンス時点ではまだ確定していない(3DS等で数分
+ * 空くこともある)。テナントが success_url に戻ってきたタイミングで書き込むと、
+ * 戻ってくる前に離脱したテナントの行が永久に欠ける。webhook はこの完了を
+ * Stripe 側から確実に通知してもらえる唯一の経路。
+ *
+ * metadata.tenant_id は checkout-session 作成時(billingApi.ts の
+ * POST /v1/admin/my-tenant/billing/checkout-session)に必ず載せる契約。無ければ、
+ * どのテナントの支払いか特定できないため何もしない(黙ってどこかのテナントに
+ * 紐付けると越境事故になる)。
+ */
+async function _handleCheckoutSessionCompleted(
+  session: any,
+  db: any,
+  logger: pino.Logger
+): Promise<void> {
+  if (session.mode !== 'subscription') return; // 一時金決済等、他モードは対象外
+
+  const tenantId = session.metadata?.tenant_id as string | undefined;
+  const subscriptionId = typeof session.subscription === 'string' ? session.subscription : session.subscription?.id;
+  const customerId = typeof session.customer === 'string' ? session.customer : session.customer?.id;
+
+  if (!tenantId || !subscriptionId || !customerId) {
+    logger.error(
+      { sessionId: session.id, tenantId, subscriptionId, customerId },
+      '[webhook] checkout.session.completed: tenant_id/subscription/customer のいずれかが欠けている — 記録できない'
+    );
+    return;
+  }
+
+  // stripe_price_id(「そのテナントのプランを代表する price」の表示専用列。
+  // 業務ロジックからは読まれない — schemaHealth.ts の存在チェック以外に参照箇所なし)
+  // は null で先に行を作る。Checkout の line_items をここで読み直して二重に真実を
+  // 持たない。次にプランが変わったとき、subscriptionSync.ts の同期処理が
+  // 代表 price を書き込んで埋める(それまでは null のままで、機能的な影響は無い)。
+  await db.query(
+    `INSERT INTO stripe_subscriptions
+       (tenant_id, stripe_customer_id, stripe_subscription_id, stripe_price_id, is_active)
+     VALUES ($1, $2, $3, NULL, true)
+     ON CONFLICT (tenant_id) DO UPDATE SET
+       stripe_customer_id     = EXCLUDED.stripe_customer_id,
+       stripe_subscription_id = EXCLUDED.stripe_subscription_id,
+       is_active               = true,
+       updated_at              = NOW()`,
+    [tenantId, customerId, subscriptionId]
+  );
+
+  logger.info(
+    { tenantId, subscriptionId, customerId },
+    '[webhook] checkout.session.completed: テナントのセルフサービス決済登録を記録した'
+  );
 }
 
 interface SlackAlertPayload {

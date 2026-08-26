@@ -61,6 +61,47 @@ export function PlanSection({
   const [pending, setPending] = useState<TenantPlan | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // ★成功表示に潰さない★ プラン自体は変わっても、Stripe側のsubscription item
+  // 追随(syncSubscriptionForTenant)が失敗すると請求が1円も動かない。
+  // これをトーストの「✅ 変更しました」に混ぜると、支払い設定が未完了なことに
+  // 誰も気づけない(CLAUDE.md 禁止20)。needsAttention なステータスだけここに残す。
+  const [billingSyncPending, setBillingSyncPending] = useState<string | null>(null);
+  const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
+  const NEEDS_ATTENTION_STATUSES = new Set([
+    "no_subscription",
+    "price_not_configured",
+    "stripe_not_configured",
+    "manual_plan",
+    "failed",
+  ]);
+
+  // no_subscription のときだけ「支払い設定へ進む」ボタンを出す。他のステータス
+  // (price_not_configured/stripe_not_configured/manual_plan/failed)は env未設定や
+  // Stripe障害など運用側の問題で、テナントの操作では解決しないため出し分ける。
+  const handleStartCheckout = async () => {
+    setCheckoutLoading(true);
+    setCheckoutError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/v1/admin/my-tenant/billing/checkout-session`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const data = (await res.json().catch(() => ({}))) as { url?: string; message?: string; error?: string };
+      if (res.ok && data.url) {
+        // Checkout は Stripe が保護するページなのでこの画面から離脱してよい
+        // (portalUrl と同じ扱い。BillingSection.tsx 参照)。
+        window.location.href = data.url;
+        return;
+      }
+      setCheckoutError(data.message ?? data.error ?? "お支払い設定ページの作成に失敗しました");
+    } catch {
+      setCheckoutError("お支払い設定ページの作成に失敗しました");
+    } finally {
+      setCheckoutLoading(false);
+    }
+  };
 
   // CLAUDE.md 禁止13: isSuperAdmin で出し分けない（previewMode 中に false へ落ちる）。
   // ここは生の role で判定する。super_admin のJWTには tenant_id が無く、
@@ -86,10 +127,22 @@ export function PlanSection({
         // 成功応答でも本文がJSONとは限らない(204・空ボディ・プロキシの割り込み)。
         // ここで throw させると「サーバは変更済みなのに失敗表示」になり、
         // ユーザーが再送する(2回目はサーバ側 no-op)。本文が読めなくても成功は成功として扱う。
-        const data = (await res.json().catch(() => ({}))) as { plan?: TenantPlan };
+        const data = (await res.json().catch(() => ({}))) as {
+          plan?: TenantPlan;
+          billing_sync?: string;
+        };
         onChanged(data.plan ?? target);
         setPending(null);
-        showToast("✅ プランを変更しました");
+        if (data.billing_sync && NEEDS_ATTENTION_STATUSES.has(data.billing_sync)) {
+          // プランは変わったが請求構成が追随していない。トーストの成功表示に
+          // 混ぜず、消えない案内として残す(「即時反映」の嘘と同じ理由で、
+          // ここは楽観的な文言にしない)。
+          setBillingSyncPending(data.billing_sync);
+          showToast("プランを変更しました（お支払い設定の確認が必要です）");
+        } else {
+          setBillingSyncPending(null);
+          showToast("✅ プランを変更しました");
+        }
       } else {
         const d = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
         setError(d.message ?? d.error ?? "プランの変更に失敗しました");
@@ -143,6 +196,52 @@ export function PlanSection({
           }}
         >
           {error}
+        </div>
+      )}
+
+      {/* ★赤帯にしない★ プラン変更自体は成功しており、これは403/エラーの一種
+          ではなく「お支払い設定が未完了」という別の状態(CLAUDE.md 禁止21)。
+          消えるトーストではなく、解消するまで残る案内として出す。 */}
+      {billingSyncPending && (
+        <div
+          style={{
+            marginBottom: 14,
+            padding: "10px 14px",
+            borderRadius: 8,
+            background: "rgba(217,119,6,0.15)",
+            border: "1px solid rgba(217,119,6,0.35)",
+            color: "#fbbf24",
+            fontSize: 13,
+          }}
+        >
+          <p style={{ margin: billingSyncPending === "no_subscription" ? "0 0 8px" : 0 }}>
+            お支払い設定の確認が必要です。プランの権能は反映されていますが、決済手段が未登録のため請求が開始されていません。
+          </p>
+          {billingSyncPending === "no_subscription" && (
+            <>
+              <button
+                type="button"
+                disabled={checkoutLoading}
+                onClick={() => void handleStartCheckout()}
+                style={{
+                  padding: "8px 16px",
+                  minHeight: 40,
+                  borderRadius: 8,
+                  border: "1px solid rgba(217,119,6,0.5)",
+                  background: "transparent",
+                  color: "#fbbf24",
+                  fontSize: 13,
+                  fontWeight: 700,
+                  cursor: checkoutLoading ? "not-allowed" : "pointer",
+                }}
+              >
+                {checkoutLoading ? "移動しています…" : "お支払い設定へ進む"}
+              </button>
+              {checkoutError && (
+                <p style={{ margin: "8px 0 0", fontSize: 12, color: "#fca5a5" }}>{checkoutError}</p>
+              )}
+            </>
+          )}
         </div>
       )}
 

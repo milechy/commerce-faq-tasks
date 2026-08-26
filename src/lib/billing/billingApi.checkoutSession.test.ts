@@ -1,0 +1,206 @@
+// src/lib/billing/billingApi.checkoutSession.test.ts
+// POST /v1/admin/my-tenant/billing/checkout-session — テナント自身によるセルフサービス決済登録。
+//
+// ★このテストが守っている事故★
+// 有料プラン(Standard/Growth)へ変更しても、テナント自身がカードを登録する導線が
+// 無かった(super_admin限定の /billing/onboard しか無い)。基本料ありのプランは
+// subscriptions.create が即座に課金を試みるため、カード未登録だと subscription が
+// incomplete で止まる。Checkout(mode: subscription)でカード入力をStripe側に任せる。
+
+import express from "express";
+import request from "supertest";
+import pino from "pino";
+import { registerBillingAdminRoutes } from "./billingApi";
+
+const mockCheckoutSessionsCreate = jest.fn();
+
+jest.mock("stripe", () => {
+  return jest.fn().mockImplementation(() => ({
+    checkout: { sessions: { create: (...args: unknown[]) => mockCheckoutSessionsCreate(...args) } },
+  }));
+}, { virtual: true });
+
+const silentLogger = pino({ level: "silent" });
+
+type Role = "super_admin" | "client_admin";
+
+function makeApp(db: any, role: Role, tenantId = "tenant-a") {
+  const app = express();
+  app.use(express.json());
+  app.use((req: any, _res: any, next: any) => {
+    req.supabaseUser = { email: "admin@example.com", app_metadata: { tenant_id: tenantId, role } };
+    next();
+  });
+  registerBillingAdminRoutes(app, db, silentLogger, []);
+  return app;
+}
+
+function makeDb(tenant: { plan: string | null } | null) {
+  return {
+    query: jest.fn(async (sql: string) => {
+      if (sql.includes("SELECT id, name, tenant_contact_email, plan FROM tenants")) {
+        return tenant ? { rows: [{ id: "tenant-a", name: "テストテナント", tenant_contact_email: null, plan: tenant.plan }] } : { rows: [] };
+      }
+      return { rows: [] };
+    }),
+  };
+}
+
+const ENV_KEYS = [
+  "STRIPE_SECRET_KEY",
+  "STRIPE_PRICE_STANDARD_BASE_MONTHLY",
+  "STRIPE_PRICE_STANDARD_TEXT_OVERAGE",
+  "STRIPE_PRICE_STANDARD_AVATAR_OVERAGE",
+  "STRIPE_PRICE_GROWTH_BASE_MONTHLY",
+  "STRIPE_PRICE_GROWTH_TEXT_OVERAGE",
+  "STRIPE_PRICE_GROWTH_AVATAR_OVERAGE",
+  "STRIPE_PRICE_STARTER_TEXT",
+  "BILLING_PORTAL_RETURN_URL",
+] as const;
+const savedEnv: Record<string, string | undefined> = {};
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  for (const k of ENV_KEYS) savedEnv[k] = process.env[k];
+  process.env.STRIPE_SECRET_KEY = "sk_test_dummy";
+  process.env.STRIPE_PRICE_STANDARD_BASE_MONTHLY = "price_std_base";
+  process.env.STRIPE_PRICE_STANDARD_TEXT_OVERAGE = "price_std_text";
+  process.env.STRIPE_PRICE_STANDARD_AVATAR_OVERAGE = "price_std_avatar";
+  process.env.STRIPE_PRICE_GROWTH_BASE_MONTHLY = "price_growth_base";
+  process.env.STRIPE_PRICE_GROWTH_TEXT_OVERAGE = "price_growth_text";
+  process.env.STRIPE_PRICE_GROWTH_AVATAR_OVERAGE = "price_growth_avatar";
+  process.env.STRIPE_PRICE_STARTER_TEXT = "price_starter_text";
+  process.env.BILLING_PORTAL_RETURN_URL = "https://app.example.com/billing";
+  mockCheckoutSessionsCreate.mockResolvedValue({ id: "cs_test_1", url: "https://checkout.stripe.com/cs_test_1" });
+});
+
+afterEach(() => {
+  for (const k of ENV_KEYS) {
+    if (savedEnv[k] === undefined) delete process.env[k];
+    else process.env[k] = savedEnv[k] as string;
+  }
+});
+
+describe("POST /v1/admin/my-tenant/billing/checkout-session", () => {
+  it("client_admin が standard プランで Checkout セッションを作成し、redirect先URLを返す", async () => {
+    const db = makeDb({ plan: "standard" });
+    const res = await request(makeApp(db, "client_admin"))
+      .post("/v1/admin/my-tenant/billing/checkout-session")
+      .set("Authorization", "Bearer dummy")
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body.url).toBe("https://checkout.stripe.com/cs_test_1");
+    expect(mockCheckoutSessionsCreate).toHaveBeenCalledTimes(1);
+  });
+
+  // ★基本料(licensed)には quantity:1、超過(metered)には quantity を付けない★
+  // Stripe Checkout は metered price に quantity を渡すと拒否する。
+  it("基本料には quantity:1 を、超過(metered)には quantity を付けずに line_items を組む", async () => {
+    const db = makeDb({ plan: "standard" });
+    await request(makeApp(db, "client_admin"))
+      .post("/v1/admin/my-tenant/billing/checkout-session")
+      .set("Authorization", "Bearer dummy")
+      .send({});
+
+    const arg = mockCheckoutSessionsCreate.mock.calls[0][0];
+    expect(arg.line_items).toEqual([
+      { price: "price_std_base", quantity: 1 },
+      { price: "price_std_text" },
+      { price: "price_std_avatar" },
+    ]);
+  });
+
+  it("mode: subscription と tenant_id を含む metadata を渡す(webhook側の突合に必須)", async () => {
+    const db = makeDb({ plan: "growth" });
+    await request(makeApp(db, "client_admin"))
+      .post("/v1/admin/my-tenant/billing/checkout-session")
+      .set("Authorization", "Bearer dummy")
+      .send({});
+
+    const arg = mockCheckoutSessionsCreate.mock.calls[0][0];
+    expect(arg.mode).toBe("subscription");
+    expect(arg.metadata.tenant_id).toBe("tenant-a");
+    expect(arg.subscription_data.metadata.tenant_id).toBe("tenant-a");
+  });
+
+  it("super_admin(集約ビュー)は利用不可 — テナントに紐付かないため 403", async () => {
+    const db = makeDb({ plan: "standard" });
+    const res = await request(makeApp(db, "super_admin"))
+      .post("/v1/admin/my-tenant/billing/checkout-session")
+      .set("Authorization", "Bearer dummy")
+      .send({});
+
+    expect(res.status).toBe(403);
+    expect(mockCheckoutSessionsCreate).not.toHaveBeenCalled();
+  });
+
+  it("free_ad は請求が発生しないため plan_not_self_serve で 400", async () => {
+    const db = makeDb({ plan: "free_ad" });
+    const res = await request(makeApp(db, "client_admin"))
+      .post("/v1/admin/my-tenant/billing/checkout-session")
+      .set("Authorization", "Bearer dummy")
+      .send({});
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("plan_not_self_serve");
+    expect(mockCheckoutSessionsCreate).not.toHaveBeenCalled();
+  });
+
+  it("enterprise は個別契約のため plan_not_self_serve で 400", async () => {
+    const db = makeDb({ plan: "enterprise" });
+    const res = await request(makeApp(db, "client_admin"))
+      .post("/v1/admin/my-tenant/billing/checkout-session")
+      .set("Authorization", "Bearer dummy")
+      .send({});
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("plan_not_self_serve");
+  });
+
+  it("starter に annual を指定すると billing_cycle_not_supported で 400", async () => {
+    const db = makeDb({ plan: "starter" });
+    const res = await request(makeApp(db, "client_admin"))
+      .post("/v1/admin/my-tenant/billing/checkout-session")
+      .set("Authorization", "Bearer dummy")
+      .send({ billingCycle: "annual" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("billing_cycle_not_supported");
+  });
+
+  it("price の env が欠けていれば 500 stripe_price_not_configured を返す(黙って作らない)", async () => {
+    delete process.env.STRIPE_PRICE_STANDARD_AVATAR_OVERAGE;
+    const db = makeDb({ plan: "standard" });
+    const res = await request(makeApp(db, "client_admin"))
+      .post("/v1/admin/my-tenant/billing/checkout-session")
+      .set("Authorization", "Bearer dummy")
+      .send({});
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe("stripe_price_not_configured");
+    expect(mockCheckoutSessionsCreate).not.toHaveBeenCalled();
+  });
+
+  it("STRIPE_SECRET_KEY が無ければ 500 stripe_not_configured", async () => {
+    delete process.env.STRIPE_SECRET_KEY;
+    const db = makeDb({ plan: "standard" });
+    const res = await request(makeApp(db, "client_admin"))
+      .post("/v1/admin/my-tenant/billing/checkout-session")
+      .set("Authorization", "Bearer dummy")
+      .send({});
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe("stripe_not_configured");
+  });
+
+  it("存在しないテナントは404", async () => {
+    const db = makeDb(null);
+    const res = await request(makeApp(db, "client_admin"))
+      .post("/v1/admin/my-tenant/billing/checkout-session")
+      .set("Authorization", "Bearer dummy")
+      .send({});
+
+    expect(res.status).toBe(404);
+  });
+});

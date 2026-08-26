@@ -14,6 +14,7 @@ import { DEFAULT_AVATARS } from "../avatar/routes";
 import { logger } from '../../../lib/logger';
 import { planHasFeature, resolveShareForPlan, resolveShareForTenantPlan, invalidateTenantPlanCache, type TenantPlan } from "../../../lib/billing/planFeatures";
 import { invalidateBillingPlanCache } from "../../../lib/billing/usageTracker";
+import { syncSubscriptionForTenant, needsBillingAttention, type SubscriptionSyncResult } from "../../../lib/billing/subscriptionSync";
 import { deriveOnboardingStage, type OnboardingStageStatus } from "../agent/onboardingStage";
 import { isValidOriginPattern } from "../../middleware/originCheck";
 
@@ -496,8 +497,8 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       await client.query("BEGIN");
       await client.query("SET LOCAL lock_timeout = '3s'");
 
-      const beforeResult = await client.query<{ plan: TenantPlan | null; features: Record<string, unknown> | null }>(
-        `SELECT plan, features FROM tenants WHERE id = $1 FOR UPDATE`,
+      const beforeResult = await client.query<{ plan: TenantPlan | null; features: Record<string, unknown> | null; is_active: boolean | null }>(
+        `SELECT plan, features, is_active FROM tenants WHERE id = $1 FOR UPDATE`,
         [tenantId]
       );
       if (beforeResult.rowCount === 0) {
@@ -505,6 +506,19 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
         return res.status(404).json({ error: "not_found", message: "テナントが見つかりません" });
       }
       const previousPlan = beforeResult.rows[0].plan;
+
+      // 停止中のテナントにプラン変更を許さない。POST /v1/admin/my-tenant/keys が
+      // 既に is_active を見ているのと同じ線(GID 1217808227373610)。停止中に昇格されると、
+      // 権能だけ開いて請求経路が動かない状態が作れる。
+      // ★null は停止扱いにしない★ 列が無い/未設定の環境で全テナントのプラン変更が
+      // 止まる方が損害が大きいため、明示的な false のときだけ弾く。
+      if (beforeResult.rows[0].is_active === false) {
+        await client.query("ROLLBACK");
+        return res.status(403).json({
+          error: "tenant_inactive",
+          message: "停止中のテナントではプランを変更できません。担当までお問い合わせください。",
+        });
+      }
 
       // 同一プランへの変更は no-op（連打・再送を成功として返す。監査行も増やさない）。
       // ロックを取った後でこの判定をすることで、並行リクエストの2件目は
@@ -568,7 +582,27 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
         "[PUT /v1/admin/my-tenant/plan] tenant changed its own plan"
       );
 
-      return res.json({ ...result.rows[0], previous_plan: previousPlan, changed: true });
+      // ★Stripe の item 構成をプランに追随させる★
+      // これが無いと、Standard/Growth の基本料 item が作られないまま権能だけ開き、
+      // 月額が永久に請求されない(#1015 で基本料+込み枠+超過にしたときの積み残し)。
+      // ★await する(fire-and-forget にしない)★
+      // 失敗を握り潰すと「変更しました」とだけ表示され、請求が動いていないことを
+      // 誰も知らないまま月が終わる。プラン自体は COMMIT 済みなので、同期の失敗で
+      // 500 にはせず、billing_sync としてレスポンスに載せて UI に出させる。
+      const billingSync = await syncSubscriptionForTenant(db, logger, tenantId, nextPlan);
+      if (needsBillingAttention(billingSync)) {
+        logger.warn(
+          { tenantId, nextPlan, billingSyncStatus: billingSync.status },
+          "[PUT /v1/admin/my-tenant/plan] プランは変更したが請求構成が追随していない"
+        );
+      }
+
+      return res.json({
+        ...result.rows[0],
+        previous_plan: previousPlan,
+        changed: true,
+        billing_sync: billingSync.status,
+      });
     } catch (err) {
       await client.query("ROLLBACK").catch(() => {});
       // ロックタイムアウト = 同一テナントへの別のプラン変更が進行中。
@@ -963,7 +997,24 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
           }
         }
       })();
-      return res.json(result.rows[0]);
+      // ★プラン変更時は Stripe の item 構成も追随させる★
+      // PUT /v1/admin/my-tenant/plan と同じ理由・同じ関数を通す。経路ごとに
+      // 書き写すと、片方だけ直したときに「super_admin が変えた分だけ請求が動かない」
+      // という非対称が生まれる(このファイルが features 剥奪で一度やった失敗）。
+      // プラン以外のフィールド更新(名前・allowed_origins 等)では Stripe を触らない。
+      let planBillingSync: SubscriptionSyncResult | null = null;
+      if (fields.plan !== undefined && fields.plan !== beforeRow.plan) {
+        planBillingSync = await syncSubscriptionForTenant(db, logger, id, fields.plan);
+        if (needsBillingAttention(planBillingSync)) {
+          logger.warn(
+            { tenantId: id, plan: fields.plan, billingSyncStatus: planBillingSync.status },
+            "[PATCH /v1/admin/tenants/:id] プランは変更したが請求構成が追随していない"
+          );
+        }
+      }
+      return res.json(
+        planBillingSync ? { ...result.rows[0], billing_sync: planBillingSync.status } : result.rows[0]
+      );
     } catch (err) {
       logger.warn("[PATCH /v1/admin/tenants/:id]", err);
       return res.status(500).json({ error: "更新に失敗しました" });

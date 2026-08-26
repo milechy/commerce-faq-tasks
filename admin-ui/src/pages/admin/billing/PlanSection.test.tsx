@@ -374,4 +374,92 @@ describe("PlanSection", () => {
       await waitFor(() => expect(onChanged).toHaveBeenCalledWith("enterprise"));
     });
   });
+
+  // UX-A(2026-08-26): プラン変更自体は成功しても、Stripe側のsubscription item
+  // 追随(syncSubscriptionForTenant)が失敗すると請求が1円も動かない。
+  // 「✅ 変更しました」の成功トーストに混ぜず、消えない案内として残ることを固定する
+  // (CLAUDE.md 禁止20: 別の状態を同じ表示に潰さない)。
+  describe("billing_sync の可視化", () => {
+    it("no_subscription のときは支払い設定の案内とボタンを出す", async () => {
+      (authFetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ok: true,
+        json: async () => ({ plan: "growth", billing_sync: "no_subscription" }),
+      });
+      const { onChanged } = renderSection("starter");
+      fireEvent.click(screen.getByRole("button", { name: /Growth/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Growth に変更する/ }));
+
+      await waitFor(() => expect(onChanged).toHaveBeenCalledWith("growth"));
+      expect(screen.getByText(/お支払い設定の確認が必要です/)).toBeTruthy();
+      expect(screen.getByRole("button", { name: "お支払い設定へ進む" })).toBeTruthy();
+    });
+
+    // price_not_configured 等は env未設定やStripe障害など運用側の問題で、
+    // テナントが押しても解決しない。ボタンは出さず案内だけにする。
+    it("no_subscription 以外の needs-attention ステータスではボタンを出さない", async () => {
+      (authFetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ok: true,
+        json: async () => ({ plan: "growth", billing_sync: "price_not_configured" }),
+      });
+      const { onChanged } = renderSection("starter");
+      fireEvent.click(screen.getByRole("button", { name: /Growth/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Growth に変更する/ }));
+
+      await waitFor(() => expect(onChanged).toHaveBeenCalledWith("growth"));
+      expect(screen.getByText(/お支払い設定の確認が必要です/)).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "お支払い設定へ進む" })).toBeNull();
+    });
+
+    it("billing_sync が synced/no_change のときは案内を出さない", async () => {
+      (authFetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ok: true,
+        json: async () => ({ plan: "growth", billing_sync: "synced" }),
+      });
+      const { onChanged } = renderSection("starter");
+      fireEvent.click(screen.getByRole("button", { name: /Growth/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Growth に変更する/ }));
+
+      await waitFor(() => expect(onChanged).toHaveBeenCalledWith("growth"));
+      expect(screen.queryByText(/お支払い設定の確認が必要です/)).toBeNull();
+    });
+
+    it("「お支払い設定へ進む」を押すとCheckoutセッションを作成し、返ってきたURLへ遷移する", async () => {
+      (authFetch as unknown as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ plan: "growth", billing_sync: "no_subscription" }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ url: "https://checkout.stripe.com/cs_test_1" }) });
+
+      const originalLocation = window.location;
+      // jsdom の location は代入不可なので defineProperty で差し替える
+      Object.defineProperty(window, "location", { value: { href: "" }, writable: true });
+
+      renderSection("starter");
+      fireEvent.click(screen.getByRole("button", { name: /Growth/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Growth に変更する/ }));
+      await waitFor(() => expect(screen.getByRole("button", { name: "お支払い設定へ進む" })).toBeTruthy());
+
+      fireEvent.click(screen.getByRole("button", { name: "お支払い設定へ進む" }));
+
+      await waitFor(() => expect(window.location.href).toBe("https://checkout.stripe.com/cs_test_1"));
+      const [url, init] = (authFetch as unknown as ReturnType<typeof vi.fn>).mock.calls[1];
+      expect(url).toContain("/v1/admin/my-tenant/billing/checkout-session");
+      expect(init.method).toBe("POST");
+
+      Object.defineProperty(window, "location", { value: originalLocation, writable: true });
+    });
+
+    it("Checkoutセッション作成が失敗したらエラーを表示し、遷移しない", async () => {
+      (authFetch as unknown as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ plan: "growth", billing_sync: "no_subscription" }) })
+        .mockResolvedValueOnce({ ok: false, json: async () => ({ message: "Checkoutセッションの作成に失敗しました" }) });
+
+      renderSection("starter");
+      fireEvent.click(screen.getByRole("button", { name: /Growth/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Growth に変更する/ }));
+      await waitFor(() => expect(screen.getByRole("button", { name: "お支払い設定へ進む" })).toBeTruthy());
+
+      fireEvent.click(screen.getByRole("button", { name: "お支払い設定へ進む" }));
+
+      await waitFor(() => expect(screen.getByText("Checkoutセッションの作成に失敗しました")).toBeTruthy());
+    });
+  });
 });
