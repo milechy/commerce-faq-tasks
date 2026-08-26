@@ -149,6 +149,7 @@ VITE_SUPABASE_ANON_KEY=YOUR_ANON_KEY
 | `src/migrations/phase75_tuning_rules_unique.sql` | 重複ルールの削除 + `UNIQUE(tenant_id, trigger_pattern)` 追加。同上（`evaluationAnalyzer` がコメントで謳っていた一意性がDB側に無かった）。**★migration → デプロイの順** | ⬜ 未適用 |
 | `src/api/admin/knowledge/migration_drop_es_doc_id.sql` | ナレッジ配線是正P4: faq_docs.es_doc_id(常にNULLで一度も埋まらない死列)を削除。コード側の参照は先行PRで除去済み。**適用前に `SELECT COUNT(*) FROM faq_docs WHERE es_doc_id IS NOT NULL;` で0件確認** | ⬜ 未適用 |
 | `src/api/admin/knowledge/migration_drop_is_global.sql` | ナレッジ配線是正P19: faq_docs.is_global(読み手も書き手も無い死列。実際のグローバル知識は`tenant_id='global'/'r2c_docs'`)を削除。コード側の参照は本PRで除去済み。**適用前に `SELECT COUNT(*) FROM faq_docs WHERE is_global = true;` で意図しない使用が無いことを確認** | ⬜ 未適用 |
+| `src/lib/billing/migration_usage_logs_session_id.sql` | 会話単位の課金: `usage_logs.session_id` 追加(nullable)。**★migration → デプロイの順。逆順は請求バッチが全滅する**(`computeExpectedBilling` の集計SQLが `session_id` を参照するため、未適用のまま配備すると 42703 で `reportUsageToStripe` が例外を投げ、Stripe送信が一切走らなくなる。`usageTracker` 側は 42703 フォールバックで記録だけは残るが、倍率の焼き付けと会話の紐付けは失われる) | ⬜ 未適用 |
 
 ### Phase A Day 2 migration 実行手順
 

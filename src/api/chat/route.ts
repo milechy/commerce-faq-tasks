@@ -506,9 +506,13 @@ export function createChatHandler(logger: Logger) {
           : []),
       ];
 
+      // sessionId を渡すのは請求単位のため。テキストは「会話」で数えるので
+      // （.claude/rules/billing.md §7 / CLAUDE.md 禁止56）、同一会話の複数リクエストが
+      // 1単位にまとまる。これを外すと会話が長いほど請求が増える旧挙動に戻る。
       trackUsage({
         tenantId,
         requestId,
+        sessionId,
         model: CHAT_LLM_MODEL,
         inputTokens,
         outputTokens,

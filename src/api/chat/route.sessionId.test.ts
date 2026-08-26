@@ -20,7 +20,10 @@ jest.mock("../admin/knowledge/knowledgeGapRepository", () => ({
   saveKnowledgeGap: jest.fn().mockResolvedValue(undefined),
 }));
 
-jest.mock("../../lib/billing/usageTracker", () => ({ trackUsage: jest.fn() }));
+const mockTrackUsage = jest.fn();
+jest.mock("../../lib/billing/usageTracker", () => ({
+  trackUsage: (...args: unknown[]) => mockTrackUsage(...args),
+}));
 jest.mock("../../lib/sentiment/client", () => ({
   analyzeSentiment: jest.fn().mockResolvedValue(null),
 }));
@@ -55,6 +58,11 @@ function savedSessionIds(): string[] {
   return mockSaveMessage.mock.calls.map((c) => c[0].sessionId);
 }
 
+/** trackUsage に渡された sessionId。請求の会話単位はこれに由来する。 */
+function trackedSessionId(): unknown {
+  return mockTrackUsage.mock.calls[0]?.[0]?.sessionId;
+}
+
 /** runDialogTurn に渡された sessionId。variant の stickyKey はこれに由来する。 */
 function dialogSessionId(): unknown {
   return mockRunDialogTurn.mock.calls[0]?.[0]?.sessionId;
@@ -64,6 +72,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 beforeEach(() => {
   mockSaveMessage.mockClear();
+  mockTrackUsage.mockClear();
   mockRunDialogTurn.mockReset().mockResolvedValue({
     sessionId: "sess-1",
     answer: "ご質問ありがとうございます。",
@@ -174,6 +183,39 @@ describe("POST /api/chat — sessionId の確定", () => {
     const ids = savedSessionIds();
     expect(ids.length).toBeGreaterThanOrEqual(2); // user + assistant
     expect(new Set(ids).size).toBe(1);
+  });
+
+  // ★CLAUDE.md 禁止56: テキストを「リクエスト」で課金しない★
+  // sessionId を trackUsage に渡さないと usage_logs.session_id が NULL になり、
+  // stripeSync 側が会話を復元できず 1行=1単位(リクエスト単位)にフォールバックする。
+  // 型は optional なので、渡し忘れても typecheck も lint も通る。
+  it("請求のため trackUsage に sessionId を渡す(会話単位で数えられるように)", async () => {
+    await request(makeApp())
+      .post("/api/chat")
+      .send({ message: "こんにちは", sessionId: "client-session-abc" });
+
+    expect(mockTrackUsage).toHaveBeenCalledTimes(1);
+    expect(trackedSessionId()).toBe("client-session-abc");
+    expect(mockTrackUsage.mock.calls[0][0].featureUsed).toBe("chat");
+  });
+
+  it("trackUsage に渡る sessionId は保存・対話に使うものと同一(会話が2つに割れない)", async () => {
+    // ここがズレると、同じ会話が chat_sessions と usage_logs で別IDになり、
+    // message_count >= 2 の突合が外れて課金対象から静かに落ちる。
+    await request(makeApp()).post("/api/chat").send({ message: "こんにちは" });
+
+    const saved = savedSessionIds();
+    expect(saved.length).toBeGreaterThan(0);
+    expect(trackedSessionId()).toBe(saved[0]);
+    expect(trackedSessionId()).toBe(dialogSessionId());
+  });
+
+  it("空 sessionId でも trackUsage には生成後のIDが渡る(NULL 記録に落ちない)", async () => {
+    await request(makeApp())
+      .post("/api/chat")
+      .send({ message: "こんにちは", sessionId: "   " });
+
+    expect(trackedSessionId()).toMatch(UUID_RE);
   });
 
   it("128文字ちょうどの sessionId は許容される(境界)", async () => {
