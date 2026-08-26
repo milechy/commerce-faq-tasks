@@ -31,11 +31,84 @@ const CHAT_LLM_MODEL = process.env.LLM_CHAT_MODEL ?? GPT_OSS_120B;
 // free_ad プランの月次上限判定（Asana 1217759064329998 item(7)）
 // ---------------------------------------------------------------------------
 
+/** SQLクエリを最低限受け付けられればよい({@link getPool} の戻り値も満たす)。 */
+interface QueryablePool {
+  query<T = any>(sql: string, params?: unknown[]): Promise<{ rows: T[] }>;
+}
+
 /**
- * free_ad プランのテナントに限り、当月の usage_logs(feature_used='chat') 件数が
- * 上限に達しているかを判定する。free_ad 以外のプランは常に false（既存動作は
- * 一切変えない）。上限・月次境界の計算自体は src/lib/billing/planQuota.ts の
- * 純関数に委ね、ここでは DB 集計のみを行う。
+ * 指定テナント・期間の「会話数」を数える(free_adの月次上限判定の集計本体)。
+ *
+ * ★UX-D(2026-08-26): 数え方を「usage_logsの行数(リクエスト数)」から「会話数」へ★
+ * #1012 で課金単位を会話(chat_sessions単位)に変えた際、free_adの月次上限だけが
+ * リクエスト単位のまま取り残されていた。実測(90日)では message_count の中央値・p90
+ * とも2(=1往復)なので、200リクエストは実質100会話前後で止まっていた——LP/UIの
+ * 「月200会話まで」という表記より不利な挙動になっていた。
+ *
+ * 「会話」の定義は stripeSync.ts の computeExpectedBilling(conversation_units)と
+ * 揃える(session_idごとにDISTINCT、chat_sessions.message_count>=2、対応する
+ * chat_sessions行が無ければ課金側と同じくfail-safeで数える)。集計本体を共有関数に
+ * 切り出さず個別のSQLに留めているのは、computeExpectedBilling が実収益(Stripe送信)
+ * の唯一の出どころであり、この無料枠ガード(可用性のソフトな足切り)のために
+ * そちらのSQLへ手を入れるリスクを負いたくないため——両者が完全に一致しなくても、
+ * このガードはもともと安全側の近似でよい設計(下記 isFreeAdQuotaExceededForTenant
+ * のコメント参照)。
+ *
+ * ★exportしている理由★ billingSqlIntegration.test.ts が実Postgresに対して
+ * このSQL自体(JOIN・DISTINCT ON・message_count条件)を検証できるようにするため。
+ * モックDBのテストは「返ってきた数値」しか固定できず、SQLの意味論(このクエリ特有の
+ * JOIN条件やDISTINCT ONの挙動)は実行してみないと壊れていても気づけない。
+ */
+export async function countFreeAdBillableConversations(
+  pool: QueryablePool,
+  tenantId: string,
+  monthStart: Date,
+  monthEnd: Date,
+): Promise<number> {
+  const result = await pool.query<{ count: string }>(
+    `WITH conversation_units AS (
+       -- computeExpectedBilling(stripeSync.ts)のconversation_unitsと同じ判定:
+       -- 対応する chat_sessions 行が無い(削除済み・記録漏れ)場合は「1往復未満と
+       -- 確認できなかった」として会話に数える(billable方向のfail-safeと同じ向き)。
+       SELECT DISTINCT ON (ul.session_id) ul.session_id
+         FROM usage_logs ul
+         LEFT JOIN chat_sessions cs
+                ON cs.tenant_id = ul.tenant_id
+               AND cs.session_id = ul.session_id
+        WHERE ul.tenant_id = $1
+          AND ul.feature_used = 'chat'
+          AND ul.billable = true
+          AND ul.created_at >= $2
+          AND ul.created_at <  $3
+          AND ul.session_id IS NOT NULL
+          AND (cs.session_id IS NULL OR cs.message_count >= 2)
+     ),
+     legacy_rows_without_session AS (
+       -- migration適用前・配線漏れ等でsession_idが無い既存行を1行=1単位として
+       -- 黙って請求(この場合は無料枠)から落とさない(computeExpectedBillingの
+       -- row_unitsフォールバックと同じ扱い)。
+       SELECT request_id
+         FROM usage_logs
+        WHERE tenant_id = $1
+          AND feature_used = 'chat'
+          AND billable = true
+          AND created_at >= $2
+          AND created_at <  $3
+          AND session_id IS NULL
+     )
+     SELECT (
+       (SELECT COUNT(*) FROM conversation_units) +
+       (SELECT COUNT(*) FROM legacy_rows_without_session)
+     )::text AS count`,
+    [tenantId, monthStart, monthEnd],
+  );
+  return Number(result.rows[0]?.count ?? 0);
+}
+
+/**
+ * free_ad プランのテナントに限り、当月の**会話数**が上限に達しているかを判定する。
+ * free_ad 以外のプランは常に false（既存動作は一切変えない）。上限・月次境界の
+ * 計算自体は src/lib/billing/planQuota.ts の純関数に委ね、ここでは DB 集計のみを行う。
  *
  * fail-open: plan取得・集計クエリのいずれかが失敗した場合は false（ブロックしない）
  * を返す。エンタイトルメント判定(機能を隠す側)は最も制限の強い方へ倒すのが
@@ -65,17 +138,10 @@ async function isFreeAdQuotaExceededForTenant(
 
     const { monthStart, monthEnd } = getMonthRangeJst(now);
     const pool = getPool();
-    const result = await pool.query<{ count: string }>(
-      `SELECT COUNT(*)::text AS count
-         FROM usage_logs
-        WHERE tenant_id = $1
-          AND feature_used = 'chat'
-          AND created_at >= $2
-          AND created_at <  $3`,
-      [tenantId, monthStart, monthEnd],
+    const currentMonthConversationCount = await countFreeAdBillableConversations(
+      pool, tenantId, monthStart, monthEnd,
     );
-    const currentMonthRequestCount = Number(result.rows[0]?.count ?? 0);
-    return isFreeAdMonthlyQuotaExceeded(currentMonthRequestCount);
+    return isFreeAdMonthlyQuotaExceeded(currentMonthConversationCount);
   } catch (err) {
     logger.warn({ tenantId, err }, "chat.request.free_ad_quota_check_failed");
     return false;

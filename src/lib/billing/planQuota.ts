@@ -8,17 +8,27 @@
 // 純粋関数として切り出す。呼び出し元は src/api/chat/route.ts（createChatHandler）で、
 // このファイル自体は DB に触れない。
 //
-// 単位は「usage_logs の行数(= /api/chat 1回のリクエスト)」。Asana 1217759064329998
-// item(7)の指示どおり既存 usage_logs の集計から出し、新しいDB列・新しい集計対象
-// (chat_sessions の distinct 数など)を作らない。1会話あたり平均5ターンという
-// costCalculator.ts の原価モデル（1会話(5ターン)約0.55円）を踏まえると、上限200は
-// 「約200会話分のリクエスト」を安全側(実際の会話数換算では下回る方向)に見積もった
-// 値になる——1セッションが200ターンを超える極端な単一会話がある場合、その月の
-// 残り新規会話が止まる可能性はあるが、原価上限(月あたり最大 200 × 約0.11円
-// ≈ 22円/テナント)を超えることはなく、R2C負担としては安全側に倒れている。
+// 単位は「会話(chat_sessionsの1セッション、message_count>=2)」。
+//
+// ★UX-D(2026-08-26)で単位をリクエスト数から会話数へ修正した★
+// 導入時(Asana 1217759064329998 item(7))は「usage_logsの行数(=リクエスト数)」を
+// 単位にしていた。当時は「1会話≒5ターン」という原価モデル(costCalculator.ts、
+// 1会話(5ターン)約0.55円)を根拠に、200リクエストを「約200会話分」として安全側に
+// 見積もったつもりだった。しかし #1012 で課金単位を会話に切り替えた際に実測した
+// ところ、message_count の中央値・p90 とも 2(=1往復)で、この「1会話≒5ターン」の
+// 前提自体が誤りだったと判明した(.claude/rules/billing.md §7)。結果、当時の
+// 「200リクエスト」は実質 100 会話前後で新規会話を止めていた——LP/UIの
+// 「月200会話まで」という表記より不利な挙動になっていた。
+//
+// 是正後の原価上限: 実測 ¥0.11/会話 なので、月200会話 × ¥0.11 ≈ ¥22/テナント。
+// R2C負担として引き続き十分小さい(是正前と同じ結論だが、根拠の数字を実測値に
+// 差し替えた)。集計本体(会話の判定ロジック)は src/api/chat/route.ts の
+// isFreeAdQuotaExceededForTenant にあり、computeExpectedBilling(stripeSync.ts)の
+// conversation_units と同じ判定(session_idごとにDISTINCT、message_count>=2)を
+// 使う。このファイル自体は依然としてDBに触れない(数値比較の純関数のみ)。
 import { JST_OFFSET_MS, shiftToJstWallClock } from "../date/jstOffset";
 
-export const FREE_AD_MONTHLY_REQUEST_LIMIT = 200;
+export const FREE_AD_MONTHLY_CONVERSATION_LIMIT = 200;
 
 export interface MonthRangeJst {
   /** 当月の開始（1日 00:00:00 JST）をUTC Dateで表したもの */
@@ -64,22 +74,23 @@ export function getMonthRangeJst(now: Date): MonthRangeJst {
 }
 
 /**
- * 当月の既存リクエスト数（このリクエストを記録する「前」の usage_logs 件数）が
- * 上限に達しているかを判定する。
+ * 当月の既存会話数（このリクエストを記録する「前」の会話数）が上限に達しているかを
+ * 判定する。会話の定義・集計方法は呼び出し元(src/api/chat/route.ts)が担う——
+ * このファイルは数値比較のみの純関数。
  *
- * @throws currentMonthRequestCount / limit が負の場合
+ * @throws currentMonthConversationCount / limit が負の場合
  */
 export function isFreeAdMonthlyQuotaExceeded(
-  currentMonthRequestCount: number,
-  limit: number = FREE_AD_MONTHLY_REQUEST_LIMIT,
+  currentMonthConversationCount: number,
+  limit: number = FREE_AD_MONTHLY_CONVERSATION_LIMIT,
 ): boolean {
-  if (currentMonthRequestCount < 0) {
-    throw new Error(`Invalid currentMonthRequestCount: ${currentMonthRequestCount}`);
+  if (currentMonthConversationCount < 0) {
+    throw new Error(`Invalid currentMonthConversationCount: ${currentMonthConversationCount}`);
   }
   if (limit < 0) {
     throw new Error(`Invalid limit: ${limit}`);
   }
-  return currentMonthRequestCount >= limit;
+  return currentMonthConversationCount >= limit;
 }
 
 // ---------------------------------------------------------------------------
