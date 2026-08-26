@@ -30,6 +30,24 @@ import { JST_OFFSET_MS, shiftToJstWallClock } from "../date/jstOffset";
 
 export const FREE_AD_MONTHLY_CONVERSATION_LIMIT = 200;
 
+// ---------------------------------------------------------------------------
+// P0-4バックストップ(2026-08-26 レビュー): 生リクエスト数の絶対上限。
+//
+// sessionId はクライアントが完全に制御できる値(Phase38、src/api/chat/route.ts
+// の `body.sessionId?.trim() || body.conversationId || randomUUID()`)。
+// 上の会話数ベースの上限(FREE_AD_MONTHLY_CONVERSATION_LIMIT)は
+// chat_sessions.message_count>=2 の session のみを「会話」として数えるため、
+// 常に新規のランダムsessionId + 単発メッセージを送り続けるクライアントは、
+// 実際にはLLM呼び出しのコストを発生させ続けながら conversation_units に
+// 一切乗らず、会話ベースの上限を無期限にすり抜けられる(本筋の対応=
+// session_idのサーバー側発行は別タスクとして先送り中)。
+//
+// この上限は、session_id によるグルーピングを一切信用しない生の
+// usage_logs行数に対する絶対的な安全弁。会話ベースの上限(200)より十分
+// 大きく取り、正規の多ターン利用(1会話あたり数メッセージ)を誤って
+// 止めないようにしつつ、上記の無期限すり抜けにだけ有限の天井を課す。
+export const FREE_AD_MONTHLY_REQUEST_LIMIT = 1000;
+
 export interface MonthRangeJst {
   /** 当月の開始（1日 00:00:00 JST）をUTC Dateで表したもの */
   monthStart: Date;

@@ -24,7 +24,7 @@
 import { Pool } from "pg";
 import { computeExpectedBilling } from "./stripeSync";
 import { findMissingColumns, REQUIRED_COLUMNS } from "../../api/admin/analytics/schemaHealth";
-import { countFreeAdBillableConversations } from "../../api/chat/route";
+import { countFreeAdBillableConversations, countFreeAdBillableRequests } from "../../api/chat/route";
 
 const DB_URL = process.env.BILLING_SQL_TEST_DATABASE_URL;
 
@@ -756,6 +756,107 @@ d("countFreeAdBillableConversations（実 Postgres に対する free_ad 会話�
   it("利用が無い月は0を返し、例外を投げない", async () => {
     const count = await countFreeAdBillableConversations(db, "t1", ...RANGE);
     expect(count).toBe(0);
+  });
+});
+
+// P0-4バックストップ(2026-08-26レビュー): countFreeAdBillableConversationsが
+// session_id・message_countでグルーピングするのに対し、こちらはsession_idを
+// 一切信用しない生のusage_logs行数(=生リクエスト数)を数える。「常に新規の
+// ランダムsession_id+単発メッセージ」という会話ベースの上限をすり抜ける
+// パターンでも、このクエリでは1行=1件として素直に積み上がることを実DBで固定する。
+d("countFreeAdBillableRequests（実 Postgres に対する P0-4 生リクエスト数バックストップ集計）", () => {
+  let db: Pool;
+
+  beforeAll(() => {
+    db = new Pool({ connectionString: DB_URL, options: "-c timezone=UTC" });
+  });
+
+  afterAll(async () => {
+    await db.end();
+  });
+
+  beforeEach(async () => {
+    await db.query(
+      "TRUNCATE usage_logs, stripe_usage_reports, stripe_subscriptions, chat_sessions RESTART IDENTITY CASCADE"
+    );
+    await db.query("TRUNCATE tenants CASCADE");
+    await db.query(
+      `INSERT INTO tenants (id, name, plan) VALUES ('t1', 't1', 'free_ad'), ('other', 'other', 'free_ad')`
+    );
+  });
+
+  const RANGE = ["2026-03-01T00:00:00Z", "2026-04-01T00:00:00Z"].map((s) => new Date(s)) as [Date, Date];
+
+  it("常に新規のsession_id+単発メッセージ(message_count=1)でも、会話数集計とは異なり1行=1件として数える", async () => {
+    await db.query(`
+      INSERT INTO chat_sessions (tenant_id, session_id, message_count)
+        VALUES ('t1','s1',1), ('t1','s2',1), ('t1','s3',1);
+      INSERT INTO usage_logs (tenant_id, request_id, feature_used, session_id, created_at) VALUES
+        ('t1','r1','chat','s1','2026-03-05'),
+        ('t1','r2','chat','s2','2026-03-06'),
+        ('t1','r3','chat','s3','2026-03-07');
+    `);
+    // countFreeAdBillableConversationsなら message_count=1 は3件とも0件扱いだが、
+    // こちらは会話グルーピングを一切見ないため3件になる(=バックストップが機能する)。
+    const conversationCount = await countFreeAdBillableConversations(db, "t1", ...RANGE);
+    const requestCount = await countFreeAdBillableRequests(db, "t1", ...RANGE);
+    expect(conversationCount).toBe(0);
+    expect(requestCount).toBe(3);
+  });
+
+  it("1つの会話に複数メッセージがあれば、その行数分をそのまま数える(会話単位にまとめない)", async () => {
+    await db.query(`
+      INSERT INTO chat_sessions (tenant_id, session_id, message_count) VALUES ('t1','s1',6);
+      INSERT INTO usage_logs (tenant_id, request_id, feature_used, session_id, created_at)
+      SELECT 't1', 'r'||g, 'chat', 's1', '2026-03-05'::timestamptz FROM generate_series(1,6) g;
+    `);
+    const requestCount = await countFreeAdBillableRequests(db, "t1", ...RANGE);
+    expect(requestCount).toBe(6); // countFreeAdBillableConversationsなら1件
+  });
+
+  it("billable=false の行は数えない", async () => {
+    await db.query(`
+      INSERT INTO usage_logs (tenant_id, request_id, feature_used, billable, created_at)
+      VALUES ('t1','r1','chat', false, '2026-03-05');
+    `);
+    const requestCount = await countFreeAdBillableRequests(db, "t1", ...RANGE);
+    expect(requestCount).toBe(0);
+  });
+
+  it("chat以外(avatar等)の行は数えない", async () => {
+    await db.query(`
+      INSERT INTO usage_logs (tenant_id, request_id, feature_used, avatar_session_ms, created_at)
+      VALUES ('t1','a1','avatar', 60000, '2026-03-05');
+    `);
+    const requestCount = await countFreeAdBillableRequests(db, "t1", ...RANGE);
+    expect(requestCount).toBe(0);
+  });
+
+  it("他テナントの行は数えない(テナント境界)", async () => {
+    await db.query(`
+      INSERT INTO usage_logs (tenant_id, request_id, feature_used, created_at)
+      VALUES ('other','r1','chat','2026-03-05');
+    `);
+    const requestCount = await countFreeAdBillableRequests(db, "t1", ...RANGE);
+    expect(requestCount).toBe(0);
+  });
+
+  it("期間の境界は半開区間(月またぎを二重計上・取りこぼししない)", async () => {
+    await db.query(`
+      INSERT INTO usage_logs (tenant_id, request_id, feature_used, created_at)
+      VALUES
+        ('t1','before','chat', '2026-02-28 23:59:59+00'),
+        ('t1','start','chat', '2026-03-01 00:00:00+00'),
+        ('t1','end','chat', '2026-03-31 23:59:59+00'),
+        ('t1','after','chat', '2026-04-01 00:00:00+00');
+    `);
+    const requestCount = await countFreeAdBillableRequests(db, "t1", ...RANGE);
+    expect(requestCount).toBe(2); // start・end のみ
+  });
+
+  it("利用が無い月は0を返し、例外を投げない", async () => {
+    const requestCount = await countFreeAdBillableRequests(db, "t1", ...RANGE);
+    expect(requestCount).toBe(0);
   });
 });
 
