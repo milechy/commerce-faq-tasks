@@ -3,7 +3,7 @@
 
 import express from "express";
 import request from "supertest";
-import { registerBillingAdminRoutes, _resetMeteredPriceCacheForTest } from "../../src/lib/billing/billingApi";
+import { registerBillingAdminRoutes, _resetPriceCacheForTest } from "../../src/lib/billing/billingApi";
 
 // Stripe をモック
 // PR-7: customers.create / subscriptions.create をテストごとに差し替えられるよう
@@ -36,7 +36,9 @@ jest.mock("stripe", () => {
 
 beforeEach(() => {
   // モジュールスコープの価格キャッシュ(billingApi.ts)がテスト間で漏れないようにする。
-  _resetMeteredPriceCacheForTest();
+  // UX-B(2026-08-26)でキャッシュが単一値からprice ID別Mapに変わり、関数名も
+  // _resetPriceCacheForTest にリネームされた(computeBillingEstimateJpyの書き換え)。
+  _resetPriceCacheForTest();
 });
 
 // ── テスト用 Express アプリ生成 ───────────────────────────────────────────
@@ -167,27 +169,37 @@ describe("GET /v1/admin/billing/usage", () => {
 // ─── GET /v1/admin/billing/usage — billing_estimate_jpy (PR-5) ─────────────
 // 2026-08-25収益監査: 「今月の請求額」が原価×マージン(USD)を無変換で¥表示していた
 // (禁止48違反)のを、Stripe実単価×billedQuantityの見積りに置き換えた。
-describe("GET /v1/admin/billing/usage — billing_estimate_jpy(PR-5)", () => {
+//
+// UX-B(2026-08-26)で computeBillingEstimateJpy 自体を書き換えた: 単一の
+// STRIPE_METERED_PRICE_ID(全プラン共通)× billedQuantity(倍率込み)という旧式は
+// #1015(Standard/Growthを「基本料+込み枠+超過」に変更)後は倍率の二重適用に
+// なっていたため、getSubscriptionItemPrices(planPricing.ts)を唯一の出どころに
+// した新式へ置き換えた。以下のテストはstarterプラン(基本料も込み枠も無い純従量
+// = 会話数×単価のみ)を使い、旧テストの「15件×500円=7500円」という検証意図は
+// そのまま保ちつつ、新式の入力(textUnits・STRIPE_PRICE_STARTER_TEXT)に合わせて
+// 書き直した。standard/growthの基本料+込み枠超過の計算式そのものは
+// src/lib/billing/billingApi.estimate.test.ts が直接(HTTP層を介さず)網羅する。
+describe("GET /v1/admin/billing/usage — billing_estimate_jpy(PR-5, UX-B)", () => {
   const ORIG_ENV = process.env;
 
   beforeEach(() => {
-    process.env = { ...ORIG_ENV, STRIPE_SECRET_KEY: "sk_test_dummy", STRIPE_METERED_PRICE_ID: "price_dummy" };
+    process.env = { ...ORIG_ENV, STRIPE_SECRET_KEY: "sk_test_dummy", STRIPE_PRICE_STARTER_TEXT: "price_starter_text" };
     mockPricesRetrieve.mockClear();
   });
   afterEach(() => {
     process.env = ORIG_ENV;
   });
 
-  test("8: per_unit価格が取得できればbilledQuantity×単価の見積りを返す", async () => {
+  test("8: per_unit価格が取得できれば会話数×単価の見積りを返す(starter=純従量)", async () => {
     mockPricesRetrieve.mockResolvedValueOnce({ billing_scheme: "per_unit", unit_amount: 500 });
     const { app } = makeApp({
       role: "client_admin",
       tenantId: "tenant-a",
       dbCallbacks: {
-        "from tenants": [{ plan: "growth" }],
+        "from tenants": [{ plan: "starter" }],
         "billed_units_weighted": [{
           total_requests: 10, total_cost_cents: 100, billable_units: 10,
-          billed_units_weighted: "15", unstamped_rows: 0,
+          billed_units_weighted: "15", unstamped_rows: 0, text_units: 15, avatar_minutes: 0,
         }],
       },
     });
@@ -196,7 +208,8 @@ describe("GET /v1/admin/billing/usage — billing_estimate_jpy(PR-5)", () => {
       .get("/v1/admin/billing/usage?from=2026-04-01&to=2026-05-01")
       .expect(200);
 
-    // billedQuantity=15(切り上げ済み) × 単価500円 = 7500円
+    // 会話数15件 × 単価500円 = 7500円(倍率を掛けない。旧billedQuantity=15とは
+    // 別の理由で同じ数字になっているだけなので混同しないこと)
     expect(res.body.billing_estimate_jpy).toBe(7500);
   });
 
@@ -218,10 +231,10 @@ describe("GET /v1/admin/billing/usage — billing_estimate_jpy(PR-5)", () => {
       role: "client_admin",
       tenantId: "tenant-a",
       dbCallbacks: {
-        "from tenants": [{ plan: "growth" }],
+        "from tenants": [{ plan: "starter" }],
         "billed_units_weighted": [{
           total_requests: 10, total_cost_cents: 100, billable_units: 10,
-          billed_units_weighted: "15", unstamped_rows: 0,
+          billed_units_weighted: "15", unstamped_rows: 0, text_units: 15, avatar_minutes: 0,
         }],
       },
     });
@@ -248,10 +261,10 @@ describe("GET /v1/admin/billing/usage — billing_estimate_jpy(PR-5)", () => {
       role: "client_admin",
       tenantId: "tenant-a",
       dbCallbacks: {
-        "from tenants": [{ plan: "growth" }],
+        "from tenants": [{ plan: "starter" }],
         "billed_units_weighted": [{
           total_requests: 10, total_cost_cents: 100, billable_units: 10,
-          billed_units_weighted: "1", unstamped_rows: 0,
+          billed_units_weighted: "1", unstamped_rows: 0, text_units: 1, avatar_minutes: 0,
         }],
       },
     });
@@ -260,6 +273,43 @@ describe("GET /v1/admin/billing/usage — billing_estimate_jpy(PR-5)", () => {
     await request(app).get("/v1/admin/billing/usage?from=2026-04-01&to=2026-05-01").expect(200);
 
     expect(mockPricesRetrieve).toHaveBeenCalledTimes(1);
+  });
+
+  // ★UX-Bで新規に生まれた分岐: standard/growthの基本料+込み枠超過★
+  // starter系(#8-12)は単一price呼び出しで完結するが、standard/growthは
+  // 基本料・テキスト超過・アバター超過の3価格を同時に見る。HTTP層を介しても
+  // 3価格が正しく合成されることをここで固定する(内訳の単体テストは
+  // billingApi.estimate.test.ts が既に網羅済みなので、ここでは配線の確認に絞る)。
+  test("13: standardは基本料+込み枠超過(テキスト・アバター)の3価格を合成した見積りを返す", async () => {
+    process.env.STRIPE_PRICE_STANDARD_BASE_MONTHLY = "price_std_base";
+    process.env.STRIPE_PRICE_STANDARD_TEXT_OVERAGE = "price_std_text";
+    process.env.STRIPE_PRICE_STANDARD_AVATAR_OVERAGE = "price_std_avatar";
+    mockPricesRetrieve
+      .mockResolvedValueOnce({ billing_scheme: "per_unit", unit_amount: 9800 })  // 基本料
+      .mockResolvedValueOnce({ billing_scheme: "per_unit", unit_amount: 25 })    // テキスト超過
+      .mockResolvedValueOnce({ billing_scheme: "per_unit", unit_amount: 100 });  // アバター超過
+    const { app } = makeApp({
+      role: "client_admin",
+      tenantId: "tenant-a",
+      dbCallbacks: {
+        "from tenants": [{ plan: "standard" }],
+        // 込み枠(1,000会話/30分)を text_units=1200・avatar_minutes=45 で超過させる
+        "billed_units_weighted": [{
+          total_requests: 10, total_cost_cents: 100, billable_units: 10,
+          billed_units_weighted: "0", unstamped_rows: 0, text_units: 1200, avatar_minutes: 45,
+        }],
+      },
+    });
+
+    const res = await request(app)
+      .get("/v1/admin/billing/usage?from=2026-04-01&to=2026-05-01")
+      .expect(200);
+
+    // 9800 + (1200-1000)*25 + (45-30)*100 = 9800 + 5000 + 1500 = 16300
+    expect(res.body.billing_estimate_jpy).toBe(16300);
+    delete process.env.STRIPE_PRICE_STANDARD_BASE_MONTHLY;
+    delete process.env.STRIPE_PRICE_STANDARD_TEXT_OVERAGE;
+    delete process.env.STRIPE_PRICE_STANDARD_AVATAR_OVERAGE;
   });
 });
 

@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { roleAuthMiddleware, requireRole } from '../../api/middleware/roleAuth';
 import { computeExpectedBilling } from './stripeSync';
 import { getSubscriptionItemPrices, toSubscriptionItems } from './planPricing';
+import { computeQuotaOverage } from './planQuota';
 
 const usageQuerySchema = z.object({
   tenantId: z.string().min(1).optional(),
@@ -86,54 +87,68 @@ function getStripe(secretKey: string): any {
 
 // ---------------------------------------------------------------------------
 // PR-5(2026-08-25収益監査): 「今月の請求額」に、原価×MARGIN_MULTIPLIER(USDセント)を
-// 無変換で¥表示していた(禁止48違反 — 原価と請求額は別の数式で、実際にStripeへ
-// 請求されるのは billedQuantity(件数×プラン倍率) × Stripe price の実単価)。
-// ここでは実単価をキャッシュ付きで取得し、billedQuantity と掛けて「Stripeが
-// 実際に計算する金額と同じ数式」の見積りを返す。取得できない場合は0円ではなく
-// null(算出不可)を返す — 0円は「今月は無料」に読めてしまうため。
+// 無変換で¥表示していた(禁止48違反)。
+//
+// UX-B(2026-08-26): PR-5 の是正自体が #1015(Standard/Growth を「基本料+込み枠+超過」に
+// 変更)より前の実装のまま残っていた。旧実装は STRIPE_METERED_PRICE_ID という単一の
+// 従量price 1本を取得し、billedQuantity(= プラン倍率で重み付け済みの数量)に掛けていた。
+// #1015 で倍率は price 側(プランごとに分かれた Stripe price)に移ったため、この掛け算は
+// 二重適用(Standard +25% / Growth +50%)であり、しかも基本料(¥9,800/¥29,800)・
+// 込み枠・アバターの分単価を一切見ていなかった(禁止56)。
+// ここでは getSubscriptionItemPrices(planPricing.ts)を唯一の出どころとして、
+// プランごとに「基本料 + 込み枠を超えた分 × 実単価」を積む式に直す。
+// 取得できない場合は0円ではなく null(算出不可)を返す — 0円は「今月は無料」に
+// 読めてしまうため区別する(禁止20)。free_ad だけは実際に常に¥0(倍率0)なので
+// 0を返す(算出不可ではない)。
 // ---------------------------------------------------------------------------
 
-let meteredPriceCache: { unitAmountJpy: number | null; fetchedAt: number } | null = null;
-const METERED_PRICE_CACHE_TTL_MS = 15 * 60 * 1000;
+const priceUnitAmountCache = new Map<string, { unitAmountJpy: number | null; fetchedAt: number }>();
+const PRICE_CACHE_TTL_MS = 15 * 60 * 1000;
 
 /** テスト専用: モジュールスコープの価格キャッシュをリセットする。 */
-export function _resetMeteredPriceCacheForTest(): void {
-  meteredPriceCache = null;
+export function _resetPriceCacheForTest(): void {
+  priceUnitAmountCache.clear();
 }
 
-async function getMeteredUnitPriceJpy(stripe: any): Promise<number | null> {
+/**
+ * 1つの Stripe price の実単価(円)をキャッシュ付きで取得する。
+ *
+ * ★price ID ごとにキャッシュする★ Standard/Growth は基本料・テキスト超過・
+ * アバター超過の3本、異なる price を同時に見る必要があるため、旧実装のような
+ * モジュール全体で1個のキャッシュだと3本目を引いた瞬間に1本目が上書きされる。
+ */
+async function getPriceUnitAmountJpy(stripe: any, priceId: string): Promise<number | null> {
   const now = Date.now();
-  if (meteredPriceCache && now - meteredPriceCache.fetchedAt < METERED_PRICE_CACHE_TTL_MS) {
-    return meteredPriceCache.unitAmountJpy;
-  }
-  const priceId = process.env.STRIPE_METERED_PRICE_ID;
-  if (!priceId) {
-    meteredPriceCache = { unitAmountJpy: null, fetchedAt: now };
-    return null;
+  const cached = priceUnitAmountCache.get(priceId);
+  if (cached && now - cached.fetchedAt < PRICE_CACHE_TTL_MS) {
+    return cached.unitAmountJpy;
   }
   try {
     const price = await stripe.prices.retrieve(priceId);
-    // per_unit以外(段階制など)は「件数×単価」の単純計算が成立しないため、
+    // per_unit以外(段階制など)は「数量×単価」の単純計算が成立しないため、
     // 推測せず算出不可に倒す(誤った金額を出すより「出さない」方が禁止10に沿う)。
     const unitAmount =
       price.billing_scheme === 'per_unit' && typeof price.unit_amount === 'number'
         ? price.unit_amount
         : null;
-    meteredPriceCache = { unitAmountJpy: unitAmount, fetchedAt: now };
+    priceUnitAmountCache.set(priceId, { unitAmountJpy: unitAmount, fetchedAt: now });
     return unitAmount;
   } catch {
     // Stripe到達不可時はキャッシュを更新せず、今回だけ算出不可を返す(次回再試行)。
-    return meteredPriceCache?.unitAmountJpy ?? null;
+    return cached?.unitAmountJpy ?? null;
   }
 }
 
 /**
- * 指定テナント・期間について、Stripeが実際に計算する請求額と同じ数式
- * (billedQuantity × 実単価)で見積りを円で返す。以下のいずれかに該当する場合は
- * null(算出不可) — 0円を返すと「今月は無料」に読めてしまうため区別する。
- *   - STRIPE_SECRET_KEY / STRIPE_METERED_PRICE_ID が未設定
+ * 指定テナント・期間について、確定価格体系(.claude/rules/billing.md §7)どおりの
+ * 請求見積りを円で返す。以下のいずれかに該当する場合は null(算出不可) —
+ * 0円を返すと「今月は無料」に読めてしまうため区別する。
+ *   - STRIPE_SECRET_KEY が未設定
  *   - テナントが存在しない
+ *   - 該当プランの price 環境変数が未設定(getSubscriptionItemPrices が ok:false)
  *   - Stripe price が per_unit 以外(段階制等)
+ *   - enterprise(個別契約のため自動算出しない)
+ * free_ad は上記のどれにも該当せず、常に 0 を返す(倍率0で実際に無料のため)。
  */
 export async function computeBillingEstimateJpy(
   db: any,
@@ -146,14 +161,53 @@ export async function computeBillingEstimateJpy(
 
   const tenantResult = await db.query(`SELECT plan FROM tenants WHERE id = $1`, [tenantId]);
   if (tenantResult.rows.length === 0) return null;
-  const currentPlan = tenantResult.rows[0].plan as string | null;
+  const plan = tenantResult.rows[0].plan as string | null;
+
+  // free_ad は倍率0で請求が発生しない。算出不可(null)ではなく実額として0を返す。
+  if (plan === 'free_ad') return 0;
 
   const stripe = getStripe(stripeSecretKey);
-  const unitAmountJpy = await getMeteredUnitPriceJpy(stripe);
+
+  // textUnits/avatarMinutes は「倍率適用前・込み枠差し引き前」の生の数量。
+  // 込み枠の差し引きは生の数量に対して行う必要がある(computeQuotaOverage 参照)。
+  const { textUnits, avatarMinutes } = await computeExpectedBilling(db, tenantId, from, to, plan);
+
+  if (plan === 'standard' || plan === 'growth') {
+    const priceResult = getSubscriptionItemPrices(plan, 'monthly');
+    if (!priceResult.ok) return null;
+    const { base, text: textOveragePriceId, avatarOverage: avatarOveragePriceId } = priceResult.prices;
+    if (!base || !textOveragePriceId || !avatarOveragePriceId) return null;
+
+    const overage = computeQuotaOverage(plan, textUnits, avatarMinutes);
+    // standard/growth は必ず込み枠を持つ(PLAN_INCLUDED_QUOTASに定義済み)ので
+    // null になるのは設定不整合のみ。誤った金額を出すより算出不可を返す。
+    if (!overage) return null;
+
+    const [baseAmountJpy, textOverageUnitJpy, avatarOverageUnitJpy] = await Promise.all([
+      getPriceUnitAmountJpy(stripe, base),
+      getPriceUnitAmountJpy(stripe, textOveragePriceId),
+      getPriceUnitAmountJpy(stripe, avatarOveragePriceId),
+    ]);
+    if (baseAmountJpy === null || textOverageUnitJpy === null || avatarOverageUnitJpy === null) return null;
+
+    return (
+      baseAmountJpy +
+      overage.textConversations * textOverageUnitJpy +
+      overage.avatarMinutes * avatarOverageUnitJpy
+    );
+  }
+
+  // starter(および null/未知プランは starter として fail-safe — planMultiplier と
+  // 同じ「請求漏れを避ける」向き)は基本料も込み枠も無い純従量: 会話数 × 単価のみ。
+  // enterprise はここで getSubscriptionItemPrices が ok:false(plan_not_self_serve)を
+  // 返すため自然に null に落ちる(個別契約を自動算出しない、という既存方針どおり)。
+  const priceResult = getSubscriptionItemPrices(plan, 'monthly');
+  if (!priceResult.ok || !priceResult.prices.text) return null;
+
+  const unitAmountJpy = await getPriceUnitAmountJpy(stripe, priceResult.prices.text);
   if (unitAmountJpy === null) return null;
 
-  const { billedQuantity } = await computeExpectedBilling(db, tenantId, from, to, currentPlan);
-  return billedQuantity * unitAmountJpy;
+  return textUnits * unitAmountJpy;
 }
 
 // ---------------------------------------------------------------------------
