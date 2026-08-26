@@ -126,6 +126,19 @@ const envSchema = z.object({
   // PR-7(2026-08-25収益監査): テナントのStripeオンボーディング(POST /v1/admin/billing/onboard)で
   // 作成する metered Subscription の price ID。Stripe Dashboard で作成した従量課金price。
   STRIPE_METERED_PRICE_ID: z.string().optional(),
+  // 確定価格(.claude/rules/billing.md §7)の price ID 群。プランごとに単価が
+  // 異なる別々の price として実在するため、倍率(PLAN_MULTIPLIERS)は price 側に
+  // 織り込まれている。対応表は planPricing.ts の getSubscriptionItemPrices が唯一の出どころ。
+  // BASE_* は metered ではない定額(Stripeが毎期自動で請求する。usage record を送ってはいけない)。
+  STRIPE_PRICE_STARTER_TEXT: z.string().optional(),
+  STRIPE_PRICE_STANDARD_BASE_MONTHLY: z.string().optional(),
+  STRIPE_PRICE_STANDARD_BASE_ANNUAL: z.string().optional(),
+  STRIPE_PRICE_STANDARD_TEXT_OVERAGE: z.string().optional(),
+  STRIPE_PRICE_STANDARD_AVATAR_OVERAGE: z.string().optional(),
+  STRIPE_PRICE_GROWTH_BASE_MONTHLY: z.string().optional(),
+  STRIPE_PRICE_GROWTH_BASE_ANNUAL: z.string().optional(),
+  STRIPE_PRICE_GROWTH_TEXT_OVERAGE: z.string().optional(),
+  STRIPE_PRICE_GROWTH_AVATAR_OVERAGE: z.string().optional(),
   MARGIN_RATE: numEnv,
 
   // ── Notifications / Webhooks ──────────────────────────────────────────

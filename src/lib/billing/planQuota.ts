@@ -81,3 +81,89 @@ export function isFreeAdMonthlyQuotaExceeded(
   }
   return currentMonthRequestCount >= limit;
 }
+
+// ---------------------------------------------------------------------------
+// 有料プランの「込み枠」(基本料に含まれる利用量)。
+//
+// 上の FREE_AD_MONTHLY_REQUEST_LIMIT が「超えたら止める上限」なのに対し、
+// こちらは「超えたら従量で請求する境界」であり、止めない。同じファイルに置くのは
+// どちらも『プランごとの月次数量の定義』という同一の関心事で、2箇所に分けると
+// 片方だけ直す事故(CLAUDE.md 禁止6)を招くため。
+//
+// ★テキストとアバターを別枠で持つ(合算しない)★
+// .claude/rules/billing.md §7 の必須要件。合算すると、アバターに偏ったテナント
+// 1社で月額が丸ごと飛ぶ(アバターは原価 ¥25.9/分で、30分セッション1件が ¥799)。
+//
+// ★ここには「単価」を置かない★
+// 超過単価(Standard ¥25/会話・¥100/分、Growth ¥30/会話・¥80/分)は Stripe の
+// price オブジェクト側が唯一の出どころで、コードは数量だけを送る
+// (planPricing.ts の getSubscriptionItemPrices が price ID を引く)。
+// 単価をここに複製すると、Stripe 側を変えたときに黙ってドリフトする。
+// ---------------------------------------------------------------------------
+
+/** 1プラン分の込み枠。単位はテキスト=会話数、アバター=分。 */
+export interface PlanIncludedQuota {
+  /** 基本料に含まれるテキスト会話数(/月)。 */
+  textConversations: number;
+  /** 基本料に含まれるアバター利用分数(/月)。 */
+  avatarMinutes: number;
+}
+
+/**
+ * 基本料 + 込み枠 + 超過従量 で請求するプランの込み枠(.claude/rules/billing.md §7)。
+ *
+ * ここに載っていないプランは「込み枠という概念を持たない」:
+ *   - free_ad   … 倍率0で請求自体が発生しない。上限は FREE_AD_MONTHLY_REQUEST_LIMIT で止める別の仕組み。
+ *   - starter   … 基本料0円の純従量(1単位目から課金)。込み枠を持たせると無料枠を新設することになる。
+ *   - enterprise… 個別交渉。自動化しない。
+ * したがって未知プランを starter へ倒す planMultiplier とは違い、
+ * ここは「無い」を null で返す(勝手に枠を与えると請求漏れになる)。
+ */
+export const PLAN_INCLUDED_QUOTAS: Record<string, PlanIncludedQuota> = {
+  standard: { textConversations: 1000, avatarMinutes: 30 },
+  growth:   { textConversations: 3000, avatarMinutes: 150 },
+};
+
+/** プラン名から込み枠を引く。込み枠を持たないプラン(starter/free_ad/enterprise/未知)は null。 */
+export function includedQuotaForPlan(plan: string | null | undefined): PlanIncludedQuota | null {
+  if (plan == null) return null;
+  // planMultiplier と同じ理由で自前プロパティに限定する
+  // (tenants.plan の CHECK 制約が未適用の環境では任意の文字列が入りうる)。
+  return Object.prototype.hasOwnProperty.call(PLAN_INCLUDED_QUOTAS, plan)
+    ? PLAN_INCLUDED_QUOTAS[plan]
+    : null;
+}
+
+/** 込み枠を超えた分の数量。Stripe の従量 price へ送る絶対値そのもの。 */
+export interface QuotaOverage {
+  /** 込み枠超過のテキスト会話数。 */
+  textConversations: number;
+  /** 込み枠超過のアバター分数。 */
+  avatarMinutes: number;
+}
+
+/**
+ * 込み枠を差し引いた超過数量を返す。込み枠を持たないプランは null
+ * (=呼び出し側は従来どおりの純従量経路へ倒す)。
+ *
+ * ★プラン倍率(PLAN_MULTIPLIERS)を掛けてはいけない★
+ * 超過単価はプランごとに別の Stripe price として実在する
+ * (テキスト Standard ¥25 / Growth ¥30、アバター Standard ¥100 / Growth ¥80)。
+ * 倍率は既にその単価に織り込まれているため、数量側にも掛けると二重適用になり、
+ * テキストは Standard で +25% / Growth で +50% の過剰請求になる。
+ * アバターに至っては単価が倍率と逆向き(上位ほど安い)なので、掛けると向きごと壊れる
+ * (CLAUDE.md 禁止56 / .claude/rules/billing.md §7)。
+ * 単価を持つのは Stripe、数量を持つのはこのコード、という分担を崩さないこと。
+ */
+export function computeQuotaOverage(
+  plan: string | null | undefined,
+  textConversations: number,
+  avatarMinutes: number,
+): QuotaOverage | null {
+  const quota = includedQuotaForPlan(plan);
+  if (!quota) return null;
+  return {
+    textConversations: Math.max(0, textConversations - quota.textConversations),
+    avatarMinutes:     Math.max(0, avatarMinutes - quota.avatarMinutes),
+  };
+}

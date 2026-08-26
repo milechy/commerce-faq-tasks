@@ -6,6 +6,7 @@ import type { Application, Request, Response, RequestHandler } from 'express';
 import { z } from 'zod';
 import { roleAuthMiddleware, requireRole } from '../../api/middleware/roleAuth';
 import { computeExpectedBilling } from './stripeSync';
+import { getSubscriptionItemPrices, toSubscriptionItems } from './planPricing';
 
 const usageQuerySchema = z.object({
   tenantId: z.string().min(1).optional(),
@@ -72,6 +73,10 @@ const adjustmentsQuerySchema = z.object({
 
 const onboardSchema = z.object({
   tenantId: z.string().min(1),
+  // 基本料の請求周期。込み枠を持つ standard/growth でのみ意味を持ち、
+  // 純従量の starter に annual を指定した場合は 400 で弾く(黙って monthly に
+  // 倒すと「年払いで契約したつもり」との齟齬が残るため)。
+  billingCycle: z.enum(['monthly', 'annual']).default('monthly'),
 });
 
 function getStripe(secretKey: string): any {
@@ -534,7 +539,7 @@ export function registerBillingAdminRoutes(
         res.status(400).json({ error: 'invalid_request', details: parsed.error.issues });
         return;
       }
-      const { tenantId } = parsed.data;
+      const { tenantId, billingCycle } = parsed.data;
 
       try {
         // 冪等性: 既にアクティブなサブスクがあれば新しい Customer/Subscription を
@@ -557,18 +562,62 @@ export function registerBillingAdminRoutes(
 
         const stripeKey = process.env.STRIPE_SECRET_KEY;
         if (!stripeKey) { res.status(500).json({ error: 'stripe_not_configured' }); return; }
-        const priceId = process.env.STRIPE_METERED_PRICE_ID;
-        if (!priceId) { res.status(500).json({ error: 'stripe_price_not_configured' }); return; }
 
+        // プランは items 構成を決めるために必要(基本料の有無・込み枠の有無・
+        // 超過単価がプランごとに別の price として実在する)。
         const tenantRow = await db.query(
-          `SELECT id, name, tenant_contact_email FROM tenants WHERE id = $1`,
+          `SELECT id, name, tenant_contact_email, plan FROM tenants WHERE id = $1`,
           [tenantId]
         );
         if (tenantRow.rows.length === 0) {
           res.status(404).json({ error: 'tenant not found' });
           return;
         }
-        const tenant = tenantRow.rows[0] as { id: string; name: string; tenant_contact_email: string | null };
+        const tenant = tenantRow.rows[0] as {
+          id: string; name: string; tenant_contact_email: string | null; plan: string | null;
+        };
+
+        // プラン→price の対応は planPricing.ts が唯一の出どころ。ここと stripeSync.ts に
+        // 別々に書くと「作った item と使用量の送り先が食い違う」事故になる(禁止6)。
+        const priceResult = getSubscriptionItemPrices(tenant.plan, billingCycle);
+        if (!priceResult.ok) {
+          if (priceResult.reason === 'plan_not_self_serve') {
+            // free_ad は倍率0で請求が発生しない。enterprise は個別交渉のため
+            // Stripe ダッシュボードで人が組む(自動化すると交渉内容と食い違ったまま請求が走る)。
+            res.status(400).json({
+              error: 'plan_not_self_serve',
+              detail: tenant.plan === 'enterprise'
+                ? 'Enterprise は個別契約です。Stripe ダッシュボードで手動でサブスクリプションを作成してください。'
+                : 'Free(広告表示)プランは請求が発生しないため、Stripeへの登録は不要です。',
+            });
+            return;
+          }
+          if (priceResult.reason === 'billing_cycle_not_supported') {
+            res.status(400).json({
+              error: 'billing_cycle_not_supported',
+              detail: 'Starter は基本料の無い純従量プランのため、年払いを選択できません。',
+            });
+            return;
+          }
+          logger.error(
+            { tenantId, plan: tenant.plan, billingCycle, missing: priceResult.missing },
+            '[billingApi] price env not configured — オンボーディングを中止した'
+          );
+          res.status(500).json({ error: 'stripe_price_not_configured', missing: priceResult.missing });
+          return;
+        }
+        const prices = priceResult.prices;
+
+        // 旧 STRIPE_METERED_PRICE_ID は全プラン共通の ¥10 プレースホルダ price。
+        // Starter 専用 price が未設定だとそこへフォールバックするため、
+        // 「確定価格 ¥20/会話 ではない単価で請求が始まる」ことを黙って通さない。
+        if (!process.env.STRIPE_PRICE_STARTER_TEXT && prices.text === process.env.STRIPE_METERED_PRICE_ID) {
+          logger.error(
+            { tenantId, plan: tenant.plan },
+            '[billingApi] STRIPE_PRICE_STARTER_TEXT が未設定のため旧 STRIPE_METERED_PRICE_ID で作成した — ' +
+            '確定価格(¥20/会話)ではない単価で請求される。至急 env を設定して作り直すこと'
+          );
+        }
 
         const stripe = getStripe(stripeKey);
         const customer = await stripe.customers.create({
@@ -579,12 +628,23 @@ export function registerBillingAdminRoutes(
 
         const subscription = await stripe.subscriptions.create({
           customer: customer.id,
-          items: [{ price: priceId }],
-          metadata: { tenant_id: tenantId },
+          items: toSubscriptionItems(prices),
+          metadata: { tenant_id: tenantId, plan: tenant.plan ?? '', billing_cycle: billingCycle },
         });
+
+        // ★stripe_price_id は単数列のまま、基本料(無ければテキスト従量)の price を入れる★
+        // standard/growth は3 item 構成になるが、この列を読む側(fetchBillingInvoices 等)は
+        // item 単位の粒度を必要としておらず、「そのテナントのプランを代表する price」が
+        // 分かれば足りる。item 一覧を持つ子テーブルを足すのは、この列の実際の読まれ方に対して
+        // 過剰な機構になるため本PRでは作らない。真の item 構成は Stripe 側が保持しており、
+        // stripeSync.ts は subscription を retrieve して price→item を引き直す
+        // (DBのキャッシュを信じないので、ここが単数でも請求の宛先は取り違えない)。
+        const representativePriceId = prices.base ?? prices.text;
 
         // tenant_id が PRIMARY KEY のため、過去に解約済み(is_active=false)の行が
         // 残っているケースの再オンボーディングも ON CONFLICT で受ける。
+        // 解約と再オンボーディングの間に tenants.plan が変わっていても、items は
+        // 上で「現在の」プランから引き直しているので、古いプランの構成を引き継がない。
         await db.query(
           `INSERT INTO stripe_subscriptions
              (tenant_id, stripe_customer_id, stripe_subscription_id, stripe_price_id, is_active)
@@ -595,11 +655,12 @@ export function registerBillingAdminRoutes(
              stripe_price_id        = EXCLUDED.stripe_price_id,
              is_active               = true,
              updated_at              = NOW()`,
-          [tenantId, customer.id, subscription.id, priceId]
+          [tenantId, customer.id, subscription.id, representativePriceId]
         );
 
         logger.info(
-          { tenantId, subscriptionId: subscription.id, customerId: customer.id },
+          { tenantId, plan: tenant.plan, billingCycle, subscriptionId: subscription.id,
+            customerId: customer.id, itemCount: toSubscriptionItems(prices).length },
           '[billingApi] tenant onboarded to Stripe'
         );
         res.json({ ok: true, alreadyOnboarded: false, subscriptionId: subscription.id, customerId: customer.id });

@@ -57,3 +57,130 @@ export function planMultiplier(plan: string | null | undefined): number {
     : undefined;
   return typeof value === 'number' ? value : 1.0;
 }
+
+// ---------------------------------------------------------------------------
+// プラン → Stripe subscription item の price 構成(単一の出どころ)。
+//
+// billingApi.ts(オンボーディングで items を作る側)と stripeSync.ts(使用量を
+// 「どの item へ」送るかを決める側)の両方がここを通す。プラン→price の対応を
+// 2ファイルに書き写すと、片方だけ直したときに「作った item と送り先の item が
+// 食い違う」= 請求が別の単価で計上される事故になる(CLAUDE.md 禁止6)。
+//
+// ★倍率(PLAN_MULTIPLIERS)は price 側に織り込まれている★
+// テキスト超過は Starter ¥20 / Standard ¥25 / Growth ¥30 の**別々の price** として
+// 実在する。旧来の STRIPE_METERED_PRICE_ID は全プラン共通の単一 price だったため
+// 数量側に倍率を掛ける必要があったが、プランごとに price を分けた時点でその役目は
+// price へ移った。ここを使う経路で数量に倍率を掛けると二重適用になる
+// (planQuota.ts の computeQuotaOverage のコメント参照)。
+//
+// ★年払いの interval 制約(要・本番確認)★
+// Stripe は1つの subscription に interval の異なる price を混在できない。
+// 基本料の年払い price(interval=year)と、超過従量 price(metered)の interval が
+// 食い違っていると subscriptions.create がそのまま失敗する。超過 price 側を
+// 年 interval で作ってあるかは、テストモードで1度通して確認すること
+// (このコードからは検証できない。PR 本文の未確認事項に記載)。
+// ---------------------------------------------------------------------------
+
+/** 基本料の請求周期。込み枠を持つプラン(standard/growth)でのみ意味を持つ。 */
+export type BillingCycle = 'monthly' | 'annual';
+
+/**
+ * 1テナント分の subscription item 構成。
+ *
+ * 配列ではなく次元ごとの名前付きフィールドにしているのは、stripeSync.ts が
+ * 「テキスト超過の数量をどの item へ送るか」を**配列の位置で推測せずに**
+ * 引けるようにするため。位置依存にすると、items の並び順を変えた瞬間に
+ * アバターの分数がテキストの単価で請求される。
+ */
+export interface SubscriptionItemPrices {
+  /** 基本料(定額・metered ではない)。純従量プランには存在しない。 */
+  base?: string;
+  /** テキスト従量。純従量プランでは1単位目から、込み枠プランでは超過分に適用される。 */
+  text?: string;
+  /** アバター超過(分単位)。込み枠プランにのみ存在する。 */
+  avatarOverage?: string;
+}
+
+export type SubscriptionItemPricesResult =
+  | { ok: true; prices: SubscriptionItemPrices }
+  /** 自動オンボーディングの対象外のプラン(free_ad / enterprise)。 */
+  | { ok: false; reason: 'plan_not_self_serve' }
+  /** 年払いを持たないプランに annual を要求された。 */
+  | { ok: false; reason: 'billing_cycle_not_supported' }
+  /** 必要な price の環境変数が未設定(デプロイ順序の事故)。missing に変数名が入る。 */
+  | { ok: false; reason: 'price_not_configured'; missing: string[] };
+
+/**
+ * 自動でStripeサブスクリプションを作ってよいプランか。
+ *
+ * free_ad は倍率0で請求が発生しない(有料サブスクを作る意味が無い)。
+ * enterprise は個別交渉のため Stripe ダッシュボードで人が組む
+ * (自動化すると交渉内容と食い違ったまま請求が走る)。
+ * null / 未知のプランは planMultiplier と同じ fail-safe で starter 扱いにする —
+ * 「請求できない」より「純従量で請求する」方が請求漏れを避けられる。
+ */
+export function isSelfServeBillablePlan(plan: string | null | undefined): boolean {
+  return plan !== 'free_ad' && plan !== 'enterprise';
+}
+
+/** 未知/null を starter へ倒したうえでの正規化プラン名(price 構成の判定用)。 */
+function normalizeBillablePlan(plan: string | null | undefined): 'starter' | 'standard' | 'growth' {
+  return plan === 'standard' || plan === 'growth' ? plan : 'starter';
+}
+
+/**
+ * プランと請求周期から、作成すべき subscription item の price ID を引く。
+ *
+ * - starter(および未知/null): テキスト従量 1本のみ。基本料も込み枠も無い。
+ *   STRIPE_PRICE_STARTER_TEXT(¥20/会話)を使い、未設定なら旧 STRIPE_METERED_PRICE_ID
+ *   へフォールバックする(env の配布がコードのデプロイに間に合わない場合でも
+ *   オンボーディング導線自体は生かす。ただし旧 price は ¥10 のプレースホルダなので
+ *   呼び出し側で警告を出すこと)。
+ * - standard / growth: 基本料(monthly/annual) + テキスト超過 + アバター超過 の3本。
+ */
+export function getSubscriptionItemPrices(
+  plan: string | null | undefined,
+  billingCycle: BillingCycle = 'monthly',
+): SubscriptionItemPricesResult {
+  if (!isSelfServeBillablePlan(plan)) return { ok: false, reason: 'plan_not_self_serve' };
+
+  const normalized = normalizeBillablePlan(plan);
+
+  if (normalized === 'starter') {
+    // 純従量プランに年払いは無い(基本料が存在しないため請求周期が定義できない)。
+    // 黙って monthly として受けると「年払いで契約したつもり」との齟齬が残るため弾く。
+    if (billingCycle === 'annual') return { ok: false, reason: 'billing_cycle_not_supported' };
+    const text = process.env.STRIPE_PRICE_STARTER_TEXT || process.env.STRIPE_METERED_PRICE_ID;
+    if (!text) {
+      return { ok: false, reason: 'price_not_configured', missing: ['STRIPE_PRICE_STARTER_TEXT'] };
+    }
+    return { ok: true, prices: { text } };
+  }
+
+  const prefix = normalized === 'standard' ? 'STRIPE_PRICE_STANDARD' : 'STRIPE_PRICE_GROWTH';
+  const baseVar = `${prefix}_BASE_${billingCycle === 'annual' ? 'ANNUAL' : 'MONTHLY'}`;
+  const textVar = `${prefix}_TEXT_OVERAGE`;
+  const avatarVar = `${prefix}_AVATAR_OVERAGE`;
+
+  const base = process.env[baseVar];
+  const text = process.env[textVar];
+  const avatarOverage = process.env[avatarVar];
+
+  // 一部だけ設定されている状態で作ると、欠けた次元が「請求されないまま気づかれない」
+  // (禁止50 と同型: 壊れているときに何も言わない)。3本揃わなければ作らない。
+  const missing = [
+    [baseVar, base] as const,
+    [textVar, text] as const,
+    [avatarVar, avatarOverage] as const,
+  ].filter(([, v]) => !v).map(([name]) => name);
+  if (missing.length > 0) return { ok: false, reason: 'price_not_configured', missing };
+
+  return { ok: true, prices: { base, text, avatarOverage } };
+}
+
+/** SubscriptionItemPrices を Stripe subscriptions.create の items 配列へ落とす。 */
+export function toSubscriptionItems(prices: SubscriptionItemPrices): Array<{ price: string }> {
+  return [prices.base, prices.text, prices.avatarOverage]
+    .filter((p): p is string => typeof p === 'string' && p.length > 0)
+    .map((price) => ({ price }));
+}

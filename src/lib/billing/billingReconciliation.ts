@@ -31,6 +31,7 @@
  */
 import type pino from "pino";
 import { computeExpectedBilling, periodToDateRange, getPeriodYyyyMm } from "./stripeSync";
+import { computeQuotaOverage } from "./planQuota";
 import { sendSlackAlert } from "../alerts/slackNotifier";
 
 export interface ReconciliationResult {
@@ -78,6 +79,49 @@ export async function reconcileTenantPeriod(
 
   const expected = await computeExpectedBilling(db, tenantId, startDate, endDate, plan);
 
+  // ★込み枠プラン(Standard/Growth)は次元ごとに別々の数量を送っている★
+  // 送信側(stripeSync.ts の _reportQuotaOverageUsage)は、テキスト超過と
+  // アバター超過を別々の subscription item へ、別々の stripe_usage_reports 行として
+  // 記録する。ここで従来どおり「直近1行の billed_quantity」を読むと、たまたま最後に
+  // 書かれた片方の次元だけを全体と比較することになり、**毎月かならず乖離と報告し続ける**
+  // (CLAUDE.md 禁止50「壊れているときに何も言わない」の裏返しで、常に鳴り続けて
+  // 誰も見なくなる方の失敗)。次元ごとに突き合わせる。
+  const overage = computeQuotaOverage(plan, expected.textUnits, expected.avatarMinutes);
+  if (overage) {
+    // 次元ごとに直近の送信成功行を引く。
+    const sentByDimension = await db.query(
+      `SELECT DISTINCT ON (dimension) dimension, billed_quantity
+         FROM stripe_usage_reports
+        WHERE tenant_id = $1 AND period_yyyymm = $2 AND status = 'sent'
+        ORDER BY dimension, updated_at DESC`,
+      [tenantId, periodYyyyMm]
+    );
+    const reported = new Map<string, number | null>(
+      sentByDimension.rows.map((r) => [r.dimension as string, (r.billed_quantity ?? null) as number | null])
+    );
+    const textReported = reported.get('text') ?? null;
+    const avatarReported = reported.get('avatar') ?? null;
+
+    // 一度も送信していない次元は null。null と 0 を同一視しない
+    // (「0と報告済み」と「まだ何も送っていない」は別の状態で、後者は調査対象)。
+    const matches =
+      textReported === overage.textConversations && avatarReported === overage.avatarMinutes;
+
+    // 表示用の合計。どちらの次元がズレたかは matches=false の調査で
+    // 上の2値を見れば分かるため、結果の形は純従量プランと共通のまま保つ。
+    const anyReported = textReported !== null || avatarReported !== null;
+    return {
+      tenantId,
+      periodYyyyMm,
+      expectedBilledQuantity: overage.textConversations + overage.avatarMinutes,
+      lastReportedQuantity: anyReported ? (textReported ?? 0) + (avatarReported ?? 0) : null,
+      matches,
+    };
+  }
+
+  // ── 純従量プラン(Starter / free_ad / Enterprise): 従来どおり単一数量で突合 ──
+  // dimension 列を読まないので、migration 未適用の環境でも既存テナントの突合は
+  // これまでどおり動き続ける。
   const lastSent = await db.query(
     `SELECT billed_quantity
        FROM stripe_usage_reports

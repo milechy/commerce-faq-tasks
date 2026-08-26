@@ -127,6 +127,12 @@ d("computeExpectedBilling（実 Postgres に対する集計SQL実行）", () => 
       unstampedRows: 10,
       billedQuantity: 271,
       fallbackMultiplier: 1.5,
+      // 込み枠(Standard/Growth)を差し引くための「生の」次元別数量。倍率は掛けない。
+      // テキスト: session_id を持つ chat 行が無いので会話は0件。session_id が NULL の
+      //   chat 行 211件(100+100+10+x2)が 1行=1単位 のフォールバックで数えられる。
+      // アバター: anam_session 90秒 → CEIL(90/60) = 2分。
+      textUnits: 211,
+      avatarMinutes: 2,
     });
   });
 
@@ -156,6 +162,8 @@ d("computeExpectedBilling（実 Postgres に対する集計SQL実行）", () => 
       unstampedRows: 0,
       billedQuantity: 0,
       fallbackMultiplier: 1.5,
+      textUnits: 0,
+      avatarMinutes: 0,
     });
   });
 
@@ -475,6 +483,100 @@ d("computeExpectedBilling（実 Postgres に対する集計SQL実行）", () => 
     // billing_status では絞らない: reported 済みの会話も毎回数え直す(累積の絶対値)
     expect(first.billableUnits).toBe(2);
     expect(first.billedQuantity).toBe(3); // ceil(1.5 + 1.5)
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // 込み枠(Standard/Growth)を差し引くための「生の」次元別数量。
+  // billedQuantity は行ごとの倍率で重み付け済みの値なので、込み枠の差し引きには
+  // 使えない(枠は「会話数」「分数」という生の単位で定義されている)。
+  // ───────────────────────────────────────────────────────────────────────────
+  it("textUnits は会話(session_id)ごとに1、session_id が NULL の chat 行は 1行=1単位で足す", async () => {
+    await db.query(`
+      INSERT INTO chat_sessions (tenant_id, session_id, message_count)
+      VALUES ('t1','s1',4), ('t1','s2',2);
+
+      -- 会話s1に3リクエスト、会話s2に2リクエスト → 会話は2件
+      INSERT INTO usage_logs (tenant_id, request_id, feature_used, session_id, plan_multiplier, created_at)
+      VALUES
+        ('t1','r1','chat','s1', 1.25, '2026-03-05'),
+        ('t1','r2','chat','s1', 1.25, '2026-03-05'),
+        ('t1','r3','chat','s1', 1.25, '2026-03-05'),
+        ('t1','r4','chat','s2', 1.25, '2026-03-06'),
+        ('t1','r5','chat','s2', 1.25, '2026-03-06');
+
+      -- session_id が NULL の chat 行(migration適用前の既存行)は 1行=1単位
+      INSERT INTO usage_logs (tenant_id, request_id, feature_used, plan_multiplier, created_at)
+      VALUES ('t1','r6','chat', 1.25, '2026-03-07'), ('t1','r7','chat', 1.25, '2026-03-07');
+    `);
+
+    const result = await computeExpectedBilling(db, "t1", "2026-03-01", "2026-04-01", "standard");
+    // 会話2件 + session_idなしの2行 = 4。リクエスト数(7)ではないことが本旨。
+    expect(result.textUnits).toBe(4);
+    expect(result.totalRequests).toBe(7);
+  });
+
+  it("textUnits は message_count < 2 の会話(ウィジェットを開いただけ)を数えない", async () => {
+    await db.query(`
+      INSERT INTO chat_sessions (tenant_id, session_id, message_count)
+      VALUES ('t1','open-only',0), ('t1','no-reply',1), ('t1','real',2);
+
+      INSERT INTO usage_logs (tenant_id, request_id, feature_used, session_id, plan_multiplier, created_at)
+      VALUES
+        ('t1','r1','chat','open-only', 1.25, '2026-03-05'),
+        ('t1','r2','chat','no-reply',  1.25, '2026-03-05'),
+        ('t1','r3','chat','real',      1.25, '2026-03-05');
+    `);
+
+    const result = await computeExpectedBilling(db, "t1", "2026-03-01", "2026-04-01", "standard");
+    expect(result.textUnits).toBe(1);
+  });
+
+  it("avatarMinutes は avatar(ミリ秒)と anam_session(秒)を分に切り上げて合算する", async () => {
+    await db.query(`
+      INSERT INTO usage_logs (tenant_id, request_id, feature_used, avatar_session_ms, plan_multiplier, created_at)
+      VALUES
+        ('t1','a1','avatar', 90000,  1.25, '2026-03-05'),   -- 90秒  → 2分
+        ('t1','a2','avatar', 600000, 1.25, '2026-03-06');   -- 600秒 → 10分
+
+      INSERT INTO usage_logs (tenant_id, request_id, feature_used, anam_session_seconds, plan_multiplier, created_at)
+      VALUES ('t1','a3','anam_session', 61, 1.25, '2026-03-07');  -- 61秒 → 2分
+    `);
+
+    const result = await computeExpectedBilling(db, "t1", "2026-03-01", "2026-04-01", "standard");
+    expect(result.avatarMinutes).toBe(14);
+    // 「回数」で数えると3。時間に比例する原価を回数で請求しない(禁止56)。
+    expect(result.avatarMinutes).not.toBe(3);
+  });
+
+  it("次元が混ざらない: テキストの会話がアバター分に、アバターがテキストに入らない", async () => {
+    await db.query(`
+      INSERT INTO chat_sessions (tenant_id, session_id, message_count) VALUES ('t1','s1',2);
+      INSERT INTO usage_logs (tenant_id, request_id, feature_used, session_id, plan_multiplier, created_at)
+      VALUES ('t1','r1','chat','s1', 1.25, '2026-03-05');
+      INSERT INTO usage_logs (tenant_id, request_id, feature_used, avatar_session_ms, plan_multiplier, created_at)
+      VALUES ('t1','a1','avatar', 300000, 1.25, '2026-03-05');  -- 5分
+      -- voice はどちらの次元でもない(基本料に含まれる扱い)
+      INSERT INTO usage_logs (tenant_id, request_id, feature_used, plan_multiplier, created_at)
+      VALUES ('t1','v1','voice', 1.25, '2026-03-05');
+    `);
+
+    const result = await computeExpectedBilling(db, "t1", "2026-03-01", "2026-04-01", "standard");
+    expect(result.textUnits).toBe(1);
+    expect(result.avatarMinutes).toBe(5);
+  });
+
+  it("billable=false の行は次元別数量にも入らない", async () => {
+    await db.query(`
+      INSERT INTO chat_sessions (tenant_id, session_id, message_count) VALUES ('t1','s1',2);
+      INSERT INTO usage_logs (tenant_id, request_id, feature_used, session_id, plan_multiplier, billable, created_at)
+      VALUES ('t1','r1','chat','s1', 1.25, false, '2026-03-05');
+      INSERT INTO usage_logs (tenant_id, request_id, feature_used, avatar_session_ms, plan_multiplier, billable, created_at)
+      VALUES ('t1','a1','avatar', 300000, 1.25, false, '2026-03-05');
+    `);
+
+    const result = await computeExpectedBilling(db, "t1", "2026-03-01", "2026-04-01", "standard");
+    expect(result.textUnits).toBe(0);
+    expect(result.avatarMinutes).toBe(0);
   });
 
   // PR-6(2026-08-25 収益監査): SCRIPTS/ci-billing-schema.sh の FILES 配列と

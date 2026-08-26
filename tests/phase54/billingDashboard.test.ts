@@ -304,8 +304,8 @@ describe("POST /v1/admin/billing/onboard", () => {
       tenantId: null,
       dbCallbacks: {
         "select stripe_subscription_id, stripe_customer_id from stripe_subscriptions": [], // 未登録
-        "select id, name, tenant_contact_email from tenants": [
-          { id: "tenant-onboard", name: "テストテナント", tenant_contact_email: "owner@example.com" },
+        "select id, name, tenant_contact_email, plan from tenants": [
+          { id: "tenant-onboard", name: "テストテナント", tenant_contact_email: "owner@example.com", plan: "starter" },
         ],
       },
     });
@@ -389,13 +389,19 @@ describe("POST /v1/admin/billing/onboard", () => {
     expect(mockCustomersCreate).not.toHaveBeenCalled();
   });
 
-  test("12: STRIPE_METERED_PRICE_ID未設定は500・Customerも作成しない", async () => {
+  // price の選択はプラン依存になったため、この検査はテナント取得より後になる
+  // (どの price を要求すべきかはプランを見ないと決まらない)。
+  test("12: price のenvが未設定なら500・Customerも作成しない", async () => {
     delete process.env.STRIPE_METERED_PRICE_ID;
+    delete process.env.STRIPE_PRICE_STARTER_TEXT;
     const { app } = makeApp({
       role: "super_admin",
       tenantId: null,
       dbCallbacks: {
         "select stripe_subscription_id, stripe_customer_id from stripe_subscriptions": [],
+        "select id, name, tenant_contact_email, plan from tenants": [
+          { id: "tenant-no-price", name: "価格未設定", tenant_contact_email: null, plan: "starter" },
+        ],
       },
     });
 
@@ -404,7 +410,7 @@ describe("POST /v1/admin/billing/onboard", () => {
       .send({ tenantId: "tenant-no-price" })
       .expect(500);
 
-    expect(res.body).toEqual({ error: "stripe_price_not_configured" });
+    expect(res.body.error).toBe("stripe_price_not_configured");
     expect(mockCustomersCreate).not.toHaveBeenCalled();
   });
 
@@ -414,7 +420,7 @@ describe("POST /v1/admin/billing/onboard", () => {
       tenantId: null,
       dbCallbacks: {
         "select stripe_subscription_id, stripe_customer_id from stripe_subscriptions": [],
-        "select id, name, tenant_contact_email from tenants": [],
+        "select id, name, tenant_contact_email, plan from tenants": [],
       },
     });
 
@@ -443,8 +449,8 @@ describe("POST /v1/admin/billing/onboard", () => {
       tenantId: null,
       dbCallbacks: {
         "select stripe_subscription_id, stripe_customer_id from stripe_subscriptions": [],
-        "select id, name, tenant_contact_email from tenants": [
-          { id: "tenant-rejoin", name: "再開テナント", tenant_contact_email: null },
+        "select id, name, tenant_contact_email, plan from tenants": [
+          { id: "tenant-rejoin", name: "再開テナント", tenant_contact_email: null, plan: "starter" },
         ],
       },
     });
@@ -460,6 +466,233 @@ describe("POST /v1/admin/billing/onboard", () => {
       (c: unknown[]) => typeof c[0] === "string" && (c[0] as string).toLowerCase().includes("insert into stripe_subscriptions")
     );
     expect(insertCall![0]).toMatch(/on conflict \(tenant_id\) do update/i);
+  });
+});
+
+// ─── POST /v1/admin/billing/onboard（プラン別 item 構成）────────────────────
+// 確定価格(.claude/rules/billing.md §7)では、Standard/Growth は
+// 「基本料(定額) + テキスト超過(従量) + アバター超過(従量)」の3 item 構成になる。
+// 純従量の Starter は従来どおり1 item のまま。
+describe("POST /v1/admin/billing/onboard（プラン別の item 構成）", () => {
+  const ORIG_ENV = process.env;
+
+  const PRICE_ENV = {
+    STRIPE_PRICE_STARTER_TEXT:            "price_starter_text",
+    STRIPE_PRICE_STANDARD_BASE_MONTHLY:   "price_std_base_m",
+    STRIPE_PRICE_STANDARD_BASE_ANNUAL:    "price_std_base_y",
+    STRIPE_PRICE_STANDARD_TEXT_OVERAGE:   "price_std_text",
+    STRIPE_PRICE_STANDARD_AVATAR_OVERAGE: "price_std_avatar",
+    STRIPE_PRICE_GROWTH_BASE_MONTHLY:     "price_gro_base_m",
+    STRIPE_PRICE_GROWTH_BASE_ANNUAL:      "price_gro_base_y",
+    STRIPE_PRICE_GROWTH_TEXT_OVERAGE:     "price_gro_text",
+    STRIPE_PRICE_GROWTH_AVATAR_OVERAGE:   "price_gro_avatar",
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    process.env = { ...ORIG_ENV, STRIPE_SECRET_KEY: "sk_test_dummy", ...PRICE_ENV };
+    mockCustomersCreate.mockResolvedValue({ id: "cus_p" });
+    mockSubscriptionsCreate.mockResolvedValue({ id: "sub_p" });
+  });
+  afterAll(() => { process.env = ORIG_ENV; });
+
+  function appForPlan(plan: string | null) {
+    return makeApp({
+      role: "super_admin",
+      tenantId: null,
+      dbCallbacks: {
+        "select stripe_subscription_id, stripe_customer_id from stripe_subscriptions": [],
+        "select id, name, tenant_contact_email, plan from tenants": [
+          { id: "t-plan", name: "プランテナント", tenant_contact_email: null, plan },
+        ],
+      },
+    });
+  }
+
+  /** stripe_subscriptions へ書かれた stripe_price_id(第4パラメータ)を取り出す。 */
+  function storedPriceId(db: any): unknown {
+    const call = db.query.mock.calls.find(
+      (c: unknown[]) => typeof c[0] === "string" &&
+        (c[0] as string).toLowerCase().includes("insert into stripe_subscriptions")
+    );
+    return call![1][3];
+  }
+
+  test("Standard(月払い) は 基本料 + テキスト超過 + アバター超過 の3 item を作る", async () => {
+    const { app, db } = appForPlan("standard");
+    await request(app)
+      .post("/v1/admin/billing/onboard")
+      .send({ tenantId: "t-plan" })
+      .expect(200);
+
+    expect(mockSubscriptionsCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customer: "cus_p",
+        items: [
+          { price: "price_std_base_m" },
+          { price: "price_std_text" },
+          { price: "price_std_avatar" },
+        ],
+      })
+    );
+    // stripe_price_id は単数列。プランを代表する基本料の price を入れる。
+    expect(storedPriceId(db)).toBe("price_std_base_m");
+  });
+
+  test("Standard(年払い) は基本料だけが年額 price に替わり、超過2本は月払いと同じ", async () => {
+    const { app, db } = appForPlan("standard");
+    await request(app)
+      .post("/v1/admin/billing/onboard")
+      .send({ tenantId: "t-plan", billingCycle: "annual" })
+      .expect(200);
+
+    expect(mockSubscriptionsCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        items: [
+          { price: "price_std_base_y" },
+          { price: "price_std_text" },
+          { price: "price_std_avatar" },
+        ],
+      })
+    );
+    expect(storedPriceId(db)).toBe("price_std_base_y");
+  });
+
+  test("Growth は Growth 専用の3 item を作る(Standard の price が混ざらない)", async () => {
+    const { app } = appForPlan("growth");
+    await request(app)
+      .post("/v1/admin/billing/onboard")
+      .send({ tenantId: "t-plan", billingCycle: "monthly" })
+      .expect(200);
+
+    const items = mockSubscriptionsCreate.mock.calls[0][0].items;
+    expect(items).toEqual([
+      { price: "price_gro_base_m" },
+      { price: "price_gro_text" },
+      { price: "price_gro_avatar" },
+    ]);
+    expect(JSON.stringify(items)).not.toContain("std");
+  });
+
+  // 回帰: 純従量プランの構成を、込み枠プランの追加で壊していないこと。
+  test("Starter は従来どおり 1 item のまま(基本料も込み枠も作らない)", async () => {
+    const { app, db } = appForPlan("starter");
+    await request(app)
+      .post("/v1/admin/billing/onboard")
+      .send({ tenantId: "t-plan" })
+      .expect(200);
+
+    expect(mockSubscriptionsCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ items: [{ price: "price_starter_text" }] })
+    );
+    expect(storedPriceId(db)).toBe("price_starter_text");
+  });
+
+  test("plan が NULL のテナントは Starter として 1 item で作る(請求漏れを避ける向きのfail-safe)", async () => {
+    const { app } = appForPlan(null);
+    await request(app)
+      .post("/v1/admin/billing/onboard")
+      .send({ tenantId: "t-plan" })
+      .expect(200);
+    expect(mockSubscriptionsCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ items: [{ price: "price_starter_text" }] })
+    );
+  });
+
+  test("free_ad は 400 で拒否し、Stripe に一切触れない(倍率0で請求が発生しないため)", async () => {
+    const { app } = appForPlan("free_ad");
+    const res = await request(app)
+      .post("/v1/admin/billing/onboard")
+      .send({ tenantId: "t-plan" })
+      .expect(400);
+
+    expect(res.body.error).toBe("plan_not_self_serve");
+    expect(mockCustomersCreate).not.toHaveBeenCalled();
+    expect(mockSubscriptionsCreate).not.toHaveBeenCalled();
+  });
+
+  test("enterprise は 400 で拒否し、手動作成を促す(個別交渉を自動化しない)", async () => {
+    const { app } = appForPlan("enterprise");
+    const res = await request(app)
+      .post("/v1/admin/billing/onboard")
+      .send({ tenantId: "t-plan" })
+      .expect(400);
+
+    expect(res.body.error).toBe("plan_not_self_serve");
+    expect(res.body.detail).toContain("Enterprise");
+    expect(mockCustomersCreate).not.toHaveBeenCalled();
+  });
+
+  test("Starter に annual を指定したら 400(黙って月払いに倒さない)", async () => {
+    const { app } = appForPlan("starter");
+    const res = await request(app)
+      .post("/v1/admin/billing/onboard")
+      .send({ tenantId: "t-plan", billingCycle: "annual" })
+      .expect(400);
+
+    expect(res.body.error).toBe("billing_cycle_not_supported");
+    expect(mockCustomersCreate).not.toHaveBeenCalled();
+  });
+
+  test("billingCycle に未知の値を渡したら 400(zod)", async () => {
+    const { app } = appForPlan("standard");
+    await request(app)
+      .post("/v1/admin/billing/onboard")
+      .send({ tenantId: "t-plan", billingCycle: "weekly" })
+      .expect(400);
+    expect(mockCustomersCreate).not.toHaveBeenCalled();
+  });
+
+  // 込み枠プランの price が一部しか設定されていない状態で作ると、欠けた次元の
+  // 超過が「請求されないまま誰も気づかない」状態になる(禁止50 と同型)。
+  test("Standard の price が一部欠けていたら作成せず 500 + 欠けた env 名を返す", async () => {
+    delete process.env.STRIPE_PRICE_STANDARD_AVATAR_OVERAGE;
+    const { app } = appForPlan("standard");
+    const res = await request(app)
+      .post("/v1/admin/billing/onboard")
+      .send({ tenantId: "t-plan" })
+      .expect(500);
+
+    expect(res.body.error).toBe("stripe_price_not_configured");
+    expect(res.body.missing).toEqual(["STRIPE_PRICE_STANDARD_AVATAR_OVERAGE"]);
+    expect(mockCustomersCreate).not.toHaveBeenCalled();
+  });
+
+  // 解約 → プラン変更 → 再オンボーディング。ON CONFLICT で受ける既存の冪等経路が、
+  // 古いプランの item 構成を引き継がず「現在の」プランで作り直すこと。
+  test("解約後にプランが変わっていたら、現在のプランの item 構成で作り直す", async () => {
+    const { app, db } = makeApp({
+      role: "super_admin",
+      tenantId: null,
+      dbCallbacks: {
+        // is_active=true の行は無い(解約済み)
+        "select stripe_subscription_id, stripe_customer_id from stripe_subscriptions": [],
+        "select id, name, tenant_contact_email, plan from tenants": [
+          { id: "t-plan", name: "昇格テナント", tenant_contact_email: null, plan: "growth" },
+        ],
+      },
+    });
+
+    await request(app)
+      .post("/v1/admin/billing/onboard")
+      .send({ tenantId: "t-plan" })
+      .expect(200);
+
+    expect(mockSubscriptionsCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        items: [
+          { price: "price_gro_base_m" },
+          { price: "price_gro_text" },
+          { price: "price_gro_avatar" },
+        ],
+      })
+    );
+    const insertCall = db.query.mock.calls.find(
+      (c: unknown[]) => typeof c[0] === "string" &&
+        (c[0] as string).toLowerCase().includes("insert into stripe_subscriptions")
+    );
+    expect(insertCall![0]).toMatch(/on conflict \(tenant_id\) do update/i);
+    expect(insertCall![1][3]).toBe("price_gro_base_m");
   });
 });
 

@@ -84,6 +84,118 @@ describe('reconcileTenantPeriod', () => {
   });
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 込み枠プラン(Standard/Growth)の突合。
+//
+// 送信側は「テキスト超過」「アバター超過」を別々の行として記録するため、
+// 従来どおり「直近1行の billed_quantity」を全体と比べると、たまたま最後に
+// 書かれた片方の次元だけを見ることになり **毎月かならず乖離と報告し続ける**。
+// 鳴りっぱなしの監視は、鳴らない監視と同じくらい役に立たない(禁止50 の裏返し)。
+// ─────────────────────────────────────────────────────────────────────────────
+describe('reconcileTenantPeriod（込み枠プラン: 次元ごとに突合する）', () => {
+  function makeDb(overrides: Record<string, (sql: string, params: unknown[]) => unknown>) {
+    return {
+      query: jest.fn().mockImplementation((sql: string, params: unknown[] = []) => {
+        for (const [pattern, handler] of Object.entries(overrides)) {
+          if (sql.includes(pattern)) return Promise.resolve(handler(sql, params));
+        }
+        throw new Error(`unexpected query: ${sql}`);
+      }),
+    };
+  }
+
+  /** Standard(込み枠 テキスト1,000会話 / アバター30分)のテナント。 */
+  const AGG = (textUnits: number, avatarMinutes: number) => () => ({
+    rows: [{
+      total_requests: textUnits + avatarMinutes, total_cost_cents: 500,
+      billable_units: textUnits + avatarMinutes, billed_units_weighted: '99999',
+      unstamped_rows: 0, text_units: textUnits, avatar_minutes: avatarMinutes,
+    }],
+  });
+
+  it('次元ごとの送信済み数量が期待値と一致すれば matches: true', async () => {
+    const db = makeDb({
+      'SELECT plan FROM tenants': () => ({ rows: [{ plan: 'standard' }] }),
+      'billed_units_weighted': AGG(1200, 45),
+      "status = 'sent'": () => ({ rows: [
+        { dimension: 'text', billed_quantity: 200 },
+        { dimension: 'avatar', billed_quantity: 15 },
+      ] }),
+    });
+    const result = await reconcileTenantPeriod(db as any, mockLogger, 't1', '202603');
+    expect(result).toMatchObject({
+      expectedBilledQuantity: 215,   // 200 + 15
+      lastReportedQuantity: 215,
+      matches: true,
+    });
+  });
+
+  it('片方の次元だけズレていても検出する(合計が偶然合っても次元ごとに比べる)', async () => {
+    const db = makeDb({
+      'SELECT plan FROM tenants': () => ({ rows: [{ plan: 'standard' }] }),
+      'billed_units_weighted': AGG(1200, 45),  // 期待: text=200 / avatar=15
+      "status = 'sent'": () => ({ rows: [
+        // 合計は 215 で一致するが、次元の内訳が入れ替わっている
+        { dimension: 'text', billed_quantity: 15 },
+        { dimension: 'avatar', billed_quantity: 200 },
+      ] }),
+    });
+    const result = await reconcileTenantPeriod(db as any, mockLogger, 't1', '202603');
+    expect(result.matches).toBe(false);
+  });
+
+  it('アバター次元を一度も送っていなければ不一致(0と「未送信」を同一視しない)', async () => {
+    const db = makeDb({
+      'SELECT plan FROM tenants': () => ({ rows: [{ plan: 'standard' }] }),
+      'billed_units_weighted': AGG(1200, 10), // 期待: text=200 / avatar=0
+      "status = 'sent'": () => ({ rows: [{ dimension: 'text', billed_quantity: 200 }] }),
+    });
+    const result = await reconcileTenantPeriod(db as any, mockLogger, 't1', '202603');
+    expect(result.matches).toBe(false);
+  });
+
+  it('一度も送信していなければ lastReportedQuantity は null(0ではない)', async () => {
+    const db = makeDb({
+      'SELECT plan FROM tenants': () => ({ rows: [{ plan: 'standard' }] }),
+      'billed_units_weighted': AGG(500, 10),
+      "status = 'sent'": () => ({ rows: [] }),
+    });
+    const result = await reconcileTenantPeriod(db as any, mockLogger, 't1', '202603');
+    expect(result.lastReportedQuantity).toBeNull();
+    expect(result.matches).toBe(false);
+  });
+
+  it('込み枠経路は billedQuantity(加重合計)と比べない', async () => {
+    const db = makeDb({
+      'SELECT plan FROM tenants': () => ({ rows: [{ plan: 'growth' }] }),
+      // Growth 込み枠: テキスト3,000 / アバター150分 → 期待 text=500 / avatar=50
+      'billed_units_weighted': AGG(3500, 200),
+      "status = 'sent'": () => ({ rows: [
+        { dimension: 'text', billed_quantity: 500 },
+        { dimension: 'avatar', billed_quantity: 50 },
+      ] }),
+    });
+    const result = await reconcileTenantPeriod(db as any, mockLogger, 't1', '202603');
+    expect(result.expectedBilledQuantity).toBe(550);
+    expect(result.expectedBilledQuantity).not.toBe(99999);
+    expect(result.matches).toBe(true);
+  });
+
+  // 純従量プランは dimension 列を読まない = migration 未適用でも従来どおり突合できる。
+  it('純従量プランの突合は dimension 列を読まない(migration未適用でも壊れない)', async () => {
+    const db = makeDb({
+      'SELECT plan FROM tenants': () => ({ rows: [{ plan: 'starter' }] }),
+      'billed_units_weighted': AGG(100, 0),
+      "status = 'sent'": (sql: string) => {
+        expect(sql).not.toMatch(/dimension/);
+        return { rows: [{ billed_quantity: 99999 }] };
+      },
+    });
+    const result = await reconcileTenantPeriod(db as any, mockLogger, 't1', '202603');
+    expect(result.matches).toBe(true);
+  });
+});
+
 describe('reconcileMonth', () => {
   beforeEach(() => {
     (sendSlackAlert as jest.Mock).mockClear();
