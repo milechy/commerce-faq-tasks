@@ -82,7 +82,10 @@ export const REQUIRED_COLUMNS: Record<string, readonly string[]> = {
   stripe_webhook_events: ["claimed_at", "event_id", "event_type"],
   tenant_api_keys: ["expires_at", "is_active", "key_hash", "key_prefix", "tenant_id"],
   tenant_settings_history: ["changed_by", "field_name", "new_value", "old_value", "tenant_id"],
-  tenants: ["id", "is_active", "name", "plan"],
+  // tenant_contact_email は migration_phase_a.sql で追加。
+  // 未適用のまま配備すると POST /v1/admin/my-tenant/billing/checkout-session の
+  // SELECT が 42703 で例外になり、セルフサービス決済導線が全件500になる。
+  tenants: ["id", "is_active", "name", "plan", "tenant_contact_email"],
   trigger_rules: ["is_active", "message_template", "priority", "tenant_id", "trigger_config", "trigger_type"],
   tuning_rules: ["approved_at", "created_by", "dedup_key", "edited_at", "edited_by", "evidence", "expected_behavior", "is_active", "original_text", "priority", "source", "source_message_id", "status", "suggested_at", "tenant_id", "trigger_pattern"],
   // plan / plan_multiplier は migration_usage_logs_plan_snapshot.sql で、

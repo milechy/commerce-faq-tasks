@@ -758,3 +758,85 @@ d("countFreeAdBillableConversations（実 Postgres に対する free_ad 会話�
     expect(count).toBe(0);
   });
 });
+
+// stripeWebhook.ts の _handleCheckoutSessionCompleted が発行するINSERT文の実DB回帰。
+// 2026-08-26 レビュー是正: 以前は stripe_price_id に NULL を挿入しており、
+// migration.sql の TEXT NOT NULL 制約に違反して新規INSERT・ON CONFLICT更新の
+// 両経路とも必ず失敗し、セルフサービス決済が一度も記録されない事故になっていた。
+// stripeWebhook.test.ts はモックDBのためNOT NULL制約を検証できず、この事故を
+// 4PR分のレビューで検出できなかった(禁止51と同型)。ここでは実際のSQL文を
+// (関数を呼ばず)そのまま実行し、スキーマ制約込みで検証する。
+d("stripe_subscriptions INSERT（checkout.session.completed の実SQL回帰）", () => {
+  let db: Pool;
+
+  const UPSERT_SQL = `
+    INSERT INTO stripe_subscriptions
+       (tenant_id, stripe_customer_id, stripe_subscription_id, stripe_price_id, is_active)
+     VALUES ($1, $2, $3, $4, true)
+     ON CONFLICT (tenant_id) DO UPDATE SET
+       stripe_customer_id     = EXCLUDED.stripe_customer_id,
+       stripe_subscription_id = EXCLUDED.stripe_subscription_id,
+       stripe_price_id        = EXCLUDED.stripe_price_id,
+       is_active               = true,
+       updated_at              = NOW()
+     WHERE stripe_subscriptions.stripe_subscription_id = EXCLUDED.stripe_subscription_id
+        OR NOT stripe_subscriptions.is_active
+     RETURNING tenant_id`;
+
+  beforeAll(() => {
+    db = new Pool({ connectionString: DB_URL });
+  });
+
+  afterAll(async () => {
+    await db.end();
+  });
+
+  beforeEach(async () => {
+    await db.query("TRUNCATE stripe_subscriptions CASCADE");
+    await db.query("TRUNCATE tenants CASCADE");
+    await db.query(`INSERT INTO tenants (id, name, plan) VALUES ('t1', 't1', 'growth')`);
+  });
+
+  it("新規INSERTは stripe_price_id が非NULLなら成功する(NOT NULL制約を満たす)", async () => {
+    const result = await db.query(UPSERT_SQL, ["t1", "cus_1", "sub_1", "price_1"]);
+    expect(result.rowCount).toBe(1);
+    const row = (await db.query("SELECT * FROM stripe_subscriptions WHERE tenant_id = 't1'")).rows[0];
+    expect(row.stripe_price_id).toBe("price_1");
+    expect(row.is_active).toBe(true);
+  });
+
+  it("同一subscriptionの再配信(ON CONFLICT)は1行に収束し、price/customerを更新する", async () => {
+    await db.query(UPSERT_SQL, ["t1", "cus_1", "sub_1", "price_1"]);
+    const result = await db.query(UPSERT_SQL, ["t1", "cus_1_new", "sub_1", "price_2"]);
+    expect(result.rowCount).toBe(1);
+    const rows = (await db.query("SELECT * FROM stripe_subscriptions WHERE tenant_id = 't1'")).rows;
+    expect(rows).toHaveLength(1);
+    expect(rows[0].stripe_customer_id).toBe("cus_1_new");
+    expect(rows[0].stripe_price_id).toBe("price_2");
+  });
+
+  it("既に別のアクティブなsubscriptionが記録済みなら上書きしない(rowCount=0、孤児防止)", async () => {
+    await db.query(UPSERT_SQL, ["t1", "cus_1", "sub_1", "price_1"]);
+    const result = await db.query(UPSERT_SQL, ["t1", "cus_2", "sub_2", "price_2"]);
+    expect(result.rowCount).toBe(0);
+    const row = (await db.query("SELECT * FROM stripe_subscriptions WHERE tenant_id = 't1'")).rows[0];
+    // 先に記録された sub_1 のまま(上書きされていない)
+    expect(row.stripe_subscription_id).toBe("sub_1");
+  });
+
+  it("既存行が is_active=false(解約済み)なら、別のsubscriptionでも上書きを許す(再契約)", async () => {
+    await db.query(UPSERT_SQL, ["t1", "cus_1", "sub_1", "price_1"]);
+    await db.query("UPDATE stripe_subscriptions SET is_active = false WHERE tenant_id = 't1'");
+    const result = await db.query(UPSERT_SQL, ["t1", "cus_2", "sub_2", "price_2"]);
+    expect(result.rowCount).toBe(1);
+    const row = (await db.query("SELECT * FROM stripe_subscriptions WHERE tenant_id = 't1'")).rows[0];
+    expect(row.stripe_subscription_id).toBe("sub_2");
+    expect(row.is_active).toBe(true);
+  });
+
+  it("stripe_price_id に NULL を渡すと NOT NULL 制約違反で例外を投げる(退行の直接検知)", async () => {
+    await expect(
+      db.query(UPSERT_SQL, ["t1", "cus_1", "sub_1", null])
+    ).rejects.toThrow(/null value in column "stripe_price_id"/);
+  });
+});

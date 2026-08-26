@@ -95,6 +95,22 @@ function blockFreeAdTransition(plan: string | undefined, res: Response): boolean
   return true;
 }
 
+// enterprise は個別契約(planPricing.ts の isSelfServeBillablePlan が既に
+// plan_not_self_serve として弾いている線)なので、テナント自己申告での昇格は
+// 許さない。ここを抜くと、無制限利用枠 + voice_clone/deep_research/sai_task
+// (planFeatures.ts)が請求経路の無いまま即座に開く(2026-08-26 レビュー是正
+// GID 1217860479559418)。syncSubscriptionItemsToPlan は enterprise を
+// manual_plan として返すだけで Stripe に触れないため、サーバ側で防がない限り
+// UI 側だけの制限になる(CLAUDE.md 禁止14)。
+function blockEnterpriseSelfUpgrade(plan: string | undefined, res: Response): boolean {
+  if (plan !== "enterprise") return false;
+  res.status(403).json({
+    error: "enterprise_requires_sales",
+    message: "Enterprise は個別契約です。担当までお問い合わせください。",
+  });
+  return true;
+}
+
 // 許可オリジンの検証。super_admin用(updateTenantSchema)と client_admin 自己申告用
 // (PATCH /v1/admin/my-tenant)で同一インスタンスを共有し、片方だけ緩いという事故を防ぐ。
 // 判定本体は originCheck.ts の isValidOriginPattern に置き、照合ロジックと同じ定義を使う。
@@ -479,6 +495,9 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
     // テナント側の導線が素通りする（CLAUDE.md 禁止14: UIだけの制限にしない）。
     // DBに触れる前(接続確立前)に弾く。
     if (blockFreeAdTransition(nextPlan, res)) return;
+    // super_admin の POST/PATCH は enterprise を個別契約として受け付けるが、
+    // テナント自己申告のこの経路だけは常に拒否する(この関数は POST/PATCH からは呼ばない)。
+    if (blockEnterpriseSelfUpgrade(nextPlan, res)) return;
 
     // ★SELECT→計算→UPDATEをトランザクション化する★
     // 同一テナントへの並行プラン変更(連打・複数タブ)で、両リクエストが同じ

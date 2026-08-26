@@ -32,6 +32,14 @@ import { CARD, BTN_LINK, fmtPlanMultiplier } from "./utils";
 const FREE_AD_BLOCKED = true;
 const FREE_AD_BLOCKED_NOTE = "無料プランへの変更は現在受け付けていません（データ共有の同意表示を準備中のため）。";
 
+/**
+ * 2026-08-26 レビュー是正(GID 1217860479559418): Enterprise は個別契約のため、
+ * テナント自己申告での変更は常に不可(FREE_AD_BLOCKED と違い一時的な制限ではない)。
+ * サーバ側(routes.ts の blockEnterpriseSelfUpgrade)が実際の防御で、ここは
+ * 「押せるのに403になるボタン」を出さないための表示上の配慮(CLAUDE.md 禁止14)。
+ */
+const ENTERPRISE_BLOCKED_NOTE = "Enterprise は個別契約です。担当までお問い合わせください。";
+
 /** free_ad は「原価をR2Cが負担する」枠なので、選ぶ前に制約を明示する。 */
 const FREE_AD_NOTES = [
   "月200リクエストまで（超過すると新しい会話が止まります）",
@@ -300,7 +308,13 @@ export function PlanSection({
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
         {PLAN_OPTIONS.map((opt) => {
           const isCurrent = opt.value === currentPlan;
-          const isBlocked = FREE_AD_BLOCKED && opt.value === "free_ad" && !isCurrent;
+          const blockedNote =
+            opt.value === "enterprise" && !isCurrent
+              ? ENTERPRISE_BLOCKED_NOTE
+              : FREE_AD_BLOCKED && opt.value === "free_ad" && !isCurrent
+              ? FREE_AD_BLOCKED_NOTE
+              : null;
+          const isBlocked = blockedNote !== null;
           return (
             <button
               key={opt.value}
@@ -330,7 +344,7 @@ export function PlanSection({
                 )}
               </span>
               <span style={{ display: "block", fontSize: 12, color: "var(--muted-foreground)", marginTop: 2 }}>
-                {isBlocked ? FREE_AD_BLOCKED_NOTE : opt.desc}
+                {blockedNote ?? opt.desc}
               </span>
             </button>
           );

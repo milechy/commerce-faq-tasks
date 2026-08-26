@@ -1164,7 +1164,7 @@ describe("PUT /v1/admin/my-tenant/plan", () => {
     await request(makeApp(db, "client_admin"))
       .put("/v1/admin/my-tenant/plan")
       .set("Authorization", "Bearer dummy")
-      .send({ plan: "enterprise" });
+      .send({ plan: "growth" });
     await new Promise((r) => setImmediate(r));
 
     const auditCall = dbQuery.mock.calls.find(
@@ -1173,8 +1173,28 @@ describe("PUT /v1/admin/my-tenant/plan", () => {
     expect(auditCall).toBeDefined();
     expect(auditCall![1][0]).toBe("tenant-a");           // tenant_id は JWT 由来
     expect(auditCall![1][2]).toBe(JSON.stringify("starter"));
-    expect(auditCall![1][3]).toBe(JSON.stringify("enterprise"));
+    expect(auditCall![1][3]).toBe(JSON.stringify("growth"));
   });
+
+  // 2026-08-26 レビュー是正(GID 1217860479559418): enterprise は個別契約のため
+  // テナント自己申告では変更できない。無制限利用枠+voice_clone/deep_research/
+  // sai_task(planFeatures.ts)が請求経路の無いまま即座に開く事故を塞ぐ。
+  it("enterprise への自己昇格は403で拒否される(DB接続すら確立しない)", async () => {
+    const { db, connect } = makePlanTxDb({ beforeRow: { plan: "starter" } });
+    const res = await request(makeApp(db, "client_admin"))
+      .put("/v1/admin/my-tenant/plan")
+      .set("Authorization", "Bearer dummy")
+      .send({ plan: "enterprise" });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("enterprise_requires_sales");
+    expect(connect).not.toHaveBeenCalled();
+  });
+
+  // super_admin 経路(POST /v1/admin/tenants・PATCH /v1/admin/tenants/:id)は
+  // enterprise を個別契約として引き続き受け付ける。この403はテナント自己申告
+  // 経路だけの制限であることを固定する(routes.test.ts の他describeで
+  // super_adminがenterpriseへ変更できることは既にカバー済み)。
 
   it("同じプランへの変更は no-op で、監査行を増やさない", async () => {
     const { db, dbQuery, clientQuery } = makePlanTxDb({ beforeRow: { plan: "growth" } });
@@ -1357,7 +1377,7 @@ describe("PUT /v1/admin/my-tenant/plan — 境界・異常系", () => {
     expect(res.body.previous_plan).toBe("free_ad");
   });
 
-  it.each(["starter", "growth", "enterprise"])(
+  it.each(["starter", "growth"])(
     "free_ad から %s への昇格は 403 にならない",
     async (target) => {
       const { db } = makePlanTxDb({ beforeRow: { plan: "free_ad" } });
@@ -1368,6 +1388,20 @@ describe("PUT /v1/admin/my-tenant/plan — 境界・異常系", () => {
       expect(res.status).toBe(200);
     }
   );
+
+  // enterprise だけは別枠: free_ad の降格ブロックには巻き込まれない(previousPlan側の
+  // 判定ではないので上のテストと同じ理由で200になり得るが)、enterprise_requires_sales
+  // による403は正しく効くことを固定する。
+  it("free_ad から enterprise への昇格は enterprise_requires_sales で403になる", async () => {
+    const { db, connect } = makePlanTxDb({ beforeRow: { plan: "free_ad" } });
+    const res = await request(makeApp(db, "client_admin"))
+      .put("/v1/admin/my-tenant/plan")
+      .set("Authorization", "Bearer dummy")
+      .send({ plan: "enterprise" });
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("enterprise_requires_sales");
+    expect(connect).not.toHaveBeenCalled();
+  });
 
   // ★重要★ この2行を消してもレスポンスは200のままなので、
   // キャッシュの中身を直接見ないと退行に気づけない。
@@ -1579,9 +1613,12 @@ describe("PUT /v1/admin/my-tenant/plan — 境界・異常系", () => {
     expect(auditCall![1][1]).toBe("");
   });
 
-  // 全プラン遷移の網羅（free_ad 行きだけが 403、それ以外は通る）
-  const PAID = ["starter", "growth", "enterprise"] as const;
-  it.each(PAID.flatMap((f) => PAID.filter((t) => t !== f).map((t) => [f, t])))(
+  // 全プラン遷移の網羅（free_ad 行きは403、enterprise 行きは自己申告では403、それ以外は通る）。
+  // enterprise は「現在のプラン」としては有効な状態(super_admin が設定した個別契約)なので
+  // FROM 側には残すが、「テナント自己申告で行ける先」ではないため TO 側からは除く。
+  const PAID_FROM = ["starter", "growth", "enterprise"] as const;
+  const SELF_SERVE_TO = ["starter", "growth"] as const;
+  it.each(PAID_FROM.flatMap((f) => SELF_SERVE_TO.filter((t) => t !== f).map((t) => [f, t])))(
     "有料間の遷移 %s → %s は許可される",
     async (from, to) => {
       const { db } = makePlanTxDb({ beforeRow: { plan: from as string } });
@@ -1591,6 +1628,23 @@ describe("PUT /v1/admin/my-tenant/plan — 境界・異常系", () => {
         .send({ plan: to });
       expect(res.status).toBe(200);
       expect(res.body.plan).toBe(to);
+    }
+  );
+
+  // 2026-08-26 レビュー是正(GID 1217860479559418): enterprise 行きだけは free_ad と
+  // 同じ位置づけの403(DB接続前に弾く)。上の網羅テストの補完として、全FROMから
+  // enterprise へは一貫して拒否されることを固定する。
+  it.each(PAID_FROM)(
+    "%s → enterprise への自己申告は許可されない",
+    async (from) => {
+      const { db, connect } = makePlanTxDb({ beforeRow: { plan: from as string } });
+      const res = await request(makeApp(db, "client_admin"))
+        .put("/v1/admin/my-tenant/plan")
+        .set("Authorization", "Bearer dummy")
+        .send({ plan: "enterprise" });
+      expect(res.status).toBe(403);
+      expect(res.body.error).toBe("enterprise_requires_sales");
+      expect(connect).not.toHaveBeenCalled();
     }
   );
 });
@@ -1688,7 +1742,7 @@ describe("PUT /v1/admin/my-tenant/plan — 降格時の features 整合", () => 
     await request(makeApp(db, "client_admin"))
       .put("/v1/admin/my-tenant/plan")
       .set("Authorization", "Bearer dummy")
-      .send({ plan: "enterprise" });
+      .send({ plan: "growth" });
 
     const calls = clientQuery.mock.calls.find(([sql]: [string]) => sql.includes("UPDATE tenants"))![1];
     const merged = calls.find((p: unknown) => typeof p === "string" && (p as string).startsWith("{"));
