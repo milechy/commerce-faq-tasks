@@ -102,4 +102,15 @@ for f in "${FILES[@]}"; do
   psql -v ON_ERROR_STOP=1 -1 "${DATABASE_URL}" -f "${f}"
 done
 
+# tenants.tenant_contact_email(src/api/admin/tenants/migration_phase_a.sql)。
+# checkout-session(billingApi.ts)がこの列を参照するため REQUIRED_COLUMNS.tenants
+# に登録したが、migration_phase_a.sql 全体は conversion_attributions テーブル
+# (このスクリプトのbilling専用スコープ外・未作成)も変更するため、ファイルごと
+# FILES に足すとここが 42P01 で落ちる。列だけを個別に当てる。
+# ★本番は 2026-08-16 に migration_phase_a.sql 全体を適用済み(DEPLOY_CHECKLIST.md)。
+# これは CI の検出漏れを塞ぐためだけの追加で、本番の未適用問題ではない。
+echo "=== applying tenants.tenant_contact_email (from migration_phase_a.sql) ==="
+psql -v ON_ERROR_STOP=1 -1 "${DATABASE_URL}" -c \
+  "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS tenant_contact_email TEXT;"
+
 echo "✅ billing schema bootstrap complete"

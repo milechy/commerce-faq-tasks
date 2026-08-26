@@ -123,6 +123,11 @@ describe("REQUIRED_COLUMNS の機械的ガード", () => {
   // 登録しただけで放置される事故を防ぐ。
   const UPDATE_ONLY_COLUMNS: Record<string, string[]> = {
     knowledge_gaps: ["recommended_action", "suggested_answer"],
+    // tenant_contact_email は tenants の INSERT(routes.ts:764)には無く、
+    // super_adminの設定タブ(routes.ts:945)とGA4連携(ga4Routes.ts:64)のUPDATEで
+    // 後から書き込まれる。checkout-session(billingApi.ts:747)が SELECT で読む
+    // ため実行時チェックには含めたいが、機械的ガードはINSERTしか見ない。
+    tenants: ["tenant_contact_email"],
   };
 
   it("レジストリがソースの INSERT 文と完全一致する(動的テーブル名・UPDATE専用列を除く)", () => {
@@ -161,6 +166,12 @@ describe("REQUIRED_COLUMNS の機械的ガード", () => {
     );
     expect(src).toMatch(/UPDATE\s+knowledge_gaps[\s\S]*?SET[\s\S]*?recommended_action\s*=/);
     expect(src).toMatch(/UPDATE\s+knowledge_gaps[\s\S]*?SET[\s\S]*?suggested_answer\s*=/);
+
+    const routesSrc = fs.readFileSync(
+      path.resolve(__dirname, "../tenants/routes.ts"),
+      "utf-8",
+    );
+    expect(routesSrc).toMatch(/setClauses\.push\(`tenant_contact_email\s*=/);
   });
 
   it("動的テーブル名(lemonslice/livekit/platform_monthly_charges)のINSERT列がレジストリと一致する", () => {
