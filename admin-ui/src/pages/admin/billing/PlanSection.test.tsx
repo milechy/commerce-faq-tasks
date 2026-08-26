@@ -245,12 +245,12 @@ describe("PlanSection", () => {
       fireEvent.click(screen.getByRole("button", { name: /Growth/ }));
       expect(screen.getByText(/→ Growth に変更しますか/)).toBeTruthy();
 
-      fireEvent.click(screen.getByRole("button", { name: /Enterprise/ }));
-      expect(screen.getByText(/→ Enterprise に変更しますか/)).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: /Standard/ }));
+      expect(screen.getByText(/→ Standard に変更しますか/)).toBeTruthy();
 
-      fireEvent.click(screen.getByRole("button", { name: /Enterprise に変更する/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Standard に変更する/ }));
       await waitFor(() => expect(fetchMock()).toHaveBeenCalled());
-      expect(JSON.parse(fetchMock().mock.calls[0][1].body)).toEqual({ plan: "enterprise" });
+      expect(JSON.parse(fetchMock().mock.calls[0][1].body)).toEqual({ plan: "standard" });
     });
 
     it("失敗 → やめる → 別プラン選択 で、前のエラーが残らない", async () => {
@@ -276,15 +276,16 @@ describe("PlanSection", () => {
       fireEvent.click(screen.getByRole("button", { name: /Growth に変更する/ }));
       await waitFor(() => expect(screen.getByText("一時的な失敗")).toBeTruthy());
 
-      fireEvent.click(screen.getByRole("button", { name: /Enterprise/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Standard/ }));
       expect(screen.queryByText("一時的な失敗")).toBeNull();
-      expect(screen.getByText(/→ Enterprise に変更しますか/)).toBeTruthy();
+      expect(screen.getByText(/→ Standard に変更しますか/)).toBeTruthy();
     });
 
     // 無料プラン利用中のテナントが課金プランへ上がる導線。ここが塞がると収益が止まる。
+    // Enterprise は個別契約のため対象外(下の別テストで固定)。
     it("free_ad 利用中でも有料プランへは上げられる", () => {
       renderSection("free_ad");
-      for (const name of [/Starter/, /Growth/, /Enterprise/]) {
+      for (const name of [/Starter/, /Standard/, /Growth/]) {
         expect((screen.getByRole("button", { name }) as HTMLButtonElement).disabled).toBe(false);
       }
       fireEvent.click(screen.getByRole("button", { name: /Growth/ }));
@@ -323,8 +324,8 @@ describe("PlanSection", () => {
       fetchMock().mockResolvedValue({ ok: true, json: async () => ({ plan: "starter" }) });
       const { onChanged } = renderSection("growth");
 
-      fireEvent.click(screen.getByRole("button", { name: /Enterprise/ }));
-      fireEvent.click(screen.getByRole("button", { name: /Enterprise に変更する/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Standard/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Standard に変更する/ }));
 
       await waitFor(() => expect(onChanged).toHaveBeenCalledWith("starter"));
     });
@@ -382,9 +383,21 @@ describe("PlanSection", () => {
     it("成功応答に plan が無くても、要求したプランで確定する", async () => {
       fetchMock().mockResolvedValue({ ok: true, json: async () => ({}) });
       const { onChanged } = renderSection("starter");
-      fireEvent.click(screen.getByRole("button", { name: /Enterprise/ }));
-      fireEvent.click(screen.getByRole("button", { name: /Enterprise に変更する/ }));
-      await waitFor(() => expect(onChanged).toHaveBeenCalledWith("enterprise"));
+      fireEvent.click(screen.getByRole("button", { name: /Standard/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Standard に変更する/ }));
+      await waitFor(() => expect(onChanged).toHaveBeenCalledWith("standard"));
+    });
+
+    // 2026-08-26 レビュー是正(GID 1217860479559418): Enterprise は個別契約のため、
+    // 現在のプランに関わらず常に押せない(free_adブロックと違い一時的な制限ではない)。
+    it("Enterprise は個別契約のため押せず、理由が表示される", () => {
+      renderSection("growth");
+      const enterpriseBtn = screen.getByRole("button", { name: /Enterprise/ }) as HTMLButtonElement;
+      expect(enterpriseBtn.disabled).toBe(true);
+      expect(screen.getByText(/Enterprise は個別契約です。担当までお問い合わせください。/)).toBeTruthy();
+
+      fireEvent.click(enterpriseBtn);
+      expect(screen.queryByText(/→ Enterprise に変更しますか/)).toBeNull();
     });
   });
 
