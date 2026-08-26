@@ -17,6 +17,7 @@ import { trackUsage } from '../../lib/billing/usageTracker';
 import { sanitizeInput as l5SanitizeInput, sessionHistoryStore } from '../../middleware/inputSanitizer';
 import { applyPromptFirewall } from '../../middleware/promptFirewall';
 import { checkTopic } from '../../middleware/topicGuard';
+import { redactInternalTerms, INTERNAL_TERM_HOLD_CHARS } from '../../middleware/outputGuard';
 
 const MAX_ANAM_MESSAGES = 20;
 const MAX_ANAM_MESSAGE_LENGTH = 2000;
@@ -299,6 +300,18 @@ export function registerAnamChatStreamRoutes(app: Express, apiStack: RequestHand
       const decoder = new TextDecoder();
       let buffer = '';
       let assistantContent = '';
+      // 社内用語がチャンク境界で分割されると素通りするため、最長パターン長を超える
+      // 末尾を送信保留し、用語が丸ごと揃った状態で伏せてから送出する。
+      let pendingOut = '';
+      const flushPending = (final: boolean): void => {
+        pendingOut = redactInternalTerms(pendingOut).text;
+        const cut = final ? pendingOut.length : pendingOut.length - INTERNAL_TERM_HOLD_CHARS;
+        if (cut <= 0) return;
+        const emit = pendingOut.slice(0, cut);
+        pendingOut = pendingOut.slice(cut);
+        assistantContent += emit;
+        res.write(JSON.stringify({ content: emit }) + '\n');
+      };
       let inputTokens: number | undefined;
       let outputTokens: number | undefined;
 
@@ -324,8 +337,8 @@ export function registerAnamChatStreamRoutes(app: Express, apiStack: RequestHand
               };
               const content = parsed.choices?.[0]?.delta?.content ?? '';
               if (content) {
-                assistantContent += content;
-                res.write(JSON.stringify({ content }) + '\n');
+                pendingOut += content;
+                flushPending(false);
               }
               // stream_options.include_usage時、最終チャンクはchoicesが空でusageのみを含む。
               if (typeof parsed.usage?.prompt_tokens === 'number' && typeof parsed.usage?.completion_tokens === 'number') {
@@ -338,6 +351,8 @@ export function registerAnamChatStreamRoutes(app: Express, apiStack: RequestHand
           }
         }
       } finally {
+        // 中断時も保留分を取りこぼさない(伏せ字化は flushPending 内で適用済み)。
+        flushPending(true);
         // ストリームが正常完了/中断のどちらでも、ここまでに得たusage(未取得ならundefined)で計上する。
         // requestId(req.requestId)は1リクエストにつき固定なので、再接続で二重にPOSTされない限り
         // 二重計上は発生しない。二重POST自体はusage_logsのrequest_id UNIQUE制約で防がれる。

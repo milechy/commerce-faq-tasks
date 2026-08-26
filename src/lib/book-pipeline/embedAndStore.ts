@@ -41,6 +41,30 @@ export async function deleteBookChunkFromEs(
   }
 }
 
+/**
+ * 書籍チャンクの ES ドキュメントの検索除外フラグだけを更新する（best-effort）。
+ * hybrid.ts の must_not フィルタが参照する `is_excluded_from_search` を立てて、
+ * 削除せずに BM25 検索から外す（可逆な停止のため）。
+ */
+export async function setBookChunkExcludedInEs(
+  esUrl: string,
+  tenantId: string,
+  docId: string,
+  excluded: boolean
+): Promise<void> {
+  const index = resolveFaqWriteIndex(tenantId);
+  const url = `${esUrl.replace(/\/$/, "")}/${index}/_update/${encodeURIComponent(docId)}`;
+  try {
+    await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ doc: { is_excluded_from_search: excluded } }),
+    });
+  } catch {
+    // best-effort: ES sync failure should not block the pgvector-side update
+  }
+}
+
 export async function upsertToEs(
   esUrl: string,
   tenantId: string,

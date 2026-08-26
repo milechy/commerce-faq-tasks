@@ -17,7 +17,7 @@ import { sanitizeInput, sanitizeOutput, blockReasonToMessage } from "../../lib/s
 import { sanitizeInput as l5SanitizeInput, sessionHistoryStore } from "../../middleware/inputSanitizer";
 import { applyPromptFirewall } from "../../middleware/promptFirewall";
 import { checkTopic } from "../../middleware/topicGuard";
-import { guardOutput } from "../../middleware/outputGuard";
+import { guardOutput, redactInternalTerms } from "../../middleware/outputGuard";
 import { detectPiiRoute } from "../../agent/avatar/piiRouteDetector";
 import { getTenantPlan } from "../../lib/billing/planFeatures";
 import { getCachedShareConsent } from "../../lib/hermesConsent";
@@ -362,6 +362,10 @@ export function createChatHandler(logger: Logger) {
             ? "Sorry, we could not generate a response at this time. Please try again."
             : "申し訳ありません。現在回答を生成できませんでした。再度お試しください。";
       }
+
+      // 社内用語の伏せ字化。clarifyingQuestions も LLM 生成のため、
+      // 分岐後の content に対してまとめて適用する。
+      content = redactInternalTerms(content).text;
 
       const actions: ChatAction[] = [];
       if (result.detectedIntents?.proposeIntent === "visit_booking") {
