@@ -481,7 +481,7 @@ describe("PlanSection", () => {
 
       // 1回目(プラン変更のPUT)を除き、checkout-session へのPOSTは1回のみ
       const checkoutCalls = (authFetch as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(
-        ([url]: [string]) => url.includes("/checkout-session")
+        (call: any[]) => String(call[0]).includes("/checkout-session")
       );
       expect(checkoutCalls).toHaveLength(1);
     });
