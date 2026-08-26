@@ -91,6 +91,10 @@ FILES=(
   "src/api/admin/chat-history/migration.sql"
   # usage_logs.session_id(会話単位の請求)
   "src/lib/billing/migration_usage_logs_session_id.sql"
+  # stripe_usage_reports.dimension(基本料+込み枠+超過プランの次元別報告)。
+  # 未適用だと Standard/Growth のテキスト超過とアバター超過を区別して記録できず、
+  # 42703 フォールバックで次元ラベルの無い行になる(送信自体は継続する)。
+  "src/lib/billing/migration_stripe_usage_reports_dimension.sql"
 )
 
 for f in "${FILES[@]}"; do

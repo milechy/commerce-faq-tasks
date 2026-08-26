@@ -17,7 +17,10 @@ interface MinimalLogger {
 // 焼き付けるため、Stripe連携モジュールへの依存を持たせたくない）。
 // re-export は置かない。PLAN_MULTIPLIERS/planMultiplier が要る側は
 // './planPricing' から直接importすること（二重の出どころを作らない）。
-import { planMultiplier } from './planPricing';
+import { planMultiplier, getSubscriptionItemPrices } from './planPricing';
+// 込み枠(基本料に含まれる利用量)の定義は planQuota.ts が唯一の出どころ。
+// 1000/30/3000/150 をここへ書き写さないこと(禁止6)。
+import { computeQuotaOverage, type QuotaOverage } from './planQuota';
 
 /** 環境変数から LemonSlice 月額固定費(JPY)を取得。未設定/0 なら按分課金は無効。 */
 export function getLemonsliceMonthlyFeeJpy(): number {
@@ -179,7 +182,7 @@ export async function chargeOneOffJpy(
     }
 
     const stripe = getStripeClient();
-    const subInfo = await getSubscriptionItemId(db, tenantId, stripe, logger);
+    const subInfo = await getSubscriptionItems(db, tenantId, stripe, logger);
     if (!subInfo?.customerId) {
       logger.warn({ tenantId }, '[stripeSync] chargeOneOffJpy: no customerId, skipping');
       return false;
@@ -213,15 +216,35 @@ export function periodToDateRange(periodYyyyMm: string): { startDate: string; en
   return { startDate, endDate };
 }
 
+interface SubscriptionInfo {
+  subscriptionId: string;
+  customerId: string | null;
+  /** 最初の item。単一 item 構成(starter/free_ad/enterprise)の従来経路が使う。 */
+  itemId: string;
+  /**
+   * price ID → subscription item ID。
+   *
+   * 込み枠プランの subscription は「基本料 + テキスト超過 + アバター超過」の3 item
+   * 構成になるため、どの数量をどの item へ送るかを**配列の位置ではなく price で**
+   * 引く必要がある。位置で決めると、items の並びが変わった瞬間にアバターの分数が
+   * テキストの単価で請求される(しかも金額はもっともらしく出るので気づけない)。
+   */
+  itemsByPrice: Record<string, string>;
+}
+
 /**
- * テナントのStripe SubscriptionItem IDを取得する。
+ * テナントの Stripe subscription から、送信先 item を引くための情報を取得する。
+ *
+ * DB の stripe_subscriptions.stripe_price_id は「プランを代表する1本」しか持たない
+ * 単数列なので、item 構成の正は常に Stripe 側から retrieve して引き直す
+ * (DBのキャッシュを信じない = 手動でitemを足された場合も取り違えない)。
  */
-async function getSubscriptionItemId(
+async function getSubscriptionItems(
   db: any,
   tenantId: string,
   stripe: any,
   logger: MinimalLogger
-): Promise<{ subscriptionId: string; itemId: string; customerId: string | null } | null> {
+): Promise<SubscriptionInfo | null> {
   const result = await db.query(
     `SELECT stripe_subscription_id
      FROM stripe_subscriptions
@@ -237,15 +260,23 @@ async function getSubscriptionItemId(
   const subscriptionId = result.rows[0].stripe_subscription_id as string;
   try {
     const subscription = await stripe.subscriptions.retrieve(subscriptionId);
-    const item = (subscription.items?.data ?? [])[0];
+    const items = subscription.items?.data ?? [];
+    const item = items[0];
     if (!item) {
       logger.warn({ tenantId, subscriptionId }, '[stripeSync] subscription has no items');
       return null;
     }
+    const itemsByPrice: Record<string, string> = {};
+    for (const it of items) {
+      // price が展開されていない item は price 引きの対象にできないが、
+      // それだけで報告全体を落とさない(単一item構成の従来経路は itemId しか使わない)。
+      const priceId = typeof it.price === 'string' ? it.price : it.price?.id;
+      if (priceId) itemsByPrice[priceId] = it.id;
+    }
     const customerId = typeof subscription.customer === 'string'
       ? subscription.customer
       : (subscription.customer?.id ?? null);
-    return { subscriptionId, itemId: item.id, customerId };
+    return { subscriptionId, itemId: item.id, customerId, itemsByPrice };
   } catch (err) {
     logger.error({ err, tenantId, subscriptionId }, '[stripeSync] failed to retrieve subscription');
     return null;
@@ -389,6 +420,24 @@ export interface ExpectedBilling {
   billedQuantity: number;
   /** plan_multiplier が NULL の行に適用したフォールバック倍率(現在の tenants.plan 由来)。 */
   fallbackMultiplier: number;
+  /**
+   * テキスト課金の**生の**単位数(会話数)。込み枠の差し引き前・プラン倍率の適用前。
+   *
+   * 内訳は「session_id でまとめた会話数」＋「session_id を持たない chat 行の数」。
+   * 後者を足すのは、migration 適用前の既存行や配線漏れの行を黙って請求から
+   * 落とさないため(billedQuantity 側の 1行=1単位 フォールバックと同じ扱いを、
+   * 込み枠の消費でも保つ)。
+   *
+   * ★billedQuantity から逆算できないのでこの形で返す★
+   * billedQuantity は行ごとの倍率で重み付け済みの合計値で、込み枠の差し引きは
+   * 「倍率をかける前の生の会話数」に対して行う必要がある。
+   */
+  textUnits: number;
+  /**
+   * アバター課金の**生の**分数(feature_used='avatar' のミリ秒換算 ＋ 'anam_session' の秒換算)。
+   * 込み枠の差し引き前・プラン倍率の適用前。
+   */
+  avatarMinutes: number;
 }
 
 /**
@@ -517,6 +566,7 @@ export async function computeExpectedBilling(
      -- ここへ落ちて従来どおり 1行=1単位 になる（黙って請求から消さない）。
      row_units AS (
        SELECT
+         r.feature_used,
          CASE WHEN r.feature_used = 'anam_session'
                    THEN CEIL(COALESCE(r.anam_session_seconds, 0) / 60.0)
               WHEN r.feature_used = 'avatar'
@@ -534,7 +584,14 @@ export async function computeExpectedBilling(
        + (SELECT COUNT(*) FROM conversation_units) )::integer AS billable_units,
        ( (SELECT COALESCE(SUM(units * multiplier), 0) FROM row_units)
        + (SELECT COALESCE(SUM(multiplier), 0) FROM conversation_units) )::numeric AS billed_units_weighted,
-       (SELECT COUNT(*) FILTER (WHERE plan_multiplier IS NULL) FROM billable_rows)::integer AS unstamped_rows`,
+       (SELECT COUNT(*) FILTER (WHERE plan_multiplier IS NULL) FROM billable_rows)::integer AS unstamped_rows,
+       -- 込み枠(planQuota.ts)を差し引くための「生の」次元別数量。倍率は掛けない。
+       -- テキスト = 会話数 + session_id を持たない chat 行(1行=1単位のフォールバック)。
+       ( (SELECT COUNT(*) FROM conversation_units)
+       + (SELECT COALESCE(SUM(units), 0) FROM row_units WHERE feature_used = 'chat') )::integer AS text_units,
+       -- アバター = 分。avatar(ミリ秒) と anam_session(秒) は同じ「時間」の次元なので合算する。
+       (SELECT COALESCE(SUM(units), 0) FROM row_units
+         WHERE feature_used IN ('avatar', 'anam_session'))::integer AS avatar_minutes`,
     [tenantId, startDate, endDate, fallbackMultiplier]
   );
 
@@ -556,7 +613,275 @@ export async function computeExpectedBilling(
   // pg は numeric を文字列で返すため Number() を通す。
   const billedQuantity = Math.ceil(Number(aggResult.rows[0].billed_units_weighted));
 
-  return { totalRequests, totalCostCents, billableUnits, unstampedRows, billedQuantity, fallbackMultiplier };
+  // 込み枠プラン(standard/growth)で使う次元別の生の数量。
+  // 旧スキーマ相当のモックDBが列を返さない場合に NaN を撒かないよう 0 に倒す。
+  const textUnits: number = aggResult.rows[0].text_units ?? 0;
+  const avatarMinutes: number = aggResult.rows[0].avatar_minutes ?? 0;
+
+  return {
+    totalRequests, totalCostCents, billableUnits, unstampedRows, billedQuantity, fallbackMultiplier,
+    textUnits, avatarMinutes,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 送信の部品(2経路が共有する)。
+//
+// 経路は2つある:
+//   (A) 純従量  … starter / free_ad / enterprise / 未知プラン。
+//       月の累積 billedQuantity を1つの item へ送る。**従来と完全に同じ挙動**。
+//   (B) 基本料+込み枠+超過 … standard / growth。
+//       テキスト超過とアバター超過を、それぞれ専用の item へ**別々に**送る。
+//       基本料の item には usage record を送らない(metered ではない定額なので
+//       Stripe が毎期自動で請求する。送るとAPIエラーになる)。
+//
+// リトライ・状態更新・冪等記録は両経路で同一なので、ここに切り出して共有する
+// (2つ書くと、片方だけリトライ回数や status 更新が直る = 禁止6)。
+// ---------------------------------------------------------------------------
+
+/** stripe_usage_reports の dimension 値。'total' は従来の単一数量行。 */
+type ReportDimension = 'total' | 'text' | 'avatar';
+
+/**
+ * 「送信を試みる数量」を stripe_usage_reports へ先に記録する(冪等)。
+ *
+ * ★migration未適用でも他テナントの報告を止めないこと★
+ * ここが例外を投げると、呼び出し元の reportUsageToStripe の for ループに伝播し、
+ * その回のバッチで後続の全テナントが報告されないまま24時間止まる
+ * (index.ts のスケジューラは reportUsageToStripe 全体を1つの catch で包むだけで、
+ * テナント単位のエラー分離をしていない)。usageTracker.ts と同じパターンで
+ * 42703 のときだけ旧カラム構成に1回だけフォールバックし、記録の消失
+ * (=バッチ全体の停止)を防ぐ。dimension 列が無い環境でも idempotency_key が
+ * 次元ごとに異なるため、行は次元ごとに分かれたまま残る(ラベルが付かないだけ)。
+ */
+async function _insertUsageReportRow(
+  db: any,
+  logger: pino.Logger,
+  tenantId: string,
+  periodYyyyMm: string,
+  idempotencyKey: string,
+  totalRequests: number,
+  totalCostCents: number,
+  billedQuantity: number,
+  dimension: ReportDimension,
+): Promise<void> {
+  // ★純従量プランの INSERT は dimension 列に触れない★
+  // 現在の本番テナントはすべてこちら側で、dimension は DB 既定値 'total' が入る。
+  // ここで列を足すと、コードだけ先にデプロイして migration が未適用な時間帯に
+  // **全テナントが 42703 → 旧カラムへフォールバック**し、billed_quantity の記録が
+  // 一斉に止まる(突合が丸ごと効かなくなる)。込み枠プランは dimension が無いと
+  // 2次元を区別できないので、そちらだけが新しい列を要求する。
+  if (dimension === 'total') {
+    // db.query が同期的に throw するケース(モック・一部ドライバ)も拾うため
+    // .catch() ではなく try/catch を使う。
+    try {
+      await db.query(
+        `INSERT INTO stripe_usage_reports
+           (tenant_id, period_yyyymm, idempotency_key, total_requests, total_cost_cents, billed_quantity)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (idempotency_key) DO UPDATE SET
+           total_requests   = EXCLUDED.total_requests,
+           total_cost_cents = EXCLUDED.total_cost_cents,
+           billed_quantity  = EXCLUDED.billed_quantity,
+           updated_at       = NOW()`,
+        [tenantId, periodYyyyMm, idempotencyKey, totalRequests, totalCostCents, billedQuantity]
+      );
+    } catch (err) {
+      if ((err as { code?: string })?.code !== '42703') throw err;
+      logger.error(
+        { err, tenantId, periodYyyyMm },
+        '[stripeSync] stripe_usage_reports に billed_quantity 列が無い — ' +
+        'migration_stripe_usage_reports_billed_quantity.sql が未適用。旧カラムで継続するが、' +
+        '突合用の billed_quantity は記録できない状態のまま。至急 migration を適用すること'
+      );
+      await _insertUsageReportRowLegacy(db, tenantId, periodYyyyMm, idempotencyKey, totalRequests, totalCostCents);
+    }
+    return;
+  }
+
+  try {
+    await db.query(
+      `INSERT INTO stripe_usage_reports
+         (tenant_id, period_yyyymm, idempotency_key, total_requests, total_cost_cents, billed_quantity, dimension)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       ON CONFLICT (idempotency_key) DO UPDATE SET
+         total_requests   = EXCLUDED.total_requests,
+         total_cost_cents = EXCLUDED.total_cost_cents,
+         billed_quantity  = EXCLUDED.billed_quantity,
+         dimension        = EXCLUDED.dimension,
+         updated_at       = NOW()`,
+      [tenantId, periodYyyyMm, idempotencyKey, totalRequests, totalCostCents, billedQuantity, dimension]
+    );
+  } catch (err) {
+    if ((err as { code?: string })?.code !== '42703') throw err;
+    logger.error(
+      { err, tenantId, periodYyyyMm, dimension },
+      '[stripeSync] stripe_usage_reports に billed_quantity / dimension 列が無い — ' +
+      'migration_stripe_usage_reports_billed_quantity.sql または ' +
+      'migration_stripe_usage_reports_dimension.sql が未適用。旧カラムで継続するが、' +
+      '突合用の billed_quantity / 次元ラベルは記録できない状態のまま。至急 migration を適用すること'
+    );
+    await _insertUsageReportRowLegacy(db, tenantId, periodYyyyMm, idempotencyKey, totalRequests, totalCostCents);
+  }
+}
+
+/** 列が欠けている環境向けの最小構成 INSERT(記録の消失=バッチ全体の停止を防ぐ)。 */
+async function _insertUsageReportRowLegacy(
+  db: any,
+  tenantId: string,
+  periodYyyyMm: string,
+  idempotencyKey: string,
+  totalRequests: number,
+  totalCostCents: number,
+): Promise<void> {
+  await db.query(
+    `INSERT INTO stripe_usage_reports
+       (tenant_id, period_yyyymm, idempotency_key, total_requests, total_cost_cents)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (idempotency_key) DO UPDATE SET
+       total_requests   = EXCLUDED.total_requests,
+       total_cost_cents = EXCLUDED.total_cost_cents,
+       updated_at       = NOW()`,
+    [tenantId, periodYyyyMm, idempotencyKey, totalRequests, totalCostCents]
+  );
+}
+
+/**
+ * 1つの subscription item へ絶対値の usage record を送る(最大3回リトライ)。
+ * 成功したら該当 stripe_usage_reports 行を 'sent' に、全滅したら 'failed' にする。
+ */
+async function _sendUsageRecord(
+  db: any,
+  stripe: any,
+  logger: pino.Logger,
+  tenantId: string,
+  periodYyyyMm: string,
+  itemId: string,
+  quantity: number,
+  idempotencyKey: string,
+): Promise<boolean> {
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    try {
+      const usageRecord = await stripe.subscriptionItems.createUsageRecord(
+        itemId,
+        {
+          quantity,
+          timestamp: Math.floor(Date.now() / 1000),
+          action:    'set',
+        },
+        { idempotencyKey }
+      );
+
+      await db.query(
+        `UPDATE stripe_usage_reports
+         SET status = 'sent', stripe_usage_record_id = $1, updated_at = NOW()
+         WHERE idempotency_key = $2`,
+        [usageRecord.id, idempotencyKey]
+      );
+      return true;
+    } catch (err) {
+      lastError = err as Error;
+      logger.warn(
+        { err, tenantId, attempt: attempt + 1, maxRetries: MAX_RETRIES },
+        '[stripeSync] stripe API error, retrying'
+      );
+      if (attempt < MAX_RETRIES - 1) {
+        await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_BASE_MS * (attempt + 1)));
+      }
+    }
+  }
+
+  await db.query(
+    `UPDATE stripe_usage_reports
+     SET status = 'failed',
+         retry_count = retry_count + 1,
+         last_error  = $1,
+         updated_at  = NOW()
+     WHERE idempotency_key = $2`,
+    [lastError?.message?.slice(0, 500) ?? 'unknown', idempotencyKey]
+  );
+
+  logger.error(
+    { tenantId, periodYyyyMm, error: lastError?.message },
+    '[stripeSync] failed after max retries'
+  );
+  return false;
+}
+
+/**
+ * 送信成功後の共通後処理: 観測用の billing_status 更新と、月額固定費の按分上乗せ。
+ */
+async function _finalizeAfterReport(
+  db: any,
+  stripe: any,
+  logger: pino.Logger,
+  tenantId: string,
+  periodYyyyMm: string,
+  startDate: string,
+  endDate: string,
+  customerId: string | null,
+): Promise<void> {
+  // billing_status は集計の対象条件ではなくなった(computeExpectedBilling 参照)ので、
+  // ここでの更新は「この月は少なくとも1回、直近の送信に含まれた」という観測用の印にすぎない。
+  // billable=false の行はこの集計・報告に含まれていないため 'reported' にはしない
+  // （'pending' のまま維持。原価可視化のための行であり、Stripeに送信済みという意味を
+  // 持たせない）。'pending' 縛りを外すのは、集計時点より後に届いた行も
+  // 次回実行で自然に拾われるため、状態遷移の順序に依存させないため。
+  await db.query(
+    `UPDATE usage_logs
+     SET billing_status = 'reported'
+     WHERE tenant_id = $1
+       AND created_at >= $2
+       AND created_at <  $3
+       AND billable = true`,
+    [tenantId, startDate, endDate]
+  );
+
+  // 月額固定費の按分を上乗せ（いずれもデフォルト OFF・冪等）。
+  // アバター専用費(LemonSlice/LiveKit)は scope='avatar'（アバター利用テナントで割る）。
+  await _chargeMonthlyFixedShare(
+    db, stripe, logger, tenantId, periodYyyyMm, startDate, endDate, customerId,
+    {
+      feeJpy:           getLemonsliceMonthlyFeeJpy(),
+      table:            'lemonslice_monthly_charges',
+      label:            'LemonSlice',
+      idempotencyPrefix:'lemonslice-monthly',
+      scope:            'avatar',
+    }
+  );
+  // LiveKit (Ship プラン) 月額固定費の按分（LEMONSLICE と独立・冪等テーブルも別）
+  await _chargeMonthlyFixedShare(
+    db, stripe, logger, tenantId, periodYyyyMm, startDate, endDate, customerId,
+    {
+      feeJpy:           getLivekitMonthlyFeeJpy(),
+      table:            'livekit_monthly_charges',
+      label:            'LiveKit',
+      idempotencyPrefix:'livekit-monthly',
+      scope:            'avatar',
+    }
+  );
+  // プラットフォーム共通費(Supabase/Cloudflare/Hetzner/ES の合計)の按分。
+  // scope='all'＝アバター有無を問わず当月アクティブな全テナントで均等割りする。
+  await _chargeMonthlyFixedShare(
+    db, stripe, logger, tenantId, periodYyyyMm, startDate, endDate, customerId,
+    {
+      feeJpy:           getPlatformMonthlyFeeJpy(),
+      table:            'platform_monthly_charges',
+      label:            'プラットフォーム基本料',
+      idempotencyPrefix:'platform-monthly',
+      scope:            'all',
+    }
+  );
+}
+
+/** 既に同じ数量で送信済み(status='sent')か。 */
+async function _alreadySent(db: any, idempotencyKey: string): Promise<boolean> {
+  const existing = await db.query(
+    `SELECT status FROM stripe_usage_reports WHERE idempotency_key = $1`,
+    [idempotencyKey]
+  );
+  return existing.rows.length > 0 && existing.rows[0].status === 'sent';
 }
 
 async function _reportTenantUsage(
@@ -607,8 +932,8 @@ async function _reportTenantUsage(
   // sai_agent等）は原価がusage_logsに記録されていてもStripe請求数量の集計対象から除外する。
   // ★C-2: 月の累積を毎回丸ごと再計算し、絶対値として送る(増分方式をやめる)★
   // 詳細は computeExpectedBilling() のコメント参照。
-  const { totalRequests, totalCostCents, billableUnits, unstampedRows, billedQuantity, fallbackMultiplier } =
-    await computeExpectedBilling(db, tenantId, startDate, endDate, plan);
+  const expected = await computeExpectedBilling(db, tenantId, startDate, endDate, plan);
+  const { totalRequests, totalCostCents, billableUnits, unstampedRows, billedQuantity, fallbackMultiplier } = expected;
 
   if (totalRequests === 0) {
     logger.debug({ tenantId, periodYyyyMm }, '[stripeSync] no pending usage');
@@ -625,6 +950,17 @@ async function _reportTenantUsage(
     );
   }
 
+  // 込み枠を持つプラン(standard/growth)だけが (B) の経路へ分岐する。
+  // starter / free_ad / enterprise / 未知プランは null が返り、従来経路のまま。
+  const overage = computeQuotaOverage(plan, expected.textUnits, expected.avatarMinutes);
+  if (overage) {
+    await _reportQuotaOverageUsage(
+      db, stripe, logger, tenantId, periodYyyyMm, startDate, endDate, plan, expected, overage
+    );
+    return;
+  }
+
+  // ── (A) 純従量経路(従来どおり) ────────────────────────────────────────
   // 冪等キーに billedQuantity を含める。
   // 「(テナント, 月)」だけをキーにすると、金額が変わった2回目以降の実行が
   // 同じキーでスキップされてしまう(C-2 導入前の不具合)。金額をキーに含めることで:
@@ -635,168 +971,146 @@ async function _reportTenantUsage(
   const idempotencyKey = `billing:${tenantId}:${periodYyyyMm}:${billedQuantity}`;
 
   // 同額を既に送信済みならスキップ(直前の実行から変化が無い)
-  const existing = await db.query(
-    `SELECT status FROM stripe_usage_reports WHERE idempotency_key = $1`,
-    [idempotencyKey]
-  );
-  if (existing.rows.length > 0 && existing.rows[0].status === 'sent') {
+  if (await _alreadySent(db, idempotencyKey)) {
     logger.debug({ tenantId, periodYyyyMm, billedQuantity }, '[stripeSync] same amount already reported, skipping');
     return;
   }
 
-  const subInfo = await getSubscriptionItemId(db, tenantId, stripe, logger);
+  const subInfo = await getSubscriptionItems(db, tenantId, stripe, logger);
   if (!subInfo) return;
 
-  // stripe_usage_reports にupsert（冪等）。billed_quantity は「送信を試みる数量」
-  // をこの時点で先に記録する。Stripe API呼び出し(下記)が例外→リトライを繰り返す間も、
-  // 「何を送ろうとしたか」を突合から追えるようにするため、送信成否を待たずに書く。
-  //
-  // ★migration未適用でも他テナントの報告を止めないこと★
-  // ここが例外を投げると、呼び出し元の reportUsageToStripe の for ループに伝播し、
-  // その回のバッチで後続の全テナントが報告されないまま24時間止まる
-  // (index.ts のスケジューラは reportUsageToStripe 全体を1つの catch で包むだけで、
-  // テナント単位のエラー分離をしていない)。migration_stripe_usage_reports_billed_quantity.sql
-  // が未適用のままデプロイすると、最初のテナントで即座に全滅しかねないため、
-  // usageTracker.ts と同じパターンで 42703 のときだけ旧カラム構成に1回だけ
-  // フォールバックし、記録の消失(=バッチ全体の停止)を防ぐ。
-  try {
-    await db.query(
-      `INSERT INTO stripe_usage_reports
-         (tenant_id, period_yyyymm, idempotency_key, total_requests, total_cost_cents, billed_quantity)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       ON CONFLICT (idempotency_key) DO UPDATE SET
-         total_requests   = EXCLUDED.total_requests,
-         total_cost_cents = EXCLUDED.total_cost_cents,
-         billed_quantity  = EXCLUDED.billed_quantity,
-         updated_at       = NOW()`,
-      [tenantId, periodYyyyMm, idempotencyKey, totalRequests, totalCostCents, billedQuantity]
-    );
-  } catch (err) {
-    if ((err as { code?: string })?.code !== '42703') throw err;
-    logger.error(
-      { err, tenantId, periodYyyyMm },
-      '[stripeSync] stripe_usage_reports に billed_quantity 列が無い — ' +
-      'migration_stripe_usage_reports_billed_quantity.sql が未適用。旧カラムで継続するが、' +
-      '突合用の billed_quantity は記録できない状態のまま。至急 migration を適用すること'
-    );
-    await db.query(
-      `INSERT INTO stripe_usage_reports
-         (tenant_id, period_yyyymm, idempotency_key, total_requests, total_cost_cents)
-       VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (idempotency_key) DO UPDATE SET
-         total_requests   = EXCLUDED.total_requests,
-         total_cost_cents = EXCLUDED.total_cost_cents,
-         updated_at       = NOW()`,
-      [tenantId, periodYyyyMm, idempotencyKey, totalRequests, totalCostCents]
-    );
-  }
-
-  // Stripe送信（最大3回リトライ）
-  let lastError: Error | null = null;
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    try {
-      const usageRecord = await stripe.subscriptionItems.createUsageRecord(
-        subInfo.itemId,
-        {
-          quantity:  billedQuantity,
-          timestamp: Math.floor(Date.now() / 1000),
-          action:    'set',
-        },
-        { idempotencyKey }
-      );
-
-      await db.query(
-        `UPDATE stripe_usage_reports
-         SET status = 'sent', stripe_usage_record_id = $1, updated_at = NOW()
-         WHERE idempotency_key = $2`,
-        [usageRecord.id, idempotencyKey]
-      );
-
-      // billing_status は集計の対象条件ではなくなった(上記)ので、ここでの更新は
-      // 「この月は少なくとも1回、直近の送信に含まれた」という観測用の印にすぎない。
-      // billable=false の行はこの集計・報告に含まれていないため 'reported' にはしない
-      // （'pending' のまま維持。原価可視化のための行であり、Stripeに送信済みという意味を
-      // 持たせない）。'pending' 縛りを外すのは、集計時点より後に届いた行も
-      // 次回実行で自然に拾われるため、状態遷移の順序に依存させないため。
-      await db.query(
-        `UPDATE usage_logs
-         SET billing_status = 'reported'
-         WHERE tenant_id = $1
-           AND created_at >= $2
-           AND created_at <  $3
-           AND billable = true`,
-        [tenantId, startDate, endDate]
-      );
-
-      logger.info(
-        // plan / fallbackMultiplier は「未焼き付け行に適用した値」であって、
-        // 焼き付け済み行の倍率ではない（月中に変更があれば行ごとに異なる）。
-        { tenantId, periodYyyyMm, totalRequests, billableUnits, billedQuantity,
-          currentPlan: plan, fallbackMultiplier, unstampedRows, totalCostCents },
-        '[stripeSync] usage reported to Stripe'
-      );
-
-      // 月額固定費の按分を上乗せ（いずれもデフォルト OFF・冪等）。
-      // アバター専用費(LemonSlice/LiveKit)は scope='avatar'（アバター利用テナントで割る）。
-      await _chargeMonthlyFixedShare(
-        db, stripe, logger, tenantId, periodYyyyMm, startDate, endDate, subInfo.customerId,
-        {
-          feeJpy:           getLemonsliceMonthlyFeeJpy(),
-          table:            'lemonslice_monthly_charges',
-          label:            'LemonSlice',
-          idempotencyPrefix:'lemonslice-monthly',
-          scope:            'avatar',
-        }
-      );
-      // LiveKit (Ship プラン) 月額固定費の按分（LEMONSLICE と独立・冪等テーブルも別）
-      await _chargeMonthlyFixedShare(
-        db, stripe, logger, tenantId, periodYyyyMm, startDate, endDate, subInfo.customerId,
-        {
-          feeJpy:           getLivekitMonthlyFeeJpy(),
-          table:            'livekit_monthly_charges',
-          label:            'LiveKit',
-          idempotencyPrefix:'livekit-monthly',
-          scope:            'avatar',
-        }
-      );
-      // プラットフォーム共通費(Supabase/Cloudflare/Hetzner/ES の合計)の按分。
-      // scope='all'＝アバター有無を問わず当月アクティブな全テナントで均等割りする。
-      await _chargeMonthlyFixedShare(
-        db, stripe, logger, tenantId, periodYyyyMm, startDate, endDate, subInfo.customerId,
-        {
-          feeJpy:           getPlatformMonthlyFeeJpy(),
-          table:            'platform_monthly_charges',
-          label:            'プラットフォーム基本料',
-          idempotencyPrefix:'platform-monthly',
-          scope:            'all',
-        }
-      );
-      return;
-    } catch (err) {
-      lastError = err as Error;
-      logger.warn(
-        { err, tenantId, attempt: attempt + 1, maxRetries: MAX_RETRIES },
-        '[stripeSync] stripe API error, retrying'
-      );
-      if (attempt < MAX_RETRIES - 1) {
-        await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_BASE_MS * (attempt + 1)));
-      }
-    }
-  }
-
-  // 全リトライ失敗
-  await db.query(
-    `UPDATE stripe_usage_reports
-     SET status = 'failed',
-         retry_count = retry_count + 1,
-         last_error  = $1,
-         updated_at  = NOW()
-     WHERE idempotency_key = $2`,
-    [lastError?.message?.slice(0, 500) ?? 'unknown', idempotencyKey]
+  await _insertUsageReportRow(
+    db, logger, tenantId, periodYyyyMm, idempotencyKey, totalRequests, totalCostCents, billedQuantity, 'total'
   );
 
-  logger.error(
-    { tenantId, periodYyyyMm, error: lastError?.message },
-    '[stripeSync] failed after max retries'
+  const sent = await _sendUsageRecord(
+    db, stripe, logger, tenantId, periodYyyyMm, subInfo.itemId, billedQuantity, idempotencyKey
+  );
+  if (!sent) return;
+
+  await _finalizeAfterReport(
+    db, stripe, logger, tenantId, periodYyyyMm, startDate, endDate, subInfo.customerId
+  );
+
+  logger.info(
+    // plan / fallbackMultiplier は「未焼き付け行に適用した値」であって、
+    // 焼き付け済み行の倍率ではない（月中に変更があれば行ごとに異なる）。
+    { tenantId, periodYyyyMm, totalRequests, billableUnits, billedQuantity,
+      currentPlan: plan, fallbackMultiplier, unstampedRows, totalCostCents },
+    '[stripeSync] usage reported to Stripe'
+  );
+}
+
+/**
+ * (B) 基本料 + 込み枠 + 超過 の経路(standard / growth)。
+ *
+ * ★基本料の item には usage record を送らない★
+ * 基本料は metered ではない通常の定期 price で、subscription が存在する限り
+ * Stripe が毎期自動で請求する。createUsageRecord を呼ぶと API エラーになるうえ、
+ * 「送っていないから請求されていない」と誤読する余地を残す。
+ *
+ * ★数量にプラン倍率を掛けない★
+ * 超過単価はプランごとに別の price として実在する(テキスト Standard ¥25 /
+ * Growth ¥30、アバター Standard ¥100/分 / Growth ¥80/分)。倍率は既にその単価へ
+ * 織り込まれているため、数量側にも掛けると二重適用になる
+ * (詳細は planQuota.ts の computeQuotaOverage のコメント)。
+ *
+ * ★2次元の冪等は互いに独立している★
+ * 冪等キーを `billing:<tenant>:<period>:<次元>:<数量>` にすることで、
+ * テキストだけが増えた日にアバター側は前回と同じキーになり、送信がスキップされる
+ * (=変わっていない次元へ無駄な API 呼び出しをしない)。次元をキーに含めないと、
+ * 2つの報告が同じキーで衝突し、片方が「送信済み」と誤判定されて永久に送られない。
+ */
+async function _reportQuotaOverageUsage(
+  db: any,
+  stripe: any,
+  logger: pino.Logger,
+  tenantId: string,
+  periodYyyyMm: string,
+  startDate: string,
+  endDate: string,
+  plan: string | null,
+  expected: ExpectedBilling,
+  overage: QuotaOverage,
+): Promise<void> {
+  const priceResult = getSubscriptionItemPrices(plan);
+  if (!priceResult.ok) {
+    // ここに来るのは env 未設定のときだけ(plan は standard/growth と確定している)。
+    // 数量を送れないまま黙って成功扱いにすると、超過分が丸ごと請求されない。
+    logger.error(
+      { tenantId, periodYyyyMm, plan, reason: priceResult.reason },
+      '[stripeSync] 超過 price の環境変数が未設定 — 込み枠超過分を請求できない'
+    );
+    return;
+  }
+  // 請求周期(monthly/annual)は基本料の price だけを分ける軸で、超過 price は
+  // 周期に依らず同一。ここでは基本料へ送らないので既定(monthly)で引いてよい。
+  const { text: textPriceId, avatarOverage: avatarPriceId } = priceResult.prices;
+
+  const dimensions: Array<{ dimension: 'text' | 'avatar'; priceId: string | undefined; quantity: number }> = [
+    { dimension: 'text',   priceId: textPriceId,   quantity: overage.textConversations },
+    { dimension: 'avatar', priceId: avatarPriceId, quantity: overage.avatarMinutes },
+  ];
+
+  const keyFor = (dimension: string, quantity: number) =>
+    `billing:${tenantId}:${periodYyyyMm}:${dimension}:${quantity}`;
+
+  // 両次元とも前回から変化が無ければ Stripe にも subscription 取得にも触れない。
+  const pending: typeof dimensions = [];
+  for (const d of dimensions) {
+    if (!(await _alreadySent(db, keyFor(d.dimension, d.quantity)))) pending.push(d);
+  }
+  if (pending.length === 0) {
+    logger.debug(
+      { tenantId, periodYyyyMm, textOverage: overage.textConversations, avatarOverage: overage.avatarMinutes },
+      '[stripeSync] same overage already reported on both dimensions, skipping'
+    );
+    return;
+  }
+
+  const subInfo = await getSubscriptionItems(db, tenantId, stripe, logger);
+  if (!subInfo) return;
+
+  let allSent = true;
+  for (const d of pending) {
+    const itemId = d.priceId ? subInfo.itemsByPrice[d.priceId] : undefined;
+    if (!itemId) {
+      // subscription にその次元の item が無い = プラン変更前の古い item 構成のまま。
+      // 該当次元の超過は請求できないので、黙って0円で通さずに鳴らす。
+      logger.error(
+        { tenantId, periodYyyyMm, plan, dimension: d.dimension, priceId: d.priceId,
+          subscriptionId: subInfo.subscriptionId },
+        '[stripeSync] subscription に該当次元の item が無い — ' +
+        'プラン変更後にサブスクリプションの item 構成が追随していない可能性がある。' +
+        'この次元の超過は請求されない'
+      );
+      allSent = false;
+      continue;
+    }
+    const idempotencyKey = keyFor(d.dimension, d.quantity);
+    await _insertUsageReportRow(
+      db, logger, tenantId, periodYyyyMm, idempotencyKey,
+      expected.totalRequests, expected.totalCostCents, d.quantity, d.dimension
+    );
+    const sent = await _sendUsageRecord(
+      db, stripe, logger, tenantId, periodYyyyMm, itemId, d.quantity, idempotencyKey
+    );
+    if (!sent) allSent = false;
+  }
+
+  // 片方でも送れていなければ後処理をしない(次回実行で未送信の次元だけが再試行される。
+  // 送信済みの次元は冪等キーが一致してスキップされる)。
+  if (!allSent) return;
+
+  await _finalizeAfterReport(
+    db, stripe, logger, tenantId, periodYyyyMm, startDate, endDate, subInfo.customerId
+  );
+
+  logger.info(
+    { tenantId, periodYyyyMm, currentPlan: plan,
+      totalRequests: expected.totalRequests, totalCostCents: expected.totalCostCents,
+      textUnits: expected.textUnits, avatarMinutes: expected.avatarMinutes,
+      textOverage: overage.textConversations, avatarOverage: overage.avatarMinutes },
+    '[stripeSync] quota overage reported to Stripe'
   );
 }

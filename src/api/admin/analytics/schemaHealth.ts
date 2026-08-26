@@ -71,9 +71,14 @@ export const REQUIRED_COLUMNS: Record<string, readonly string[]> = {
   // migration.sql で既に本番適用済みだが、未適用環境でここが無言で失敗すると
   // 「オンボーディングは成功したのにDBに紐付かない」状態になる。
   stripe_subscriptions: ["is_active", "stripe_customer_id", "stripe_price_id", "stripe_subscription_id", "tenant_id"],
-  // billed_quantity は migration_stripe_usage_reports_billed_quantity.sql で追加。
+  // billed_quantity は migration_stripe_usage_reports_billed_quantity.sql で、
+  // dimension は migration_stripe_usage_reports_dimension.sql で追加。
   // 未適用のままだと INSERT が全滅し、月次請求が本番で一切送信できなくなる。
-  stripe_usage_reports: ["billed_quantity", "idempotency_key", "period_yyyymm", "tenant_id", "total_cost_cents", "total_requests"],
+  // dimension 欠落は静かな事故で、42703 フォールバックが旧カラムで記録を続けるため
+  // 送信自体は動くが、Standard/Growth のテキスト超過とアバター超過が
+  // 次元ラベルの無い行として混ざり、突合(billingReconciliation.ts)が
+  // 次元を取り違える。
+  stripe_usage_reports: ["billed_quantity", "dimension", "idempotency_key", "period_yyyymm", "tenant_id", "total_cost_cents", "total_requests"],
   stripe_webhook_events: ["claimed_at", "event_id", "event_type"],
   tenant_api_keys: ["expires_at", "is_active", "key_hash", "key_prefix", "tenant_id"],
   tenant_settings_history: ["changed_by", "field_name", "new_value", "old_value", "tenant_id"],

@@ -724,7 +724,13 @@ describe('reportUsageToStripe（実行される統合テスト）', () => {
   }
 
   const ACTIVE_TENANTS = { rows: [{ tenant_id: 't1' }], rowCount: 1 };
-  const TENANT_ROW = { rows: [{ billing_enabled: true, billing_free_from: null, billing_free_until: null, plan: 'growth' }], rowCount: 1 };
+  // ★plan は「どちらの請求経路を通るか」を決める★
+  // standard/growth は基本料+込み枠+超過の経路(_reportQuotaOverageUsage)へ分岐するため、
+  // 純従量経路(単一 item へ billedQuantity を送る従来の仕組み)を検証するこの束では
+  // 込み枠を持たない starter を使う。込み枠プラン側は別の describe で検証する。
+  // なお billed_units_weighted は AGG_ROW でまるごとモックしているので、
+  // ここの plan は倍率の計算には影響しない(未焼き付け行のフォールバック倍率のみ)。
+  const TENANT_ROW = { rows: [{ billing_enabled: true, billing_free_from: null, billing_free_until: null, plan: 'starter' }], rowCount: 1 };
   const AGG_ROW = (totalRequests: number, billableUnits: number, weighted: string, unstamped = 0) => ({
     rows: [{ total_requests: totalRequests, total_cost_cents: 500, billable_units: billableUnits, billed_units_weighted: weighted, unstamped_rows: unstamped }],
   });
@@ -751,8 +757,11 @@ describe('reportUsageToStripe（実行される統合テスト）', () => {
         // 列リストにも VALUES にも billed_quantity が無いと、6番目の
         // パラメータ(225)が渡っていても DB には書かれない。ここは
         // params だけでなく SQL 文字列側も検証する。
+        // ★純従量プランの行の形は変えない★ dimension 列には触れず、DB既定値 'total' に任せる。
+        // ここで列を足すと、migration 未適用の時間帯に全テナントが 42703 へ落ちる。
         expect(sql).toMatch(/\(tenant_id,\s*period_yyyymm,\s*idempotency_key,\s*total_requests,\s*total_cost_cents,\s*billed_quantity\)/);
         expect(sql).toMatch(/VALUES\s*\(\$1,\s*\$2,\s*\$3,\s*\$4,\s*\$5,\s*\$6\)/);
+        expect(sql).not.toMatch(/dimension/);
         expect(params).toEqual(['t1', expect.any(String), expect.any(String), 150, 500, 225]);
         return { rows: [] };
       },
@@ -1142,5 +1151,306 @@ describe('StripeUsageReporter（定期実行ラッパー・PR-3）', () => {
     // 1つ目のtickを完了させる(後片付け)
     releaseFirstQuery!();
     await jest.advanceTimersByTimeAsync(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 基本料 + 込み枠 + 超過 の請求経路（Standard / Growth）。
+//
+// 確定価格 .claude/rules/billing.md §7:
+//   Standard ¥9,800/月 + テキスト1,000会話/アバター30分 込み、超過 ¥25/会話・¥100/分
+//   Growth   ¥29,800/月 + テキスト3,000会話/アバター150分 込み、超過 ¥30/会話・¥80/分
+//
+// ここで守るべき不変条件:
+//   1. 基本料の item には usage record を送らない(metered ではないのでAPIエラーになる)
+//   2. テキストとアバターは**別々の item** へ、それぞれの絶対値を送る
+//   3. 数量にプラン倍率を掛けない(単価が既にプランごとに分かれているので二重適用になる)
+//   4. 2次元の冪等は互いに独立(片方が増えても、もう片方は再送されない)
+// ─────────────────────────────────────────────────────────────────────────────
+describe('込み枠プラン(Standard/Growth): テキスト超過とアバター超過を別itemへ送る', () => {
+  const qLogger = { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() } as any;
+  const OLD_ENV = process.env;
+
+  const PRICE_ENV = {
+    STRIPE_PRICE_STANDARD_BASE_MONTHLY:   'price_std_base',
+    STRIPE_PRICE_STANDARD_TEXT_OVERAGE:   'price_std_text',
+    STRIPE_PRICE_STANDARD_AVATAR_OVERAGE: 'price_std_avatar',
+    STRIPE_PRICE_GROWTH_BASE_MONTHLY:     'price_gro_base',
+    STRIPE_PRICE_GROWTH_TEXT_OVERAGE:     'price_gro_text',
+    STRIPE_PRICE_GROWTH_AVATAR_OVERAGE:   'price_gro_avatar',
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    process.env = { ...OLD_ENV, STRIPE_SECRET_KEY: 'sk_test_dummy', ...PRICE_ENV };
+    // 3 item 構成の subscription。price → item の対応で送り先を引く
+    // (配列の位置で決めると、並びが変わった瞬間にアバターがテキストの単価で請求される)。
+    mockSubscriptionsRetrieve.mockResolvedValue({
+      customer: 'cus_1',
+      items: {
+        data: [
+          { id: 'si_base',   price: { id: 'price_std_base' } },
+          { id: 'si_text',   price: { id: 'price_std_text' } },
+          { id: 'si_avatar', price: { id: 'price_std_avatar' } },
+        ],
+      },
+    });
+    mockCreateUsageRecord.mockResolvedValue({ id: 'mbur_1' });
+  });
+  afterAll(() => { process.env = OLD_ENV; });
+
+  /**
+   * 込み枠プラン用のモックDB。
+   * textUnits / avatarMinutes は集計SQLが返す「生の」数量(倍率適用前)。
+   */
+  function makeQuotaDb(opts: {
+    plan?: string;
+    textUnits: number;
+    avatarMinutes: number;
+    sentKeys?: Set<string>;
+  }) {
+    const { plan = 'standard', textUnits, avatarMinutes, sentKeys = new Set<string>() } = opts;
+    const inserted: Array<{ key: string; quantity: number; dimension: string }> = [];
+
+    const query = jest.fn().mockImplementation(async (sql: string, params: unknown[] = []) => {
+      if (sql.includes('SELECT DISTINCT tenant_id FROM stripe_subscriptions')) {
+        return { rows: [{ tenant_id: 't1' }] };
+      }
+      if (sql.includes('SELECT billing_enabled')) {
+        return { rows: [{ billing_enabled: true, billing_free_from: null, billing_free_until: null, plan }] };
+      }
+      if (sql.includes('billed_units_weighted')) {
+        return { rows: [{
+          total_requests: textUnits + avatarMinutes,
+          total_cost_cents: 500,
+          billable_units: textUnits + avatarMinutes,
+          // 純従量経路で使う加重合計。込み枠経路では使われないこと自体もここで担保する。
+          billed_units_weighted: '99999',
+          unstamped_rows: 0,
+          text_units: textUnits,
+          avatar_minutes: avatarMinutes,
+        }] };
+      }
+      if (sql.includes('SELECT status FROM stripe_usage_reports')) {
+        const [key] = params as [string];
+        return { rows: sentKeys.has(key) ? [{ status: 'sent' }] : [] };
+      }
+      if (sql.includes('SELECT stripe_subscription_id')) {
+        return { rows: [{ stripe_subscription_id: 'sub_1' }] };
+      }
+      if (sql.includes('INSERT INTO stripe_usage_reports')) {
+        const p = params as unknown[];
+        inserted.push({ key: p[2] as string, quantity: p[5] as number, dimension: p[6] as string });
+        return { rows: [] };
+      }
+      return { rows: [] };
+    });
+
+    return { query, inserted };
+  }
+
+  /** createUsageRecord の呼び出しを (itemId → quantity) で引けるようにする。 */
+  function sentByItem(): Record<string, number> {
+    const out: Record<string, number> = {};
+    for (const [itemId, payload] of mockCreateUsageRecord.mock.calls) {
+      out[itemId as string] = (payload as { quantity: number }).quantity;
+    }
+    return out;
+  }
+
+  it('込み枠内なら両次元とも 0 を送る(基本料はStripeが自動請求するので usage record を送らない)', async () => {
+    const db = makeQuotaDb({ textUnits: 800, avatarMinutes: 20 });
+    await reportUsageToStripe(db as any, qLogger, { periodYyyyMm: '202603' });
+
+    expect(sentByItem()).toEqual({ si_text: 0, si_avatar: 0 });
+    // ★基本料の item には絶対に送らない★ metered ではないのでStripeがエラーを返す。
+    expect(mockCreateUsageRecord).not.toHaveBeenCalledWith('si_base', expect.anything(), expect.anything());
+  });
+
+  it('テキストだけ超過 → テキスト item にだけ超過分、アバターは0', async () => {
+    const db = makeQuotaDb({ textUnits: 1200, avatarMinutes: 10 });
+    await reportUsageToStripe(db as any, qLogger, { periodYyyyMm: '202603' });
+
+    expect(sentByItem()).toEqual({ si_text: 200, si_avatar: 0 });
+  });
+
+  it('アバターだけ超過 → アバター item にだけ超過分、テキストは0', async () => {
+    const db = makeQuotaDb({ textUnits: 500, avatarMinutes: 45 });
+    await reportUsageToStripe(db as any, qLogger, { periodYyyyMm: '202603' });
+
+    expect(sentByItem()).toEqual({ si_text: 0, si_avatar: 15 });
+  });
+
+  it('両次元とも超過 → それぞれの item へ、それぞれの絶対値を送る', async () => {
+    const db = makeQuotaDb({ textUnits: 1500, avatarMinutes: 100 });
+    await reportUsageToStripe(db as any, qLogger, { periodYyyyMm: '202603' });
+
+    expect(sentByItem()).toEqual({ si_text: 500, si_avatar: 70 });
+    expect(mockCreateUsageRecord).toHaveBeenCalledTimes(2);
+  });
+
+  // ★★★ 本PRで最も壊れやすい点(その2) ★★★
+  // 超過単価はプランごとに別の price として実在するため、倍率は price 側に
+  // 織り込まれている。数量にも掛けると二重適用になる。
+  it('★数量にプラン倍率を掛けない★ Standard で ×1.25 / ×1.25 されていない', async () => {
+    const db = makeQuotaDb({ plan: 'standard', textUnits: 1400, avatarMinutes: 130 });
+    await reportUsageToStripe(db as any, qLogger, { periodYyyyMm: '202603' });
+
+    const sent = sentByItem();
+    // テキスト超過 400会話。×1.25 した 500 になってはいけない
+    // (¥25 price × 500 = ¥12,500 で、正しい ¥25 × 400 = ¥10,000 より 25% 多い)。
+    expect(sent.si_text).toBe(400);
+    expect(sent.si_text).not.toBe(500);
+    // アバター超過 100分。×1.25 した 125 になってはいけない。
+    // アバターは分単価が倍率と逆向き(Standard ¥100 → Growth ¥80)なので、
+    // 掛けると「上位ほど高い」向きに反転する(CLAUDE.md 禁止56)。
+    expect(sent.si_avatar).toBe(100);
+    expect(sent.si_avatar).not.toBe(125);
+  });
+
+  it('★数量にプラン倍率を掛けない★ Growth で ×1.5 されていない', async () => {
+    mockSubscriptionsRetrieve.mockResolvedValue({
+      customer: 'cus_1',
+      items: {
+        data: [
+          { id: 'si_base',   price: { id: 'price_gro_base' } },
+          { id: 'si_text',   price: { id: 'price_gro_text' } },
+          { id: 'si_avatar', price: { id: 'price_gro_avatar' } },
+        ],
+      },
+    });
+    const db = makeQuotaDb({ plan: 'growth', textUnits: 3400, avatarMinutes: 250 });
+    await reportUsageToStripe(db as any, qLogger, { periodYyyyMm: '202603' });
+
+    const sent = sentByItem();
+    expect(sent.si_text).toBe(400);
+    expect(sent.si_text).not.toBe(600);   // ×1.5
+    expect(sent.si_avatar).toBe(100);
+    expect(sent.si_avatar).not.toBe(150); // ×1.5
+  });
+
+  // 純従量経路の billedQuantity(加重合計)が、込み枠経路へ漏れていないこと。
+  // モックは billed_units_weighted に 99999 を返しており、これが送られたら混線している。
+  it('込み枠経路は billedQuantity(加重合計)を送らない', async () => {
+    const db = makeQuotaDb({ textUnits: 1200, avatarMinutes: 45 });
+    await reportUsageToStripe(db as any, qLogger, { periodYyyyMm: '202603' });
+
+    const quantities = mockCreateUsageRecord.mock.calls.map(([, p]: [string, { quantity: number }]) => p.quantity);
+    expect(quantities).not.toContain(99999);
+  });
+
+  it('冪等キーは次元ごとに分かれる(同じキーで衝突すると片方が永久に送られない)', async () => {
+    const db = makeQuotaDb({ textUnits: 1200, avatarMinutes: 45 });
+    await reportUsageToStripe(db as any, qLogger, { periodYyyyMm: '202603' });
+
+    const keys = mockCreateUsageRecord.mock.calls.map(
+      ([, , opts]: [string, unknown, { idempotencyKey: string }]) => opts.idempotencyKey
+    );
+    expect(keys).toEqual(['billing:t1:202603:text:200', 'billing:t1:202603:avatar:15']);
+    expect(new Set(keys).size).toBe(2);
+  });
+
+  it('stripe_usage_reports は次元ごとに1行ずつ、dimension 付きで記録される', async () => {
+    const db = makeQuotaDb({ textUnits: 1200, avatarMinutes: 45 });
+    await reportUsageToStripe(db as any, qLogger, { periodYyyyMm: '202603' });
+
+    expect(db.inserted).toEqual([
+      { key: 'billing:t1:202603:text:200',  quantity: 200, dimension: 'text' },
+      { key: 'billing:t1:202603:avatar:15', quantity: 15,  dimension: 'avatar' },
+    ]);
+  });
+
+  it('両次元とも前回と同じなら、Stripeにも subscription 取得にも触れない(冪等)', async () => {
+    const sentKeys = new Set(['billing:t1:202603:text:200', 'billing:t1:202603:avatar:15']);
+    const db = makeQuotaDb({ textUnits: 1200, avatarMinutes: 45, sentKeys });
+    await reportUsageToStripe(db as any, qLogger, { periodYyyyMm: '202603' });
+
+    expect(mockCreateUsageRecord).not.toHaveBeenCalled();
+    expect(mockSubscriptionsRetrieve).not.toHaveBeenCalled();
+  });
+
+  // ★2次元の冪等が互いに干渉しないこと★
+  // テキストだけが増えた日に、変化していないアバターまで再送すると、
+  // 無駄なAPI呼び出しに加えて「送信していないのに送信済みの行が増える」ことになる。
+  it('テキストだけ増えた日は、テキストだけ再送されアバターは送られない', async () => {
+    const sentKeys = new Set(['billing:t1:202603:text:200', 'billing:t1:202603:avatar:15']);
+    // アバターは 45分のまま、テキストだけ 1200 → 1300 に増えた
+    const db = makeQuotaDb({ textUnits: 1300, avatarMinutes: 45, sentKeys });
+    await reportUsageToStripe(db as any, qLogger, { periodYyyyMm: '202603' });
+
+    expect(sentByItem()).toEqual({ si_text: 300 });
+    expect(mockCreateUsageRecord).toHaveBeenCalledTimes(1);
+  });
+
+  it('アバターだけ増えた日は、アバターだけ再送されテキストは送られない', async () => {
+    const sentKeys = new Set(['billing:t1:202603:text:200', 'billing:t1:202603:avatar:15']);
+    const db = makeQuotaDb({ textUnits: 1200, avatarMinutes: 60, sentKeys });
+    await reportUsageToStripe(db as any, qLogger, { periodYyyyMm: '202603' });
+
+    expect(sentByItem()).toEqual({ si_avatar: 30 });
+    expect(mockCreateUsageRecord).toHaveBeenCalledTimes(1);
+  });
+
+  it('絶対値送信: 2回目は差分ではなく月初からの累積の超過分を送る', async () => {
+    const first = makeQuotaDb({ textUnits: 1200, avatarMinutes: 0 });
+    await reportUsageToStripe(first as any, qLogger, { periodYyyyMm: '202603' });
+    expect(sentByItem().si_text).toBe(200);
+
+    jest.clearAllMocks();
+    mockCreateUsageRecord.mockResolvedValue({ id: 'mbur_2' });
+    const second = makeQuotaDb({
+      textUnits: 1500, avatarMinutes: 0,
+      sentKeys: new Set(['billing:t1:202603:text:200', 'billing:t1:202603:avatar:0']),
+    });
+    await reportUsageToStripe(second as any, qLogger, { periodYyyyMm: '202603' });
+    // 差分の 300 ではなく、累積の超過 500 が送られる
+    expect(sentByItem().si_text).toBe(500);
+  });
+
+  it('利用が0件のテナントはStripeに触れない(従来と同じ早期return)', async () => {
+    const db = makeQuotaDb({ textUnits: 0, avatarMinutes: 0 });
+    await reportUsageToStripe(db as any, qLogger, { periodYyyyMm: '202603' });
+    expect(mockCreateUsageRecord).not.toHaveBeenCalled();
+  });
+
+  // 該当次元の item が subscription に無い場合、0円で黙って通さずに鳴らすこと。
+  it('subscription に該当次元の item が無ければ error ログを出す(黙って請求を落とさない)', async () => {
+    mockSubscriptionsRetrieve.mockResolvedValue({
+      customer: 'cus_1',
+      items: { data: [{ id: 'si_base', price: { id: 'price_std_base' } }] }, // 超過itemが無い
+    });
+    const db = makeQuotaDb({ textUnits: 1200, avatarMinutes: 45 });
+    await reportUsageToStripe(db as any, qLogger, { periodYyyyMm: '202603' });
+
+    expect(mockCreateUsageRecord).not.toHaveBeenCalled();
+    const messages = qLogger.error.mock.calls.map((c: unknown[]) => String(c[1] ?? ''));
+    expect(messages.some((m: string) => m.includes('該当次元の item が無い'))).toBe(true);
+  });
+
+  // 純従量プランが込み枠経路へ迷い込んでいないことの回帰。
+  it('Starter は込み枠経路へ入らず、従来どおり単一itemへ billedQuantity を送る', async () => {
+    mockSubscriptionsRetrieve.mockResolvedValue({
+      customer: 'cus_1',
+      items: { data: [{ id: 'si_only', price: { id: 'price_starter_text' } }] },
+    });
+    const db = makeQuotaDb({ plan: 'starter', textUnits: 5000, avatarMinutes: 500 });
+    await reportUsageToStripe(db as any, qLogger, { periodYyyyMm: '202603' });
+
+    // 込み枠の差し引きをせず、加重合計(モックの99999)がそのまま1本で送られる
+    expect(sentByItem()).toEqual({ si_only: 99999 });
+    expect(mockCreateUsageRecord).toHaveBeenCalledWith(
+      'si_only', expect.anything(),
+      expect.objectContaining({ idempotencyKey: 'billing:t1:202603:99999' })
+    );
+  });
+
+  it('Enterprise も込み枠経路へ入らない(個別交渉のため自動の込み枠を持たない)', async () => {
+    mockSubscriptionsRetrieve.mockResolvedValue({
+      customer: 'cus_1',
+      items: { data: [{ id: 'si_only', price: { id: 'price_ent' } }] },
+    });
+    const db = makeQuotaDb({ plan: 'enterprise', textUnits: 5000, avatarMinutes: 500 });
+    await reportUsageToStripe(db as any, qLogger, { periodYyyyMm: '202603' });
+    expect(sentByItem()).toEqual({ si_only: 99999 });
   });
 });
