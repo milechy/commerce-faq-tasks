@@ -12,13 +12,17 @@
 import { createStripeWebhookHandler } from './stripeWebhook';
 
 // stripe をモック
+// ★{virtual:true}を付けない★ 'stripe' は実在するnpmパッケージなので不要かつ有害
+// (2026-08-26: フルスイート実行時に他ファイルの'stripe'モックと競合し、
+// 無関係なテストファイル(tests/phase54/billingDashboard.test.ts)が全滅する
+// 事故がCI Gate 1で発覚した。詳細は billingApi.checkoutSession.test.ts 参照)。
 jest.mock('stripe', () => {
   return jest.fn().mockImplementation(() => ({
     webhooks: {
       constructEvent: jest.fn(),
     },
   }));
-}, { virtual: true });
+});
 
 function makeReqRes(overrides: {
   body?: any;

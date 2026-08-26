@@ -327,7 +327,14 @@ describe("computeBillingEstimateJpy", () => {
 
 // ─── ヘルパー: 'stripe' パッケージをモックしてクライアントを差し込む ──────────
 
-jest.mock("stripe", () => jest.fn(), { virtual: true });
+// ★{virtual:true}を付けない★ 'stripe' は実在パッケージなので不要かつ有害。
+// virtualは「モジュールが実在しない場合」専用のオプションで、実在モジュールに
+// 使うとJestの仮想モックレジストリが実モジュール解決パスと別系統になり、
+// フルスイート実行時に他ファイル(stripeWebhook.test.ts等)の'stripe'モックと
+// 競合して、無関係なテストファイルまで巻き添えで壊れる事故を招く
+// (2026-08-26、CI Gate 1で tests/phase54/billingDashboard.test.ts が全滅する
+// 形で発覚。billingApi.checkoutSession.test.ts の同種コメント参照)。
+jest.mock("stripe", () => jest.fn());
 
 async function withStripeClient<T>(priceTable: Record<string, unknown>, fn: () => Promise<T>): Promise<T> {
   const stripe = makeStripe(priceTable);

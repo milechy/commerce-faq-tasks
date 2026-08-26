@@ -4,13 +4,17 @@
 const mockInvoiceItemsCreate = jest.fn();
 const mockSubscriptionsRetrieve = jest.fn();
 const mockCreateUsageRecord = jest.fn();
+// ★{virtual:true}を付けない★ 'stripe' は実在パッケージなので不要かつ有害
+// (2026-08-26: フルスイート実行時に他ファイルの'stripe'モックと競合し、
+// 無関係なテストファイル(tests/phase54/billingDashboard.test.ts)が全滅する
+// 事故がCI Gate 1で発覚した。詳細は billingApi.checkoutSession.test.ts 参照)。
 jest.mock('stripe', () => {
   return jest.fn().mockImplementation(() => ({
     invoiceItems: { create: (...args: unknown[]) => mockInvoiceItemsCreate(...args) },
     subscriptions: { retrieve: (...args: unknown[]) => mockSubscriptionsRetrieve(...args) },
     subscriptionItems: { createUsageRecord: (...args: unknown[]) => mockCreateUsageRecord(...args) },
   }));
-}, { virtual: true });
+});
 
 import { lemonsliceShareJpy, monthlyShareJpy, getLemonsliceMonthlyFeeJpy, getLivekitMonthlyFeeJpy, getPlatformMonthlyFeeJpy, chargeOneOffJpy, anamSessionBillableUnits, reportUsageToStripe, stripeUsageReporter, getPeriodYyyyMm } from './stripeSync';
 // PLAN_MULTIPLIERS/planMultiplier の定義自体は planPricing.ts にある。stripeSync.ts の
