@@ -16,6 +16,7 @@ import type { SimilarPattern } from '../../api/events/similarUserMatcher';
 
 import { getPool } from '../../lib/db';
 import { buildSentimentHint } from '../../lib/sentiment/hint';
+import { redactInternalTerms } from '../../middleware/outputGuard';
 import {
   BOOK_EXCERPT_MAX_CHARS,
   BOOK_MAX_EXCERPTS,
@@ -476,7 +477,7 @@ async function buildFaqContext(items: RerankItem[], tenantId: string | undefined
     }
   }
 
-  return top
+  const context = top
     .map((it, i) => {
       const maxChars = isBookSource(it) ? BOOK_EXCERPT_MAX_CHARS : FAQ_EXCERPT_MAX_CHARS;
       const faqId = faqIdByIndex.get(i);
@@ -490,6 +491,11 @@ async function buildFaqContext(items: RerankItem[], tenantId: string | undefined
       return `FAQ${i + 1}:\n参考情報: ${excerpt}`;
     })
     .join('\n\n');
+
+  // 書籍(tenant_id='global')由来の抜粋には社内限定の呼称が含まれうる。
+  // テナント向け検索は無条件に global を引く(pgvectorSearch.ts)ため、
+  // LLM に見せる前に伏せる。見せなければ「〜の法則によれば」と復唱されない。
+  return redactInternalTerms(context).text;
 }
 
 function truncate(s: string, maxChars: number): string {
