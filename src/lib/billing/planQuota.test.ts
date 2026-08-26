@@ -5,7 +5,7 @@
  * - isFreeAdMonthlyQuotaExceeded: 境界値(N-1/N/N+1) / 上限0 / 負の値で例外
  */
 
-import { getMonthRangeJst, isFreeAdMonthlyQuotaExceeded, FREE_AD_MONTHLY_CONVERSATION_LIMIT, includedQuotaForPlan, computeQuotaOverage } from './planQuota';
+import { getMonthRangeJst, isFreeAdMonthlyQuotaExceeded, FREE_AD_MONTHLY_CONVERSATION_LIMIT, FREE_AD_MONTHLY_REQUEST_LIMIT, includedQuotaForPlan, computeQuotaOverage } from './planQuota';
 
 describe('getMonthRangeJst', () => {
   it('JST月初(1日00:00:00.000)ちょうどでは monthStart が現在時刻と一致する', () => {
@@ -124,6 +124,16 @@ describe('isFreeAdMonthlyQuotaExceeded', () => {
   it('カスタム上限を指定できる', () => {
     expect(isFreeAdMonthlyQuotaExceeded(9, 10)).toBe(false);
     expect(isFreeAdMonthlyQuotaExceeded(10, 10)).toBe(true);
+  });
+
+  it('P0-4バックストップ: 生リクエスト数上限の既定値は1000であり、会話数上限(200)より大きい', () => {
+    expect(FREE_AD_MONTHLY_REQUEST_LIMIT).toBe(1000);
+    expect(FREE_AD_MONTHLY_REQUEST_LIMIT).toBeGreaterThan(FREE_AD_MONTHLY_CONVERSATION_LIMIT);
+  });
+
+  it('P0-4バックストップ: FREE_AD_MONTHLY_REQUEST_LIMITを上限として渡した境界値判定', () => {
+    expect(isFreeAdMonthlyQuotaExceeded(999, FREE_AD_MONTHLY_REQUEST_LIMIT)).toBe(false);
+    expect(isFreeAdMonthlyQuotaExceeded(1000, FREE_AD_MONTHLY_REQUEST_LIMIT)).toBe(true);
   });
 });
 

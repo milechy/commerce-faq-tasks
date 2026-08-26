@@ -21,7 +21,11 @@ import { guardOutput, redactInternalTerms } from "../../middleware/outputGuard";
 import { detectPiiRoute } from "../../agent/avatar/piiRouteDetector";
 import { getTenantPlan } from "../../lib/billing/planFeatures";
 import { getCachedShareConsent } from "../../lib/hermesConsent";
-import { getMonthRangeJst, isFreeAdMonthlyQuotaExceeded } from "../../lib/billing/planQuota";
+import {
+  getMonthRangeJst,
+  isFreeAdMonthlyQuotaExceeded,
+  FREE_AD_MONTHLY_REQUEST_LIMIT,
+} from "../../lib/billing/planQuota";
 import { getPool } from "../../lib/db";
 
 // チャットリクエストで使用するデフォルトLLMモデル名（コスト計算用）
@@ -106,9 +110,47 @@ export async function countFreeAdBillableConversations(
 }
 
 /**
- * free_ad プランのテナントに限り、当月の**会話数**が上限に達しているかを判定する。
- * free_ad 以外のプランは常に false（既存動作は一切変えない）。上限・月次境界の
- * 計算自体は src/lib/billing/planQuota.ts の純関数に委ね、ここでは DB 集計のみを行う。
+ * 指定テナント・期間の「生のリクエスト数」(usage_logs行数、session_idの
+ * グルーピングを一切行わない)を数える。P0-4バックストップ専用の集計。
+ *
+ * ★なぜ必要か★ sessionId はクライアントが完全に制御できる値(下記
+ * `body.sessionId?.trim() || body.conversationId || randomUUID()`)。
+ * countFreeAdBillableConversations は chat_sessions.message_count>=2 の
+ * session のみを「会話」として数えるため、常に新規のランダムsessionId +
+ * 単発メッセージを送り続けるクライアントは、実際にLLM呼び出しのコストを
+ * 発生させ続けながら conversation_units に一切乗らず、会話ベースの月次上限
+ * (200件)を無期限にすり抜けられる。この関数はそれを塞ぐための、session_id
+ * を一切信用しない生カウントの絶対上限バックストップ
+ * (src/lib/billing/planQuota.ts の FREE_AD_MONTHLY_REQUEST_LIMIT)。
+ *
+ * 本筋の対応(session_idをサーバー側で発行しクライアント指定を信用しない)は
+ * 別タスクとして先送りされており、この関数はそれまでの暫定策。
+ */
+export async function countFreeAdBillableRequests(
+  pool: QueryablePool,
+  tenantId: string,
+  monthStart: Date,
+  monthEnd: Date,
+): Promise<number> {
+  const result = await pool.query<{ count: string }>(
+    `SELECT COUNT(*)::text AS count
+       FROM usage_logs
+      WHERE tenant_id = $1
+        AND feature_used = 'chat'
+        AND billable = true
+        AND created_at >= $2
+        AND created_at <  $3`,
+    [tenantId, monthStart, monthEnd],
+  );
+  return Number(result.rows[0]?.count ?? 0);
+}
+
+/**
+ * free_ad プランのテナントに限り、当月の**会話数**または**生リクエスト数**
+ * (P0-4バックストップ、countFreeAdBillableRequests参照)のいずれかが上限に
+ * 達しているかを判定する。free_ad 以外のプランは常に false（既存動作は一切
+ * 変えない）。上限・月次境界の計算自体は src/lib/billing/planQuota.ts の
+ * 純関数に委ね、ここでは DB 集計のみを行う。
  *
  * fail-open: plan取得・集計クエリのいずれかが失敗した場合は false（ブロックしない）
  * を返す。エンタイトルメント判定(機能を隠す側)は最も制限の強い方へ倒すのが
@@ -141,7 +183,16 @@ async function isFreeAdQuotaExceededForTenant(
     const currentMonthConversationCount = await countFreeAdBillableConversations(
       pool, tenantId, monthStart, monthEnd,
     );
-    return isFreeAdMonthlyQuotaExceeded(currentMonthConversationCount);
+    if (isFreeAdMonthlyQuotaExceeded(currentMonthConversationCount)) return true;
+
+    // P0-4バックストップ: 会話ベースの上限をすり抜ける単発リクエストの
+    // 連発を、生リクエスト数の絶対上限で塞ぐ(countFreeAdBillableRequests
+    // のコメント参照)。既に会話ベースで上限超過なら、この追加クエリは不要
+    // なので上のearly returnで打ち切る。
+    const currentMonthRequestCount = await countFreeAdBillableRequests(
+      pool, tenantId, monthStart, monthEnd,
+    );
+    return isFreeAdMonthlyQuotaExceeded(currentMonthRequestCount, FREE_AD_MONTHLY_REQUEST_LIMIT);
   } catch (err) {
     logger.warn({ tenantId, err }, "chat.request.free_ad_quota_check_failed");
     return false;

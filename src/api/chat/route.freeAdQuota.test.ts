@@ -161,13 +161,75 @@ describe("POST /api/chat — free_ad プランの月次上限", () => {
 
     await request(makeApp()).post("/api/chat").send({ message: "こんにちは" });
 
-    expect(mockPoolQuery).toHaveBeenCalledTimes(1);
+    // 会話数クエリ(1本目)に加え、P0-4バックストップの生リクエスト数クエリ
+    // (2本目)も走る(会話数が上限未満のため打ち切られない)。
+    expect(mockPoolQuery).toHaveBeenCalledTimes(2);
     const [sql, params] = mockPoolQuery.mock.calls[0];
     expect(sql).toEqual(expect.stringContaining("feature_used = 'chat'"));
     expect(params[0]).toBe("tenant-1");
     expect(params[1]).toBeInstanceOf(Date);
     expect(params[2]).toBeInstanceOf(Date);
     expect((params[2] as Date).getTime()).toBeGreaterThan((params[1] as Date).getTime());
+  });
+
+  // ---------------------------------------------------------------------
+  // P0-4バックストップ: 会話ベースの上限をすり抜ける生リクエスト数の絶対上限
+  // ---------------------------------------------------------------------
+
+  it("P0-4バックストップ: 会話数は上限未満だが生リクエスト数が上限(1000件)以上なら403", async () => {
+    mockGetTenantPlan.mockResolvedValue("free_ad");
+    mockPoolQuery
+      .mockResolvedValueOnce(countRow(5)) // 会話数: 上限未満
+      .mockResolvedValueOnce(countRow(1000)); // 生リクエスト数: 上限ちょうど
+
+    const res = await request(makeApp())
+      .post("/api/chat")
+      .send({ message: "こんにちは" });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("plan_upgrade_required");
+    expect(mockPoolQuery).toHaveBeenCalledTimes(2);
+    expect(mockRunDialogTurn).not.toHaveBeenCalled();
+  });
+
+  it("P0-4バックストップ: 会話数・生リクエスト数ともに上限未満なら通る", async () => {
+    mockGetTenantPlan.mockResolvedValue("free_ad");
+    mockPoolQuery
+      .mockResolvedValueOnce(countRow(5))
+      .mockResolvedValueOnce(countRow(999));
+
+    const res = await request(makeApp())
+      .post("/api/chat")
+      .send({ message: "こんにちは" });
+
+    expect(res.status).toBe(200);
+    expect(mockPoolQuery).toHaveBeenCalledTimes(2);
+  });
+
+  it("P0-4バックストップ: 会話数が既に上限超過なら、生リクエスト数クエリは走らせずに403で打ち切る", async () => {
+    mockGetTenantPlan.mockResolvedValue("free_ad");
+    mockPoolQuery.mockResolvedValueOnce(countRow(200));
+
+    const res = await request(makeApp())
+      .post("/api/chat")
+      .send({ message: "こんにちは" });
+
+    expect(res.status).toBe(403);
+    expect(mockPoolQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it("異常系(fail-open): 生リクエスト数クエリ(2本目)が例外を投げてもチャットは処理を続ける", async () => {
+    mockGetTenantPlan.mockResolvedValue("free_ad");
+    mockPoolQuery
+      .mockResolvedValueOnce(countRow(5))
+      .mockRejectedValueOnce(new Error("db timeout on backstop query"));
+
+    const res = await request(makeApp())
+      .post("/api/chat")
+      .send({ message: "こんにちは" });
+
+    expect(res.status).toBe(200);
+    expect(mockRunDialogTurn).toHaveBeenCalledTimes(1);
   });
 
   it("異常系(fail-open): getTenantPlanが例外を投げてもチャットは処理を続ける(全テナント停止を避ける)", async () => {
@@ -403,7 +465,8 @@ describe("POST /api/chat — free_ad 月境界ちょうどのリクエスト(実
     expect(resBeforeMidnight.status).toBe(403);
 
     jest.setSystemTime(new Date("2026-08-31T15:00:00.000Z")); // 日付をまたぐ
-    mockPoolQuery.mockResolvedValueOnce(countRow(0)); // 新しい月はまだ0件
+    // 新しい月はまだ0件(会話数クエリ→P0-4バックストップの生リクエスト数クエリの2本)
+    mockPoolQuery.mockResolvedValueOnce(countRow(0)).mockResolvedValueOnce(countRow(0));
     const resAfterMidnight = await request(makeApp()).post("/api/chat").send({ message: "月初" });
     expect(resAfterMidnight.status).toBe(200);
   });
