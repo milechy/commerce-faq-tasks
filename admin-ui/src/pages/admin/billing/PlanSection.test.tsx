@@ -45,7 +45,11 @@ afterEach(() => {
 function renderSection(
   currentPlan: "free_ad" | "starter" | "standard" | "growth" | "enterprise" | null,
   planStatus?: "loading" | "error" | "ready",
-  billingStatus?: "ok" | "no_subscription" | null
+  billingStatus?: "ok" | "no_subscription" | null,
+  // billingStatus="no_subscription"を使う既存テストの大半は、リロード後も
+  // 対応要の状態が続いているケースを再現する意図なので既定でtrueにする。
+  // billingSyncNeedsAttentionのfalse/nullを明示的に検証するテストだけ上書きする。
+  billingSyncNeedsAttention: boolean | null = true
 ) {
   const onChanged = vi.fn();
   const showToast = vi.fn();
@@ -54,6 +58,7 @@ function renderSection(
       currentPlan={currentPlan}
       planStatus={planStatus}
       billingStatus={billingStatus}
+      billingSyncNeedsAttention={billingSyncNeedsAttention}
       onChanged={onChanged}
       showToast={showToast}
     />
@@ -409,7 +414,7 @@ describe("PlanSection", () => {
     it("no_subscription のときは支払い設定の案内とボタンを出す", async () => {
       (authFetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
         ok: true,
-        json: async () => ({ plan: "growth", billing_sync: "no_subscription" }),
+        json: async () => ({ plan: "growth", billing_sync: "no_subscription", billing_sync_needs_attention: true }),
       });
       const { onChanged } = renderSection("starter");
       fireEvent.click(screen.getByRole("button", { name: /Growth/ }));
@@ -425,7 +430,7 @@ describe("PlanSection", () => {
     it("no_subscription 以外の needs-attention ステータスではボタンを出さない", async () => {
       (authFetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
         ok: true,
-        json: async () => ({ plan: "growth", billing_sync: "price_not_configured" }),
+        json: async () => ({ plan: "growth", billing_sync: "price_not_configured", billing_sync_needs_attention: true }),
       });
       const { onChanged } = renderSection("starter");
       fireEvent.click(screen.getByRole("button", { name: /Growth/ }));
@@ -451,7 +456,7 @@ describe("PlanSection", () => {
 
     it("「お支払い設定へ進む」を押すとCheckoutセッションを作成し、返ってきたURLへ遷移する", async () => {
       (authFetch as unknown as ReturnType<typeof vi.fn>)
-        .mockResolvedValueOnce({ ok: true, json: async () => ({ plan: "growth", billing_sync: "no_subscription" }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ plan: "growth", billing_sync: "no_subscription", billing_sync_needs_attention: true }) })
         .mockResolvedValueOnce({ ok: true, json: async () => ({ url: "https://checkout.stripe.com/cs_test_1" }) });
 
       renderSection("starter");
@@ -474,7 +479,7 @@ describe("PlanSection", () => {
     it("「お支払い設定へ進む」を連打しても Checkout セッション作成は1回しか呼ばれない", async () => {
       let resolveCheckout: (v: unknown) => void = () => {};
       (authFetch as unknown as ReturnType<typeof vi.fn>)
-        .mockResolvedValueOnce({ ok: true, json: async () => ({ plan: "growth", billing_sync: "no_subscription" }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ plan: "growth", billing_sync: "no_subscription", billing_sync_needs_attention: true }) })
         .mockImplementationOnce(
           () => new Promise((resolve) => { resolveCheckout = resolve; })
         );
@@ -501,7 +506,7 @@ describe("PlanSection", () => {
 
     it("Checkoutセッション作成が失敗したらエラーを表示し、遷移しない", async () => {
       (authFetch as unknown as ReturnType<typeof vi.fn>)
-        .mockResolvedValueOnce({ ok: true, json: async () => ({ plan: "growth", billing_sync: "no_subscription" }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ plan: "growth", billing_sync: "no_subscription", billing_sync_needs_attention: true }) })
         .mockResolvedValueOnce({ ok: false, json: async () => ({ message: "Checkoutセッションの作成に失敗しました" }) });
 
       renderSection("starter");
@@ -527,15 +532,32 @@ describe("PlanSection", () => {
       expect(screen.getByRole("button", { name: "お支払い設定へ進む" })).toBeTruthy();
     });
 
+    // ★2026-08-26 レビュー是正の核心★ billingStatus=ok(契約は存在する)でも、
+    // 永続化された直近の同期結果が failed/manual_plan 等だった場合、契約の
+    // 有無だけを見るbillingStatusでは検出できない。billingSyncNeedsAttentionが
+    // このケースを拾う。ただし具体的にどのstatusだったかはリロード後は
+    // 持ち越さないため、「支払い設定へ進む」ボタン(no_subscription専用)は出さない
+    // (押しても解決しない操作をテナントに提示しない)。
+    it("billingStatus=ok でも billingSyncNeedsAttention=true なら案内を出す(ボタンは出さない)", () => {
+      renderSection("growth", "ready", "ok", true);
+      expect(screen.getByText(/お支払い設定の確認が必要です/)).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "お支払い設定へ進む" })).toBeNull();
+    });
+
+    it("billingSyncNeedsAttention=false なら billingStatus=no_subscription でも案内を出さない(直近の同期は問題なかった)", () => {
+      renderSection("growth", "ready", "no_subscription", false);
+      expect(screen.queryByText(/お支払い設定の確認が必要です/)).toBeNull();
+    });
+
     it("billingStatus=ok なら案内を出さない", () => {
-      renderSection("growth", "ready", "ok");
+      renderSection("growth", "ready", "ok", false);
       expect(screen.queryByText(/お支払い設定の確認が必要です/)).toBeNull();
     });
 
     // 未取得(null)を「契約なし」と誤認しない。取得前に一瞬「支払い設定が必要」が
     // 出ると、実際は契約済みのテナントを無用に不安にさせる(fail-safeの向き)。
     it("billingStatus=null(未取得)では案内を出さない", () => {
-      renderSection("growth", "ready", null);
+      renderSection("growth", "ready", null, null);
       expect(screen.queryByText(/お支払い設定の確認が必要です/)).toBeNull();
     });
 
@@ -558,9 +580,9 @@ describe("PlanSection", () => {
     it("プラン変更直後は、古い billingStatus=ok より変更レスポンスの billing_sync を優先する", async () => {
       (authFetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
         ok: true,
-        json: async () => ({ plan: "growth", billing_sync: "no_subscription" }),
+        json: async () => ({ plan: "growth", billing_sync: "no_subscription", billing_sync_needs_attention: true }),
       });
-      const { onChanged } = renderSection("starter", "ready", "ok");
+      const { onChanged } = renderSection("starter", "ready", "ok", false);
 
       fireEvent.click(screen.getByRole("button", { name: /Growth/ }));
       fireEvent.click(screen.getByRole("button", { name: /Growth に変更する/ }));

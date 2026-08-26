@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { roleAuthMiddleware, requireRole } from '../../api/middleware/roleAuth';
 import { computeExpectedBilling } from './stripeSync';
 import { getSubscriptionItemPrices, toSubscriptionItems } from './planPricing';
+import { billingSyncStatusNeedsAttention } from './subscriptionSync';
 import {
   getMonthRangeJst,
   includedQuotaForPlan,
@@ -362,6 +363,10 @@ export type BillingInvoicesResult =
       tenantId: string;
       customerId: string;
       portalUrl: string;
+      /** tenants.billing_sync_status に永続化された直近のプラン変更同期結果(下記コメント参照)。 */
+      billingSyncStatus: string | null;
+      /** 上記が対応を要する状態か。判定基準の重複を避けるため billingSyncStatusNeedsAttention を使う。 */
+      billingSyncNeedsAttention: boolean;
       invoices: Array<{
         id: string;
         status: string;
@@ -376,7 +381,7 @@ export type BillingInvoicesResult =
         created: number;
       }>;
     }
-  | { status: 'no_subscription'; tenantId: string }
+  | { status: 'no_subscription'; tenantId: string; billingSyncStatus: string | null; billingSyncNeedsAttention: boolean }
   | { status: 'stripe_not_configured' };
 
 const INVOICE_STATUS_LABELS: Record<string, string> = {
@@ -387,6 +392,25 @@ const INVOICE_STATUS_LABELS: Record<string, string> = {
 };
 
 export async function fetchBillingInvoices(db: any, tenantId: string): Promise<BillingInvoicesResult> {
+  // ★リロードを跨いだ「支払い設定が未完了」の可視化(2026-08-26 レビュー是正)★
+  // syncSubscriptionForTenant の結果は従来 PUT/PATCH のレスポンスにしか載らず、
+  // PlanSection.tsx のコンポーネントstate(lastBillingSync)だけが保持していた。
+  // 画面をリロードすると warning が跡形もなく消えていたため、tenants自身に
+  // 焼き付けた直近の同期結果(billing_sync_status)をここで読み、
+  // needsBillingAttention と同じ判定で「対応を要する状態か」を返す。
+  // migration_billing_sync_status.sql 未適用環境でも42703をfail-openし、
+  // 単に「持ち越し情報が無い(false)」として動作を継続する。
+  let billingSyncStatus: string | null = null;
+  let billingSyncNeedsAttention = false;
+  try {
+    const syncRow = await db.query(`SELECT billing_sync_status FROM tenants WHERE id = $1`, [tenantId]);
+    billingSyncStatus = syncRow.rows[0]?.billing_sync_status ?? null;
+    billingSyncNeedsAttention = billingSyncStatusNeedsAttention(billingSyncStatus);
+  } catch {
+    // migration未適用等。fail-open(不明な場合は「対応不要」扱い) — 過去のfailedを
+    // 見せ損なうより、未適用環境で機能全体を止めない方を優先する。
+  }
+
   const subResult = await db.query(
     `SELECT stripe_customer_id FROM stripe_subscriptions
      WHERE tenant_id = $1 AND is_active = true LIMIT 1`,
@@ -394,7 +418,7 @@ export async function fetchBillingInvoices(db: any, tenantId: string): Promise<B
   );
 
   if (subResult.rows.length === 0) {
-    return { status: 'no_subscription', tenantId };
+    return { status: 'no_subscription', tenantId, billingSyncStatus, billingSyncNeedsAttention };
   }
 
   const stripeCustomerId = subResult.rows[0].stripe_customer_id as string;
@@ -419,6 +443,8 @@ export async function fetchBillingInvoices(db: any, tenantId: string): Promise<B
     tenantId,
     customerId: stripeCustomerId,
     portalUrl: portalSession.url,
+    billingSyncStatus,
+    billingSyncNeedsAttention,
     invoices: invoices.data.map((inv: any) => ({
       id: inv.id,
       status: inv.status,
@@ -652,7 +678,15 @@ export function registerBillingAdminRoutes(
           // クライアントは portalUrl===null からしか「未登録」を推測できなかった
           // (「未登録」と「登録済みだが偶然0件」を同じ値で表現しない — CLAUDE.md 禁止20)。
           // admin-ui はこの status を見て「支払い方法を登録する」導線(onboard呼び出し)を出す。
-          res.json({ tenantId: resolvedTenantId, status: 'no_subscription', customerId: null, portalUrl: null, invoices: [] });
+          res.json({
+            tenantId: resolvedTenantId,
+            status: 'no_subscription',
+            customerId: null,
+            portalUrl: null,
+            invoices: [],
+            billingSyncStatus: result.billingSyncStatus,
+            billingSyncNeedsAttention: result.billingSyncNeedsAttention,
+          });
           return;
         }
         if (result.status === 'stripe_not_configured') {
@@ -665,6 +699,8 @@ export function registerBillingAdminRoutes(
           customerId: result.customerId,
           portalUrl: result.portalUrl,
           invoices: result.invoices,
+          billingSyncStatus: result.billingSyncStatus,
+          billingSyncNeedsAttention: result.billingSyncNeedsAttention,
         });
       } catch (err) {
         logger.error({ err, tenantId: resolvedTenantId }, '[billingApi] invoices query failed');

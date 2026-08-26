@@ -556,6 +556,72 @@ describe("syncSubscriptionForTenant(ラッパー — HTTPルートが実際に�
     expect(result.status).toBe("not_billable_plan");
     expect(mockUpdate).not.toHaveBeenCalled();
   });
+
+  // ★2026-08-26 レビュー是正の核心★ 同期結果をtenantsへ焼き付けることで、
+  // billingApi.tsのfetchBillingInvoicesがリロード後も「支払い設定が未完了」を
+  // 復元できる(GID 1217860755860341)。この永続化INSERTが実際に呼ばれることを
+  // 固定する — レスポンスの値が正しくても、書き込みが漏れていればリロード後には
+  // 何も残らない。
+  it("同期結果を tenants.billing_sync_status に焼き付ける", async () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_dummy";
+    const db = makeDb("sub_1", { currentPlan: "standard" });
+    mockRetrieve.mockResolvedValue({
+      items: { data: [licensedItem("si_base", "price_std_base"), meteredItem("si_text", "price_std_text"), meteredItem("si_avatar", "price_std_avatar")] },
+      cancel_at_period_end: false,
+    });
+
+    const result = await syncSubscriptionForTenant(db, silentLogger, "tenant-a", "standard");
+
+    expect(result.status).toBe("no_change");
+    const updateCall = db.query.mock.calls.find(
+      (call: any[]) => typeof call[0] === "string" && call[0].includes("SET billing_sync_status")
+    );
+    expect(updateCall).toBeDefined();
+    expect(updateCall![1]).toEqual(["no_change", "tenant-a"]);
+  });
+
+  // superseded は「自分より新しい変更が既にCOMMIT済み」というだけで、その新しい
+  // 変更自身が正しいplanで永続化する。ここで焼き付けると、後から来た方の
+  // 正しい結果を古い"superseded"で上書きしてしまう(実際にレビューで見つけた
+  // 論理的な罠 — 早期returnの位置がこの事故を防いでいる)。
+  it("superseded では永続化INSERTを一切呼ばない(新しい変更の結果を上書きしない)", async () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_dummy";
+    const db = makeDb("sub_1", { currentPlan: "growth" });
+
+    const result = await syncSubscriptionForTenant(db, silentLogger, "tenant-a", "standard");
+
+    expect(result.status).toBe("superseded");
+    const updateCall = db.query.mock.calls.find(
+      (call: any[]) => typeof call[0] === "string" && call[0].includes("SET billing_sync_status")
+    );
+    expect(updateCall).toBeUndefined();
+  });
+
+  // 永続化(UPDATE)自体が失敗しても(migration未適用等)、同期処理の戻り値には
+  // 影響させない(fail-open)。プランは既にCOMMIT済みで、Stripe側の同期も完了して
+  // いるのに、副次的な記録の失敗でレスポンスを壊してはいけない。
+  it("billing_sync_status の永続化に失敗しても、戻り値は正常な同期結果のまま", async () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_dummy";
+    const { db: baseDb } = (() => {
+      const db = makeDb("sub_1", { currentPlan: "standard" });
+      return { db };
+    })();
+    const originalQuery = baseDb.query.getMockImplementation()!;
+    baseDb.query.mockImplementation((sql: string, params?: unknown[]) => {
+      if (typeof sql === "string" && sql.includes("SET billing_sync_status")) {
+        return Promise.reject(new Error('column "billing_sync_status" does not exist'));
+      }
+      return originalQuery(sql, params);
+    });
+    mockRetrieve.mockResolvedValue({
+      items: { data: [licensedItem("si_base", "price_std_base"), meteredItem("si_text", "price_std_text"), meteredItem("si_avatar", "price_std_avatar")] },
+      cancel_at_period_end: false,
+    });
+
+    const result = await syncSubscriptionForTenant(baseDb, silentLogger, "tenant-a", "standard");
+
+    expect(result.status).toBe("no_change");
+  });
 });
 
 describe("needsBillingAttention", () => {

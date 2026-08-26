@@ -329,6 +329,71 @@ describe("GET /v1/admin/billing/invoices", () => {
     // 表現しない(CLAUDE.md禁止20)。status で明示的に区別する。
     expect(res.body.status).toBe("no_subscription");
   });
+
+  // 2026-08-26 レビュー是正(GID 1217860755860341): 同期失敗がリロードで画面から
+  // 消える事故の回帰。tenants.billing_sync_status に永続化された直近の同期結果を
+  // 読み、対応要かどうかをレスポンスに含める。
+  test("6: billing_sync_status='failed' が永続化されていれば billingSyncNeedsAttention=true を返す", async () => {
+    const { app } = makeApp({
+      role: "client_admin",
+      tenantId: "tenant-no-stripe",
+      dbCallbacks: {
+        "billing_sync_status": [{ billing_sync_status: "failed" }],
+        "stripe_customer_id": [],
+      },
+    });
+
+    const res = await request(app)
+      .get("/v1/admin/billing/invoices")
+      .expect(200);
+
+    expect(res.body.status).toBe("no_subscription");
+    expect(res.body.billingSyncStatus).toBe("failed");
+    expect(res.body.billingSyncNeedsAttention).toBe(true);
+  });
+
+  test("7: billing_sync_status='synced' なら billingSyncNeedsAttention=false を返す", async () => {
+    const { app } = makeApp({
+      role: "client_admin",
+      tenantId: "tenant-no-stripe",
+      dbCallbacks: {
+        "billing_sync_status": [{ billing_sync_status: "synced" }],
+        "stripe_customer_id": [],
+      },
+    });
+
+    const res = await request(app)
+      .get("/v1/admin/billing/invoices")
+      .expect(200);
+
+    expect(res.body.billingSyncNeedsAttention).toBe(false);
+  });
+
+  // migration_billing_sync_status.sql 未適用環境(列が存在しない)を再現する。
+  // 42703相当のDBエラーをfail-openし、invoices自体は正常に返すこと。
+  // migration_billing_sync_status.sql 未適用環境(42703: 列が存在しない)を再現する。
+  // このクエリだけ reject し、他のクエリ(stripe_customer_id)は正常応答させたいので
+  // makeApp の dbCallbacks(パターンマッチで固定rowsを返すだけ)では表現できない。
+  // db.query.mockImplementation を直接上書きして、SQL文字列で分岐する。
+  test("8: billing_sync_status の列が無い(migration未適用)環境でも 500 にせず invoices は正常に返る(fail-open)", async () => {
+    const { app, db } = makeApp({ role: "client_admin", tenantId: "tenant-no-stripe", dbRows: [] });
+    db.query.mockImplementation((sql: string) => {
+      if (sql.toLowerCase().includes("billing_sync_status")) {
+        return Promise.reject(
+          Object.assign(new Error('column "billing_sync_status" does not exist'), { code: "42703" })
+        );
+      }
+      return Promise.resolve({ rows: [], rowCount: 0 });
+    });
+
+    const res = await request(app)
+      .get("/v1/admin/billing/invoices")
+      .expect(200);
+
+    expect(res.body.status).toBe("no_subscription");
+    expect(res.body.billingSyncStatus).toBeNull();
+    expect(res.body.billingSyncNeedsAttention).toBe(false);
+  });
 });
 
 // ─── POST /v1/admin/billing/onboard ─────────────────────────────────────────

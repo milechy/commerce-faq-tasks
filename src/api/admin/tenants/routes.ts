@@ -621,6 +621,10 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
         previous_plan: previousPlan,
         changed: true,
         billing_sync: billingSync.status,
+        // ★2026-08-26 レビュー是正★ フロント(PlanSection.tsx)がstatus文字列の
+        // 集合を自前で再掲すると、こちらでstatusを1つ足したときにフロント側だけ
+        // 更新漏れするドリフトが起きる(禁止6と同種)。判定結果そのものを渡す。
+        billing_sync_needs_attention: needsBillingAttention(billingSync),
       });
     } catch (err) {
       await client.query("ROLLBACK").catch(() => {});
@@ -1041,7 +1045,13 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
         }
       }
       return res.json(
-        planBillingSync ? { ...result.rows[0], billing_sync: planBillingSync.status } : result.rows[0]
+        planBillingSync
+          ? {
+              ...result.rows[0],
+              billing_sync: planBillingSync.status,
+              billing_sync_needs_attention: needsBillingAttention(planBillingSync),
+            }
+          : result.rows[0]
       );
     } catch (err) {
       logger.warn("[PATCH /v1/admin/tenants/:id]", err);
