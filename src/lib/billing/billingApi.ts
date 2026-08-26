@@ -595,7 +595,9 @@ export function registerBillingAdminRoutes(
           if (priceResult.reason === 'billing_cycle_not_supported') {
             res.status(400).json({
               error: 'billing_cycle_not_supported',
-              detail: 'Starter は基本料の無い純従量プランのため、年払いを選択できません。',
+              detail: tenant.plan === 'starter'
+                ? 'Starter は基本料の無い純従量プランのため、年払いを選択できません。'
+                : '年払いは現在準備中です。月払いをご利用ください。',
             });
             return;
           }

@@ -107,22 +107,27 @@ describe('getSubscriptionItemPrices', () => {
     ]);
   });
 
-  it('Standard(年払い) は基本料だけが年額 price に差し替わり、超過2本は同じ', () => {
-    const r = getSubscriptionItemPrices('standard', 'annual');
-    expect(r).toEqual({
-      ok: true,
-      prices: { base: 'price_std_base_y', text: 'price_std_text', avatarOverage: 'price_std_avatar' },
+  // ★2026-08-26 実地確認: Stripeは1subscription内の全priceが同じrecurring.intervalで
+  // あることを要求する(pin済みapiVersion '2024-06-20'・flexible billing mode未使用時)。
+  // 年払い基本料(interval=year)と超過2本(interval=month、年次variant無し)を
+  // 混在させるとStripe test-modeで実際にinvalid_request_errorになることを確認した。
+  // 恒久対応(flexible billing modeへの全社apiVersion移行、または年払い基本料を
+  // 単発invoiceItemsで請求する設計)ができるまで、年払いは自動オンボーディングでは
+  // 一律ブロックする(黙って月払い契約になる方が「年払いを選んだのに違う」という
+  // 事故になるため、明示的にfalseを返す)。
+  it('Standard/Growth の年払いは現状ブロックする(Stripeのinterval混在制約のため)', () => {
+    expect(getSubscriptionItemPrices('standard', 'annual')).toEqual({
+      ok: false, reason: 'billing_cycle_not_supported',
+    });
+    expect(getSubscriptionItemPrices('growth', 'annual')).toEqual({
+      ok: false, reason: 'billing_cycle_not_supported',
     });
   });
 
-  it('Growth も同じ3本構成で、Growth 専用の price を引く', () => {
+  it('Growth も同じ3本構成で、Growth 専用の price を引く(月払い)', () => {
     expect(getSubscriptionItemPrices('growth', 'monthly')).toEqual({
       ok: true,
       prices: { base: 'price_gro_base_m', text: 'price_gro_text', avatarOverage: 'price_gro_avatar' },
-    });
-    expect(getSubscriptionItemPrices('growth', 'annual')).toEqual({
-      ok: true,
-      prices: { base: 'price_gro_base_y', text: 'price_gro_text', avatarOverage: 'price_gro_avatar' },
     });
   });
 
@@ -187,10 +192,10 @@ describe('getSubscriptionItemPrices', () => {
     });
   });
 
-  it('年払いを要求したのに年額 price が未設定なら、月額へ勝手に倒さず失敗する', () => {
+  it('年払いは env の設定状況によらずブロックする(price_not_configured へフォールバックしない)', () => {
     delete process.env.STRIPE_PRICE_STANDARD_BASE_ANNUAL;
     expect(getSubscriptionItemPrices('standard', 'annual')).toEqual({
-      ok: false, reason: 'price_not_configured', missing: ['STRIPE_PRICE_STANDARD_BASE_ANNUAL'],
+      ok: false, reason: 'billing_cycle_not_supported',
     });
   });
 

@@ -539,23 +539,21 @@ describe("POST /v1/admin/billing/onboard（プラン別の item 構成）", () =
     expect(storedPriceId(db)).toBe("price_std_base_m");
   });
 
-  test("Standard(年払い) は基本料だけが年額 price に替わり、超過2本は月払いと同じ", async () => {
-    const { app, db } = appForPlan("standard");
-    await request(app)
+  // ★2026-08-26 実地確認: Stripeは1subscription内の全priceが同じrecurring.intervalで
+  // あることを要求する。年払い基本料(interval=year)と超過2本(interval=month、
+  // 年次variant無し)を混在させるとStripe test-modeで実際にinvalid_request_errorに
+  // なることを確認した。恒久対応(flexible billing modeへの全社apiVersion移行、
+  // または年払い基本料を単発invoiceItemsで請求する設計)ができるまでブロックする。
+  test("Standard(年払い)は現状400でブロックする(Stripeのinterval混在制約のため、Stripeを一切呼ばない)", async () => {
+    const { app } = appForPlan("standard");
+    const res = await request(app)
       .post("/v1/admin/billing/onboard")
       .send({ tenantId: "t-plan", billingCycle: "annual" })
-      .expect(200);
+      .expect(400);
 
-    expect(mockSubscriptionsCreate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        items: [
-          { price: "price_std_base_y" },
-          { price: "price_std_text" },
-          { price: "price_std_avatar" },
-        ],
-      })
-    );
-    expect(storedPriceId(db)).toBe("price_std_base_y");
+    expect(res.body.error).toBe("billing_cycle_not_supported");
+    expect(mockCustomersCreate).not.toHaveBeenCalled();
+    expect(mockSubscriptionsCreate).not.toHaveBeenCalled();
   });
 
   test("Growth は Growth 専用の3 item を作る(Standard の price が混ざらない)", async () => {

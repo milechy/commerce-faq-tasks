@@ -157,8 +157,24 @@ export function getSubscriptionItemPrices(
     return { ok: true, prices: { text } };
   }
 
+  // ★年払いは現状ブロックする(2026-08-26 実地確認)★
+  // Stripe は「1 subscription 内の全 price が同じ recurring.interval であること」を
+  // 要求する(flexible billing mode 未使用・pin済み apiVersion '2024-06-20' の場合)。
+  // 年払い基本料(interval=year)と、テキスト/アバター超過price(interval=month、
+  // 年次のvariantを作っていない)を同じsubscriptionに混在させると
+  // `subscriptions.create` がinvalid_request_errorで即座に失敗する
+  // (実際にStripe test-modeで再現確認済み: "All prices on a subscription must
+  // have the same `recurring.interval`..."）。
+  // 恒久対応は (a) flexible billing modeへ全社的にapiVersionを上げる
+  // (billingApi.ts/stripeSync.ts/stripeWebhook.ts全ての契約に影響するため単独PRでやらない)
+  // か (b) 年払い基本料を`_chargeMonthlyFixedShare`と同じ単発invoiceItems.createで
+  // 請求し、subscription自体は超過分(month interval)だけで構成する、のいずれか。
+  // どちらも本PRのスコープ外。実装するまでは明示的に拒否し、
+  // 「年払いを選んだのに月払いで契約された」という黙った齟齬を防ぐ。
+  if (billingCycle === 'annual') return { ok: false, reason: 'billing_cycle_not_supported' };
+
   const prefix = normalized === 'standard' ? 'STRIPE_PRICE_STANDARD' : 'STRIPE_PRICE_GROWTH';
-  const baseVar = `${prefix}_BASE_${billingCycle === 'annual' ? 'ANNUAL' : 'MONTHLY'}`;
+  const baseVar = `${prefix}_BASE_MONTHLY`;
   const textVar = `${prefix}_TEXT_OVERAGE`;
   const avatarVar = `${prefix}_AVATAR_OVERAGE`;
 
