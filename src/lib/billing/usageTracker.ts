@@ -17,6 +17,19 @@ export type FeatureUsed = 'chat' | 'avatar' | 'voice' | 'admin_guide' | 'avatar_
 export interface TrackUsageParams {
   tenantId: string;
   requestId: string;
+  /**
+   * この行が属する会話（chat_sessions.session_id）。テキストは「会話」単位で請求するため
+   * （.claude/rules/billing.md §7 / CLAUDE.md 禁止56）、同一会話の複数リクエストを
+   * stripeSync.computeExpectedBilling が1単位にまとめる鍵になる。
+   *
+   * 会話の概念がある経路（/api/chat）だけが渡す。管理系（admin_*）は会話ではないので渡さない。
+   * アバター経路（POST /api/internal/usage ← avatar-agent/agent.py）は LiveKit の room 名しか
+   * 知らず R2C の session_id を受け取れない（2026-08-26 時点）。アバターは分単位で請求するため
+   * グルーピングを必要とせず、当面 undefined のままで支障が無い。
+   *
+   * 未指定なら NULL 記録。請求側は NULL 行を従来どおり 1行=1単位 として数える（取りこぼさない）。
+   */
+  sessionId?: string;
   model: string;
   inputTokens: number;
   outputTokens: number;
@@ -170,7 +183,7 @@ async function _insertUsageLog(params: TrackUsageParams): Promise<void> {
   }
 
   const {
-    tenantId, requestId, model, inputTokens, outputTokens,
+    tenantId, requestId, sessionId, model, inputTokens, outputTokens,
     featureUsed, marginOverride, ttsTextBytes, ttsModel, avatarCredits, avatarSessionMs, imageCount,
     anam_session_seconds, extraLlmUsages, saiAgentSteps,
     ocrPages, asrRequestCount, asrAudioSeconds, voiceDesignRequestCount, magnificUpscaleCount, fluxImageCount, lemonsliceRegistrationCount,
@@ -229,35 +242,41 @@ async function _insertUsageLog(params: TrackUsageParams): Promise<void> {
 
   try {
     await _pool.query(
+      // 新しい列は末尾に足す（billable / plan / plan_multiplier と同じ流儀）。
+      // 途中に差し込むと以降の $n が全てずれ、位置で検証している既存テストが
+      // 一斉に嘘の値を見に行くことになる。
       `INSERT INTO usage_logs
          (tenant_id, request_id, model, input_tokens, output_tokens,
           feature_used, cost_llm_cents, cost_total_cents,
           tts_text_bytes, avatar_credits, avatar_session_ms, anam_session_seconds, billable,
-          plan, plan_multiplier)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+          plan, plan_multiplier, session_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
        ON CONFLICT (request_id) DO NOTHING`,
       [tenantId, requestId, model, totalInputTokens, totalOutputTokens,
        featureUsed, costLlmCents, costTotalCents,
        ttsTextBytes ?? null, avatarCredits ?? null, avatarSessionMs ?? null,
        anam_session_seconds ?? null, isBillable,
-       planAtUsage, planMultiplierAtUsage]
+       planAtUsage, planMultiplierAtUsage, sessionId ?? null]
     );
     _logger?.debug(
       { tenantId, requestId, costLlmCents, costTotalCents, billable: isBillable },
       '[usageTracker] logged'
     );
   } catch (err) {
-    // migration_usage_logs_plan_snapshot.sql が未適用だと 42703(undefined_column) で
+    // migration_usage_logs_plan_snapshot.sql / migration_usage_logs_session_id.sql が
+    // 未適用だと 42703(undefined_column) で
     // 全リクエストの INSERT が落ち、利用記録も請求も無言で止まる。
     // この事故はこのリポジトリで既に2回起きている（chat_sessions.visitor_id ほか）ため、
     // 旧カラム構成へ1回だけフォールバックして記録の消失だけは防ぐ。
-    // 倍率の焼き付けは効かない（= 遡及請求の穴は開いたまま）なので error で鳴らす。
+    // 倍率の焼き付けも会話の紐付けも効かない（= 遡及請求の穴とリクエスト単位請求が残る）ので
+    // error で鳴らす。
     if ((err as { code?: string })?.code === '42703') {
       _logger?.error(
         { err, requestId, tenantId },
-        '[usageTracker] usage_logs に plan/plan_multiplier 列が無い — ' +
-        'migration_usage_logs_plan_snapshot.sql が未適用。旧カラムで記録を継続するが、' +
-        'プラン倍率は焼き付けられず請求が遡及する状態のまま。至急 migration を適用すること'
+        '[usageTracker] usage_logs に plan/plan_multiplier/session_id のいずれかの列が無い — ' +
+        'migration_usage_logs_plan_snapshot.sql / migration_usage_logs_session_id.sql が未適用。' +
+        '旧カラムで記録を継続するが、プラン倍率は焼き付けられず請求が遡及し、' +
+        '会話単位の請求も効かない状態のまま。至急 migration を適用すること'
       );
       try {
         await _pool.query(

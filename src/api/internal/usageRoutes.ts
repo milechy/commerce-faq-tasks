@@ -39,6 +39,14 @@ export function registerInternalUsageRoutes(app: Express): void {
         ? (featureUsed as FeatureUsed)
         : 'avatar';
 
+    // sessionId は渡さない（usage_logs.session_id は NULL のまま）。
+    // 呼び出し元の avatar-agent/agent.py は LiveKit の room 名しか知らず、
+    // R2C の chat_sessions.session_id をそもそも受け取っていない。
+    // アバターは「分」で請求する（stripeSync の avatar_session_ms 加重）ため
+    // 会話のグルーピングを必要とせず、ここでは不要。
+    // ※ その代わり「同じ会話をテキストとアバターの両方で二重計上しない」判定は
+    //   この経路の行に対しては行えない。詳細は stripeSync.computeExpectedBilling の
+    //   コメント（既知の制約）を参照。
     trackUsage({
       tenantId,
       requestId: rid,
