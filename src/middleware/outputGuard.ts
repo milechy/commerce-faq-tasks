@@ -43,6 +43,40 @@ const PII_PATTERNS: Array<{ name: string; pattern: RegExp; replacement: string }
   },
 ];
 
+/**
+ * 対外的に出さない社内用語。フレームワーク名を含む節ごと一般表現に置き換える。
+ * 「〜の法則」まで飲み込まないと「独自の考え方の法則」のような壊れた文が残るため、
+ * 呼称のゆれ(英字/カナ/表記ゆれ)と後続の「の法則」をまとめて 1 パターンで畳む。
+ */
+const INTERNAL_TERM_REPLACEMENT = '独自の考え方';
+
+const INTERNAL_TERM_PATTERNS: RegExp[] = [
+  /(?:RAJIUSEC|RAJIUCE|ラジューセック|ラジウセック|ラジウス)\s*(?:の法則性|の法則|法則)?/gi,
+  /(?:ARCSTRA|ARCSTORA|アクストラ)\s*(?:の法則性|の法則|法則)?/gi,
+  // ストリーミングでは呼称だけが先に確定し「の法則」が後続チャンクで届くため、
+  // 置換済みの語に後から続いた「の法則」を畳む。
+  new RegExp(`${INTERNAL_TERM_REPLACEMENT}\\s*(?:の法則性|の法則|法則)`, 'g'),
+];
+
+/**
+ * ストリーミング時に送信を保留すべき末尾文字数。
+ * 最長パターン「RAJIUSECの法則性」(12文字)に余裕を持たせた値。
+ */
+export const INTERNAL_TERM_HOLD_CHARS = 16;
+
+/**
+ * 社内用語を伏せる。OUTPUT_GUARD_ENABLED に依存せず常に適用する
+ * (フラグ無効化で社内用語が素通りする状態を作らないため)。
+ */
+export function redactInternalTerms(text: string): { text: string; redacted: boolean } {
+  let result = text;
+  for (const pattern of INTERNAL_TERM_PATTERNS) {
+    pattern.lastIndex = 0;
+    result = result.replace(pattern, INTERNAL_TERM_REPLACEMENT);
+  }
+  return { text: result, redacted: result !== text };
+}
+
 function getMaxRagExcerptLength(): number {
   const envVal = process.env['MAX_RAG_EXCERPT_LENGTH'];
   if (envVal !== undefined) {
