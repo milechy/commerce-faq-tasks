@@ -7,6 +7,12 @@ import { z } from 'zod';
 import { roleAuthMiddleware, requireRole } from '../../api/middleware/roleAuth';
 import { computeExpectedBilling } from './stripeSync';
 import { getSubscriptionItemPrices, toSubscriptionItems } from './planPricing';
+import {
+  getMonthRangeJst,
+  includedQuotaForPlan,
+  computeQuotaOverage,
+  FREE_AD_MONTHLY_CONVERSATION_LIMIT,
+} from './planQuota';
 
 const usageQuerySchema = z.object({
   tenantId: z.string().min(1).optional(),
@@ -41,6 +47,7 @@ function resolveTenantId(req: Request): { tenantId: string | null; isSuperAdmin:
  * - GET /v1/admin/billing/usage          — テナント別使用量集計（日次・月次）
  * - GET /v1/admin/billing/cost-breakdown — feature_used 別コスト内訳
  * - GET /v1/admin/billing/invoices       — Stripe Invoice一覧
+ * - GET /v1/admin/billing/quota          — 込み枠・無料枠の当月消費(UX-C)
  *
  * baseMiddleware には supabaseAuthMiddleware のみ渡すこと。
  * ロール検査（super_admin / client_admin）はこの関数内部で行う。
@@ -375,6 +382,99 @@ export async function fetchBillingInvoices(db: any, tenantId: string): Promise<B
   };
 }
 
+// ---------------------------------------------------------------------------
+// UX-C(2026-08-26): 込み枠・無料枠の残量可視化。
+//
+// #1015でStandard/Growthを「基本料+込み枠+超過」にしたが、込み枠の消費量・残量を
+// 出す画面が無かった(admin-uiを横断grepしても該当UIゼロ)。上限を設けない従量課金
+// 方針([[project_usage_based_billing_no_caps]])のもとでは、「気づいたら大幅超過」を
+// 防ぐ唯一の手段がこの表示。free_adの200会話上限も同様(到達すると新規会話が止まる)。
+//
+// ★HTTPレイヤ(このファイルのルート本体)とチャットエージェント
+// (agent/actionExecutor.ts の get_billing_summary)の両方から同じ値を取得できるよう、
+// fetchBillingCostBreakdown/fetchBillingInvoices と同じ理由でここに置く★
+// ---------------------------------------------------------------------------
+
+export interface BillingQuota {
+  plan: string | null;
+  /** 集計対象期間(JST暦月)。ISO instant文字列(UTC)。 */
+  periodFrom: string;
+  periodTo: string;
+  text: {
+    /** 当月の会話数(生の数量。込み枠差し引き前)。 */
+    used: number;
+    /** 込み枠(会話数)。null=このプランに込み枠という概念が無い
+     *  (starter=純従量/enterprise=無制限/free_ad=別枠で管理/未知プラン)。 */
+    included: number | null;
+    /** 込み枠を超えた分。included が null なら常に0。 */
+    overage: number;
+  };
+  avatar: {
+    usedMinutes: number;
+    includedMinutes: number | null;
+    overageMinutes: number;
+  };
+  /** free_ad のときだけ非null(月200会話の無料枠)。 */
+  freeAd: {
+    used: number;
+    limit: number;
+    remaining: number;
+  } | null;
+}
+
+/**
+ * 指定テナントの当月(JST暦月)込み枠消費状況を返す。テナントが存在しなければ null。
+ *
+ * ★月中のプラン変更は日割りしない(2026-08-26 決定)★
+ * 変更後プランの込み枠をJST暦月全体に適用する。アップグレード月は「日割りの
+ * 基本料で1か月分の込み枠」になり得るが、意図した非対称(テナント有利側)。
+ * .claude/rules/billing.md §7 / subscriptionSync.ts の proration_behavior コメント参照。
+ *
+ * textUnits/avatarMinutes は computeExpectedBilling(唯一の出どころ)から取る。
+ * free_ad の会話数もここから取る — conversation_units の判定(session_idごとに
+ * DISTINCT・message_count>=2・billable=true)は countFreeAdBillableConversations
+ * (chat/route.ts、free_ad上限のホットパス判定用)と同一なので、表示専用のこの経路で
+ * 二重に実装しない(禁止6)。
+ */
+export async function fetchBillingQuota(db: any, tenantId: string): Promise<BillingQuota | null> {
+  const tenantResult = await db.query(`SELECT plan FROM tenants WHERE id = $1`, [tenantId]);
+  if (tenantResult.rows.length === 0) return null;
+  const plan = tenantResult.rows[0].plan as string | null;
+
+  const { monthStart, monthEnd } = getMonthRangeJst(new Date());
+  const periodFrom = monthStart.toISOString();
+  const periodTo = monthEnd.toISOString();
+
+  const { textUnits, avatarMinutes } = await computeExpectedBilling(db, tenantId, periodFrom, periodTo, plan);
+
+  const included = includedQuotaForPlan(plan);
+  const overage = computeQuotaOverage(plan, textUnits, avatarMinutes);
+
+  return {
+    plan,
+    periodFrom,
+    periodTo,
+    text: {
+      used: textUnits,
+      included: included?.textConversations ?? null,
+      overage: overage?.textConversations ?? 0,
+    },
+    avatar: {
+      usedMinutes: avatarMinutes,
+      includedMinutes: included?.avatarMinutes ?? null,
+      overageMinutes: overage?.avatarMinutes ?? 0,
+    },
+    freeAd:
+      plan === 'free_ad'
+        ? {
+            used: textUnits,
+            limit: FREE_AD_MONTHLY_CONVERSATION_LIMIT,
+            remaining: Math.max(0, FREE_AD_MONTHLY_CONVERSATION_LIMIT - textUnits),
+          }
+        : null,
+  };
+}
+
 export function registerBillingAdminRoutes(
   app: Application,
   db: any,
@@ -515,6 +615,39 @@ export function registerBillingAdminRoutes(
         });
       } catch (err) {
         logger.error({ err, tenantId: resolvedTenantId }, '[billingApi] invoices query failed');
+        res.status(500).json({ error: 'internal_error' });
+      }
+    }
+  );
+
+  // ──────────────────────────────────────────────────────────────
+  // GET /v1/admin/billing/quota  (UX-C: 込み枠・無料枠の残量可視化)
+  // ──────────────────────────────────────────────────────────────
+  app.get(
+    '/v1/admin/billing/quota',
+    ...mw,
+    async (req: Request, res: Response): Promise<void> => {
+      const { tenantId, isSuperAdmin } = resolveTenantId(req);
+
+      // 込み枠は「1テナントの当月消費」という単位でしか意味を持たない
+      // (横断ビューという概念が無い)。super_admin もテナント未指定なら400。
+      if (!tenantId) {
+        res.status(isSuperAdmin ? 400 : 403).json({
+          error: isSuperAdmin ? 'tenantId_required' : 'forbidden',
+          message: isSuperAdmin ? 'tenantId を指定してください' : 'テナント情報が取得できません',
+        });
+        return;
+      }
+
+      try {
+        const quota = await fetchBillingQuota(db, tenantId);
+        if (!quota) {
+          res.status(404).json({ error: 'tenant_not_found' });
+          return;
+        }
+        res.json({ tenantId, ...quota });
+      } catch (err) {
+        logger.error({ err, tenantId }, '[billingApi] quota query failed');
         res.status(500).json({ error: 'internal_error' });
       }
     }

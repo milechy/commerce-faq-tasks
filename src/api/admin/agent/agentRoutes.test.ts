@@ -214,10 +214,12 @@ jest.mock('../../../lib/notifications', () => ({
 const mockFetchBillingCostBreakdown = jest.fn();
 const mockFetchBillingInvoices = jest.fn();
 const mockComputeBillingEstimateJpy = jest.fn();
+const mockFetchBillingQuota = jest.fn();
 jest.mock('../../../lib/billing/billingApi', () => ({
   fetchBillingCostBreakdown: (...args: any[]) => mockFetchBillingCostBreakdown(...args),
   fetchBillingInvoices: (...args: any[]) => mockFetchBillingInvoices(...args),
   computeBillingEstimateJpy: (...args: any[]) => mockComputeBillingEstimateJpy(...args),
+  fetchBillingQuota: (...args: any[]) => mockFetchBillingQuota(...args),
 }));
 
 // logger モック
@@ -9729,6 +9731,13 @@ describe('POST /v1/admin/agent/chat', () => {
         portalUrl: 'https://billing.stripe.com/portal/test', invoices: [INVOICE],
       });
       mockComputeBillingEstimateJpy.mockResolvedValueOnce(3300);
+      mockFetchBillingQuota.mockResolvedValueOnce({
+        plan: 'growth',
+        periodFrom: '2026-08-01T00:00:00.000Z', periodTo: '2026-09-01T00:00:00.000Z',
+        text: { used: 3100, included: 3000, overage: 100 },
+        avatar: { usedMinutes: 160, includedMinutes: 150, overageMinutes: 10 },
+        freeAd: null,
+      });
 
       const res = await request(makeApp(CLIENT_ADMIN_USER))
         .post('/v1/admin/agent/chat')
@@ -9751,6 +9760,8 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(result).toContain('Growth');
       expect(result).toContain('3,300円');
       expect(result).toContain('お支払い済み');
+      // UX-C: 今月(JST暦月)の込み枠消費が本文にも出る(periodの直近30日とは別軸)。
+      expect(result).toContain('今月の込み枠: テキスト 3100/3000会話（100会話超過） / アバター 160/150分（10分超過）');
 
       expect(res.body.actions[0].card).toEqual({
         kind: 'billing_summary',
@@ -9768,6 +9779,12 @@ describe('POST /v1/admin/agent/chat', () => {
           created: 1754006400, hostedInvoiceUrl: 'https://stripe.example/inv_1',
         }],
         portalUrl: 'https://billing.stripe.com/portal/test',
+        quota: {
+          plan: 'growth',
+          text: { used: 3100, included: 3000, overage: 100 },
+          avatar: { usedMinutes: 160, includedMinutes: 150, overageMinutes: 10 },
+          freeAd: null,
+        },
       });
     });
 
@@ -9780,6 +9797,7 @@ describe('POST /v1/admin/agent/chat', () => {
       mockFetchBillingCostBreakdown.mockResolvedValueOnce({ tenantId: 'tenant-abc', total_usd: 0, breakdown: {} });
       mockFetchBillingInvoices.mockResolvedValueOnce({ status: 'no_subscription', tenantId: 'tenant-abc' });
       mockComputeBillingEstimateJpy.mockResolvedValueOnce(null);
+      mockFetchBillingQuota.mockResolvedValueOnce(null);
 
       const res = await request(makeApp(CLIENT_ADMIN_USER))
         .post('/v1/admin/agent/chat')
@@ -9801,6 +9819,7 @@ describe('POST /v1/admin/agent/chat', () => {
       mockFetchBillingCostBreakdown.mockResolvedValueOnce(BREAKDOWN);
       mockFetchBillingInvoices.mockResolvedValueOnce({ status: 'stripe_not_configured' });
       mockComputeBillingEstimateJpy.mockResolvedValueOnce(null);
+      mockFetchBillingQuota.mockResolvedValueOnce(null);
 
       const res = await request(makeApp(CLIENT_ADMIN_USER))
         .post('/v1/admin/agent/chat')
@@ -9826,6 +9845,68 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(mockFetchBillingCostBreakdown).not.toHaveBeenCalled();
       expect(mockFetchBillingInvoices).not.toHaveBeenCalled();
       expect(mockComputeBillingEstimateJpy).not.toHaveBeenCalled();
+    });
+
+    // UX-C(2026-08-26): 今月(JST暦月)の込み枠・無料枠消費。free_adは専用のfreeAdブロック。
+    it('free_adは無料枠(会話数/上限/残数)を本文とcardの両方に出す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-bs-5', 'get_billing_summary'))
+        .mockResolvedValueOnce(makeGroqResponse('ご利用状況をお伝えします。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'free_ad' }] });
+      mockFetchBillingCostBreakdown.mockResolvedValueOnce({ tenantId: 'tenant-abc', total_usd: 0, breakdown: {} });
+      mockFetchBillingInvoices.mockResolvedValueOnce({ status: 'no_subscription', tenantId: 'tenant-abc' });
+      mockComputeBillingEstimateJpy.mockResolvedValueOnce(0);
+      mockFetchBillingQuota.mockResolvedValueOnce({
+        plan: 'free_ad',
+        periodFrom: '2026-08-01T00:00:00.000Z', periodTo: '2026-09-01T00:00:00.000Z',
+        text: { used: 180, included: null, overage: 0 },
+        avatar: { usedMinutes: 0, includedMinutes: null, overageMinutes: 0 },
+        freeAd: { used: 180, limit: 200, remaining: 20 },
+      });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '今月の利用枠を教えて', sessionId: 'sess-bs-05' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('今月の無料枠: 180/200会話（残り20会話）');
+      expect(res.body.actions[0].card.quota).toEqual({
+        plan: 'free_ad',
+        text: { used: 180, included: null, overage: 0 },
+        avatar: { usedMinutes: 0, includedMinutes: null, overageMinutes: 0 },
+        freeAd: { used: 180, limit: 200, remaining: 20 },
+      });
+    });
+
+    // ★fetchBillingQuotaの失敗が請求見積り・請求書情報まで巻き添えにしないこと★
+    // 「請求は見えるが枠だけ分からない」と「何も分からない」を同じ失敗として扱わない
+    // (禁止20)。Promise.allと別経路で呼んでいることの直接的な回帰テスト。
+    it('fetchBillingQuotaが失敗しても、見積り・請求書情報は正常に返る(quota:nullに縮退するだけ)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-bs-6', 'get_billing_summary'))
+        .mockResolvedValueOnce(makeGroqResponse('ご利用状況をお伝えします。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'growth' }] });
+      mockFetchBillingCostBreakdown.mockResolvedValueOnce(BREAKDOWN);
+      mockFetchBillingInvoices.mockResolvedValueOnce({
+        status: 'ok', tenantId: 'tenant-abc', customerId: 'cus_1',
+        portalUrl: 'https://billing.stripe.com/portal/test', invoices: [INVOICE],
+      });
+      mockComputeBillingEstimateJpy.mockResolvedValueOnce(3300);
+      mockFetchBillingQuota.mockRejectedValueOnce(new Error('db timeout'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '今月の請求額を教えて', sessionId: 'sess-bs-06' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('3,300円'); // 見積りは巻き添えを受けない
+      expect(result).not.toContain('今月の込み枠');
+      expect(res.body.actions[0].card.quota).toBeNull();
+      expect(res.body.actions[0].card.billingEstimateJpy).toBe(3300);
     });
   });
 

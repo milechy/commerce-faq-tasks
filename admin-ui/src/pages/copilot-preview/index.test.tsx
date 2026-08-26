@@ -1858,6 +1858,104 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
       expect(await screen.findByText(/現在確認できません/)).toBeTruthy();
       expect(screen.queryByText(/お支払い方法の確認・変更/)).toBeNull();
     });
+
+    // UX-C(2026-08-26): 今月(JST暦月)の込み枠消費。periodTabの直近N日とは別軸で、
+    // カード内に別ブロックとして描画されることを固定する。
+    it("Standard/Growthは込み枠(テキスト会話・アバター利用)のバーが描画される", async () => {
+      mockAgent({
+        reply: "ご利用状況をお伝えします。",
+        actions: [
+          {
+            tool: "get_billing_summary",
+            result: "ご利用状況・お支払い（直近30日間）",
+            card: {
+              kind: "billing_summary",
+              period: "30d",
+              plan: "Growth",
+              billingEstimateJpy: 3300,
+              breakdown: [],
+              invoicesAvailable: false,
+              invoices: [],
+              portalUrl: null,
+              quota: {
+                plan: "growth",
+                text: { used: 3100, included: 3000, overage: 100 },
+                avatar: { usedMinutes: 160, includedMinutes: 150, overageMinutes: 10 },
+                freeAd: null,
+              },
+            },
+          },
+        ],
+      });
+
+      await send("今月の利用枠を教えて");
+
+      expect(await screen.findByText("今月の利用枠")).toBeTruthy();
+      expect(screen.getByText(/3,100 \/ 3,000会話/)).toBeTruthy();
+      expect(screen.getByText(/160 \/ 150分/)).toBeTruthy();
+      expect(screen.getByText(/込み枠を超過しています/)).toBeTruthy();
+    });
+
+    it("free_adは無料枠の残量バーが描画され、上限到達時は新規会話停止を明言する", async () => {
+      mockAgent({
+        reply: "ご利用状況をお伝えします。",
+        actions: [
+          {
+            tool: "get_billing_summary",
+            result: "ご利用状況・お支払い（直近30日間）",
+            card: {
+              kind: "billing_summary",
+              period: "30d",
+              plan: "Free",
+              billingEstimateJpy: 0,
+              breakdown: [],
+              invoicesAvailable: false,
+              invoices: [],
+              portalUrl: null,
+              quota: {
+                plan: "free_ad",
+                text: { used: 200, included: null, overage: 0 },
+                avatar: { usedMinutes: 0, includedMinutes: null, overageMinutes: 0 },
+                freeAd: { used: 200, limit: 200, remaining: 0 },
+              },
+            },
+          },
+        ],
+      });
+
+      await send("今月の利用枠を教えて");
+
+      expect(await screen.findByText(/200 \/ 200会話/)).toBeTruthy();
+      expect(screen.getByText(/今月の上限に到達しています。新しい会話は翌月まで開始できません。/)).toBeTruthy();
+    });
+
+    it("quotaがnull(取得不可)のときは利用枠ブロックごと出さない(0件と誤読させない)", async () => {
+      mockAgent({
+        reply: "ご利用状況をお伝えします。",
+        actions: [
+          {
+            tool: "get_billing_summary",
+            result: "ご利用状況・お支払い（直近30日間）",
+            card: {
+              kind: "billing_summary",
+              period: "30d",
+              plan: "Growth",
+              billingEstimateJpy: 3300,
+              breakdown: [],
+              invoicesAvailable: false,
+              invoices: [],
+              portalUrl: null,
+              quota: null,
+            },
+          },
+        ],
+      });
+
+      await send("今月の利用枠を教えて");
+
+      expect(await screen.findByText("Growth")).toBeTruthy();
+      expect(screen.queryByText("今月の利用枠")).toBeNull();
+    });
   });
 
   // REAL_TOOL_LABEL への登録を忘れると、画面に生の英語ツール名がそのまま出る

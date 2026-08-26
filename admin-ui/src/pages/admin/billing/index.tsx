@@ -14,6 +14,7 @@ import type {
   Invoice,
   CostBreakdown,
   CrossTenantRow,
+  BillingQuota,
 } from "./types";
 
 import {
@@ -29,6 +30,7 @@ import { DailyUsageTable } from "./DailyUsageTable";
 import { BillingMainContent } from "./BillingMainContent";
 import { AdminBillingModals } from "./AdminBillingModals";
 import { PlanSection } from "./PlanSection";
+import { QuotaSection } from "./QuotaSection";
 
 // ─── メインページ ─────────────────────────────────────────
 export default function BillingPage() {
@@ -87,6 +89,11 @@ export default function BillingPage() {
   const [onboardLoading, setOnboardLoading] = useState(false);
   const [costBreakdown, setCostBreakdown] = useState<CostBreakdown | null>(null);
   const [crossTenantRows, setCrossTenantRows] = useState<CrossTenantRow[]>([]);
+  // UX-C: 込み枠・無料枠の当月消費。quota は常に「当月(JST暦月)」を見るため、
+  // selectedMonth(履歴の月選択)には依存させない — fetchBillingData の再取得契機
+  // (selectedTenantId/selectedMonth)には乗せるが、値自体はサーバ側で当月固定。
+  const [quota, setQuota] = useState<BillingQuota | null>(null);
+  const [quotaStatus, setQuotaStatus] = useState<"loading" | "error" | "ready">("loading");
 
   const [loadingData, setLoadingData] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -312,11 +319,12 @@ export default function BillingPage() {
     setBillingStatus(null);
     setCostBreakdown(null);
     setCrossTenantRows([]);
+    setQuotaStatus("loading");
 
     const { from, to } = monthToDateRange(selectedMonth);
 
     try {
-      const [usageRes, invoicesRes, breakdownRes, crossTenantRes] = await Promise.allSettled([
+      const [usageRes, invoicesRes, breakdownRes, quotaRes, crossTenantRes] = await Promise.allSettled([
         authFetch(
           `${API_BASE}/v1/admin/billing/usage?tenantId=${selectedTenantId}&from=${from}&to=${to}`
         ),
@@ -325,6 +333,9 @@ export default function BillingPage() {
         ),
         authFetch(
           `${API_BASE}/v1/admin/billing/cost-breakdown?tenantId=${selectedTenantId}&from=${from}&to=${to}`
+        ),
+        authFetch(
+          `${API_BASE}/v1/admin/billing/quota?tenantId=${selectedTenantId}`
         ),
         ...(isSuperAdmin
           ? [authFetch(`${API_BASE}/v1/admin/billing/usage?group_by=tenant&from=${from}&to=${to}`)]
@@ -451,6 +462,16 @@ export default function BillingPage() {
         setCostBreakdown(bd);
       }
 
+      // ─── 込み枠・無料枠(UX-C) ─────────────────────────────
+      if (quotaRes.status === "fulfilled" && quotaRes.value.ok) {
+        const q = (await quotaRes.value.json()) as BillingQuota;
+        setQuota(q);
+        setQuotaStatus("ready");
+      } else {
+        setQuota(null);
+        setQuotaStatus("error");
+      }
+
       // ─── Super Admin: テナント横断 ──────────────────────
       if (
         isSuperAdmin &&
@@ -468,6 +489,7 @@ export default function BillingPage() {
       if (isSuperAdmin) void fetchAdjustments(selectedTenantId);
     } catch {
       setError(t("billing.load_error"));
+      setQuotaStatus("error");
     } finally {
       setLoadingData(false);
     }
@@ -766,6 +788,8 @@ export default function BillingPage() {
         onChanged={(p) => setPlanOverride(p)}
         showToast={showToast}
       />
+
+      <QuotaSection quota={quota} status={quotaStatus} />
 
       {/* ローディング */}
       {loadingData ? (

@@ -958,11 +958,11 @@ export default function CopilotPreviewPage() {
         };
       }
       if (a.card?.kind === "billing_summary") {
-        const { period, plan, billingEstimateJpy, breakdown, invoicesAvailable, invoices, portalUrl } = a.card;
+        const { period, plan, billingEstimateJpy, breakdown, invoicesAvailable, invoices, portalUrl, quota } = a.card;
         return {
           id: nextId(),
           role: "ai",
-          card: { kind: "billingSummary", period, plan, billingEstimateJpy, breakdown, invoicesAvailable, invoices, portalUrl },
+          card: { kind: "billingSummary", period, plan, billingEstimateJpy, breakdown, invoicesAvailable, invoices, portalUrl, quota },
         };
       }
       // D6: 優先度を含め、正規表現では拾えなかった内容(複数行の対応方針)もそのまま運ぶ。
@@ -3458,8 +3458,28 @@ function KnowledgeAttributionCard({ card }: { card: Extract<Card, { kind: "knowl
 // そもそもボタン自体を存在させない)。portalUrlはStripeが発行する読み取り専用の顧客
 // ポータル(支払い方法の確認・変更・請求書ダウンロードができる、Stripe自身の認証で
 // 保護された画面)なので、外部リンクとして案内する(旧UIの「invoices」タブと同じ導線)。
+// UX-C(2026-08-26): 込み枠1本分のバー。QuotaSection.tsx(旧UI)と同じ配色規則
+// (80%未満=緑・80〜99%=黄・100%以上=赤)。旧UIとは別コンポーネント階層(この画面は
+// chat-embedded cardでQuotaSectionを直接importする構成に無い)なので、視覚仕様だけ
+// 揃えて実装はここに閉じる。
+function BillingQuotaBar({ label, used, included, unit }: { label: string; used: number; included: number; unit: string }) {
+  const percentage = included > 0 ? Math.min(100, Math.round((used / included) * 100)) : 0;
+  const color = percentage >= 100 ? "#f87171" : percentage >= 80 ? "#fbbf24" : "#4ade80";
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5 }}>
+      <span style={{ width: 80, flexShrink: 0, color: "var(--muted-foreground)" }}>{label}</span>
+      <div style={{ flex: 1, height: 8, borderRadius: 4, background: "rgba(120,120,140,0.15)", overflow: "hidden" }}>
+        <div style={{ width: `${percentage}%`, height: "100%", background: color }} />
+      </div>
+      <span style={{ width: 110, flexShrink: 0, textAlign: "right", color: "var(--foreground)" }}>
+        {used.toLocaleString("ja-JP")} / {included.toLocaleString("ja-JP")}{unit}
+      </span>
+    </div>
+  );
+}
+
 function BillingSummaryCard({ card }: { card: Extract<Card, { kind: "billingSummary" }> }) {
-  const { period, plan, billingEstimateJpy, breakdown, invoicesAvailable, invoices, portalUrl } = card;
+  const { period, plan, billingEstimateJpy, breakdown, invoicesAvailable, invoices, portalUrl, quota } = card;
   const periodLabel = period === "7d" ? "直近7日間" : period === "90d" ? "直近90日間" : "直近30日間";
 
   return (
@@ -3472,6 +3492,38 @@ function BillingSummaryCard({ card }: { card: Extract<Card, { kind: "billingSumm
           今期の請求見積り {billingEstimateJpy !== null ? `${billingEstimateJpy.toLocaleString("ja-JP")}円` : "算出できません"}
         </span>
       </div>
+      {/* UX-C: 今月(JST暦月)の込み枠・無料枠消費。上のperiod(直近7/30/90日)とは別軸。
+          quotaがnull(取得不可)のときはブロックごと出さない(0件と誤読させない)。 */}
+      {quota && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ fontSize: 11.5, color: "var(--muted-foreground)" }}>今月の利用枠</div>
+          {quota.freeAd ? (
+            <>
+              <BillingQuotaBar label="会話数" used={quota.freeAd.used} included={quota.freeAd.limit} unit="会話" />
+              {quota.freeAd.remaining === 0 && (
+                <div style={{ fontSize: 12.5, color: "#f87171", fontWeight: 700 }}>
+                  今月の上限に到達しています。新しい会話は翌月まで開始できません。
+                </div>
+              )}
+            </>
+          ) : quota.text.included !== null && quota.avatar.includedMinutes !== null ? (
+            <>
+              <BillingQuotaBar label="テキスト会話" used={quota.text.used} included={quota.text.included} unit="会話" />
+              <BillingQuotaBar label="アバター利用" used={quota.avatar.usedMinutes} included={quota.avatar.includedMinutes} unit="分" />
+              {(quota.text.overage > 0 || quota.avatar.overageMinutes > 0) && (
+                <div style={{ fontSize: 12, color: "#fbbf24" }}>
+                  込み枠を超過しています(超過分は従量で加算されます)
+                </div>
+              )}
+            </>
+          ) : (
+            <div style={{ fontSize: 12.5, color: "var(--muted-foreground)" }}>
+              {plan === "enterprise" ? "利用量に上限はありません" : "込み枠の無い純従量プランです"}
+              （当月{quota.text.used.toLocaleString("ja-JP")}会話）
+            </div>
+          )}
+        </div>
+      )}
       {breakdown.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <div style={{ fontSize: 11.5, color: "var(--muted-foreground)" }}>機能別の原価構成比(参考)</div>
