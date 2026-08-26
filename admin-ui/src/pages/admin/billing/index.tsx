@@ -785,6 +785,7 @@ export default function BillingPage() {
       <PlanSection
         currentPlan={effectivePlan}
         planStatus={planStatus}
+        billingStatus={billingStatus}
         onChanged={(p) => setPlanOverride(p)}
         showToast={showToast}
       />

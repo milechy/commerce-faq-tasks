@@ -266,6 +266,27 @@ ssh root@65.108.159.161 "psql \$DATABASE_URL -c \"\\d sai_tasks\""
 ssh root@65.108.159.161 "psql \$DATABASE_URL -c 'DROP TABLE IF EXISTS sai_tasks;'"
 ```
 
+### 【人間作業】Stripe Dashboard — webhook 購読イベントに checkout.session.completed を追加
+
+> UX-A(2026-08-26): client_admin セルフサービスの Checkout(mode: subscription)導線を追加した
+> (`POST /v1/admin/my-tenant/billing/checkout-session`)。`stripeWebhook.ts` は
+> `checkout.session.completed` を処理するハンドラを実装済みだが、**Stripe Dashboard の
+> webhook エンドポイント設定で購読イベントに追加しないと、Stripe はこのイベントを
+> 一切送ってこない**(コード側に受け口があっても発火しない)。
+
+未追加のままだと: テナントがカード登録を完了しても `stripe_subscriptions` に行が
+作られず、次にプランを変更したときの `syncSubscriptionItemsToPlan` が `no_subscription`
+を返し続ける(=支払い設定が完了しているのに UI 上は「未完了」のまま)。
+
+**手順**: Stripe Dashboard → Developers → Webhooks → 該当エンドポイント → 
+「Select events」で `checkout.session.completed` を追加(既存の
+`invoice.payment_succeeded` / `invoice.payment_failed` / `customer.subscription.deleted`
+と並列で選ぶだけ。エンドポイントURL・署名シークレットは変更不要)。
+
+**動作確認**: Stripe test mode で Checkout を1周させ、Dashboard の webhook ログで
+`checkout.session.completed` が 200 を返していること、`stripe_subscriptions` に
+該当テナントの行(`is_active=true`)が作られていることを確認する。
+
 ### stripe_webhook_events migration 実行手順
 
 > **未適用。** Stripe webhook の冪等化に必要。**適用しないまま新コードをデプロイすると Stripe webhook が全件 500 になる。**

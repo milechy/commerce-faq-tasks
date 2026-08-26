@@ -93,54 +93,68 @@ function getStripe(secretKey: string): any {
 
 // ---------------------------------------------------------------------------
 // PR-5(2026-08-25収益監査): 「今月の請求額」に、原価×MARGIN_MULTIPLIER(USDセント)を
-// 無変換で¥表示していた(禁止48違反 — 原価と請求額は別の数式で、実際にStripeへ
-// 請求されるのは billedQuantity(件数×プラン倍率) × Stripe price の実単価)。
-// ここでは実単価をキャッシュ付きで取得し、billedQuantity と掛けて「Stripeが
-// 実際に計算する金額と同じ数式」の見積りを返す。取得できない場合は0円ではなく
-// null(算出不可)を返す — 0円は「今月は無料」に読めてしまうため。
+// 無変換で¥表示していた(禁止48違反)。
+//
+// UX-B(2026-08-26): PR-5 の是正自体が #1015(Standard/Growth を「基本料+込み枠+超過」に
+// 変更)より前の実装のまま残っていた。旧実装は STRIPE_METERED_PRICE_ID という単一の
+// 従量price 1本を取得し、billedQuantity(= プラン倍率で重み付け済みの数量)に掛けていた。
+// #1015 で倍率は price 側(プランごとに分かれた Stripe price)に移ったため、この掛け算は
+// 二重適用(Standard +25% / Growth +50%)であり、しかも基本料(¥9,800/¥29,800)・
+// 込み枠・アバターの分単価を一切見ていなかった(禁止56)。
+// ここでは getSubscriptionItemPrices(planPricing.ts)を唯一の出どころとして、
+// プランごとに「基本料 + 込み枠を超えた分 × 実単価」を積む式に直す。
+// 取得できない場合は0円ではなく null(算出不可)を返す — 0円は「今月は無料」に
+// 読めてしまうため区別する(禁止20)。free_ad だけは実際に常に¥0(倍率0)なので
+// 0を返す(算出不可ではない)。
 // ---------------------------------------------------------------------------
 
-let meteredPriceCache: { unitAmountJpy: number | null; fetchedAt: number } | null = null;
-const METERED_PRICE_CACHE_TTL_MS = 15 * 60 * 1000;
+const priceUnitAmountCache = new Map<string, { unitAmountJpy: number | null; fetchedAt: number }>();
+const PRICE_CACHE_TTL_MS = 15 * 60 * 1000;
 
 /** テスト専用: モジュールスコープの価格キャッシュをリセットする。 */
-export function _resetMeteredPriceCacheForTest(): void {
-  meteredPriceCache = null;
+export function _resetPriceCacheForTest(): void {
+  priceUnitAmountCache.clear();
 }
 
-async function getMeteredUnitPriceJpy(stripe: any): Promise<number | null> {
+/**
+ * 1つの Stripe price の実単価(円)をキャッシュ付きで取得する。
+ *
+ * ★price ID ごとにキャッシュする★ Standard/Growth は基本料・テキスト超過・
+ * アバター超過の3本、異なる price を同時に見る必要があるため、旧実装のような
+ * モジュール全体で1個のキャッシュだと3本目を引いた瞬間に1本目が上書きされる。
+ */
+async function getPriceUnitAmountJpy(stripe: any, priceId: string): Promise<number | null> {
   const now = Date.now();
-  if (meteredPriceCache && now - meteredPriceCache.fetchedAt < METERED_PRICE_CACHE_TTL_MS) {
-    return meteredPriceCache.unitAmountJpy;
-  }
-  const priceId = process.env.STRIPE_METERED_PRICE_ID;
-  if (!priceId) {
-    meteredPriceCache = { unitAmountJpy: null, fetchedAt: now };
-    return null;
+  const cached = priceUnitAmountCache.get(priceId);
+  if (cached && now - cached.fetchedAt < PRICE_CACHE_TTL_MS) {
+    return cached.unitAmountJpy;
   }
   try {
     const price = await stripe.prices.retrieve(priceId);
-    // per_unit以外(段階制など)は「件数×単価」の単純計算が成立しないため、
+    // per_unit以外(段階制など)は「数量×単価」の単純計算が成立しないため、
     // 推測せず算出不可に倒す(誤った金額を出すより「出さない」方が禁止10に沿う)。
     const unitAmount =
       price.billing_scheme === 'per_unit' && typeof price.unit_amount === 'number'
         ? price.unit_amount
         : null;
-    meteredPriceCache = { unitAmountJpy: unitAmount, fetchedAt: now };
+    priceUnitAmountCache.set(priceId, { unitAmountJpy: unitAmount, fetchedAt: now });
     return unitAmount;
   } catch {
     // Stripe到達不可時はキャッシュを更新せず、今回だけ算出不可を返す(次回再試行)。
-    return meteredPriceCache?.unitAmountJpy ?? null;
+    return cached?.unitAmountJpy ?? null;
   }
 }
 
 /**
- * 指定テナント・期間について、Stripeが実際に計算する請求額と同じ数式
- * (billedQuantity × 実単価)で見積りを円で返す。以下のいずれかに該当する場合は
- * null(算出不可) — 0円を返すと「今月は無料」に読めてしまうため区別する。
- *   - STRIPE_SECRET_KEY / STRIPE_METERED_PRICE_ID が未設定
+ * 指定テナント・期間について、確定価格体系(.claude/rules/billing.md §7)どおりの
+ * 請求見積りを円で返す。以下のいずれかに該当する場合は null(算出不可) —
+ * 0円を返すと「今月は無料」に読めてしまうため区別する。
+ *   - STRIPE_SECRET_KEY が未設定
  *   - テナントが存在しない
+ *   - 該当プランの price 環境変数が未設定(getSubscriptionItemPrices が ok:false)
  *   - Stripe price が per_unit 以外(段階制等)
+ *   - enterprise(個別契約のため自動算出しない)
+ * free_ad は上記のどれにも該当せず、常に 0 を返す(倍率0で実際に無料のため)。
  */
 export async function computeBillingEstimateJpy(
   db: any,
@@ -153,14 +167,53 @@ export async function computeBillingEstimateJpy(
 
   const tenantResult = await db.query(`SELECT plan FROM tenants WHERE id = $1`, [tenantId]);
   if (tenantResult.rows.length === 0) return null;
-  const currentPlan = tenantResult.rows[0].plan as string | null;
+  const plan = tenantResult.rows[0].plan as string | null;
+
+  // free_ad は倍率0で請求が発生しない。算出不可(null)ではなく実額として0を返す。
+  if (plan === 'free_ad') return 0;
 
   const stripe = getStripe(stripeSecretKey);
-  const unitAmountJpy = await getMeteredUnitPriceJpy(stripe);
+
+  // textUnits/avatarMinutes は「倍率適用前・込み枠差し引き前」の生の数量。
+  // 込み枠の差し引きは生の数量に対して行う必要がある(computeQuotaOverage 参照)。
+  const { textUnits, avatarMinutes } = await computeExpectedBilling(db, tenantId, from, to, plan);
+
+  if (plan === 'standard' || plan === 'growth') {
+    const priceResult = getSubscriptionItemPrices(plan, 'monthly');
+    if (!priceResult.ok) return null;
+    const { base, text: textOveragePriceId, avatarOverage: avatarOveragePriceId } = priceResult.prices;
+    if (!base || !textOveragePriceId || !avatarOveragePriceId) return null;
+
+    const overage = computeQuotaOverage(plan, textUnits, avatarMinutes);
+    // standard/growth は必ず込み枠を持つ(PLAN_INCLUDED_QUOTASに定義済み)ので
+    // null になるのは設定不整合のみ。誤った金額を出すより算出不可を返す。
+    if (!overage) return null;
+
+    const [baseAmountJpy, textOverageUnitJpy, avatarOverageUnitJpy] = await Promise.all([
+      getPriceUnitAmountJpy(stripe, base),
+      getPriceUnitAmountJpy(stripe, textOveragePriceId),
+      getPriceUnitAmountJpy(stripe, avatarOveragePriceId),
+    ]);
+    if (baseAmountJpy === null || textOverageUnitJpy === null || avatarOverageUnitJpy === null) return null;
+
+    return (
+      baseAmountJpy +
+      overage.textConversations * textOverageUnitJpy +
+      overage.avatarMinutes * avatarOverageUnitJpy
+    );
+  }
+
+  // starter(および null/未知プランは starter として fail-safe — planMultiplier と
+  // 同じ「請求漏れを避ける」向き)は基本料も込み枠も無い純従量: 会話数 × 単価のみ。
+  // enterprise はここで getSubscriptionItemPrices が ok:false(plan_not_self_serve)を
+  // 返すため自然に null に落ちる(個別契約を自動算出しない、という既存方針どおり)。
+  const priceResult = getSubscriptionItemPrices(plan, 'monthly');
+  if (!priceResult.ok || !priceResult.prices.text) return null;
+
+  const unitAmountJpy = await getPriceUnitAmountJpy(stripe, priceResult.prices.text);
   if (unitAmountJpy === null) return null;
 
-  const { billedQuantity } = await computeExpectedBilling(db, tenantId, from, to, currentPlan);
-  return billedQuantity * unitAmountJpy;
+  return textUnits * unitAmountJpy;
 }
 
 // ---------------------------------------------------------------------------
@@ -649,6 +702,168 @@ export function registerBillingAdminRoutes(
       } catch (err) {
         logger.error({ err, tenantId }, '[billingApi] quota query failed');
         res.status(500).json({ error: 'internal_error' });
+      }
+    }
+  );
+
+  // ──────────────────────────────────────────────────────────────
+  // POST /v1/admin/my-tenant/billing/checkout-session  (client_admin)
+  //
+  // UX-A(2026-08-26 UI/UX棚卸し): テナント自身が有料プランへ変更しても、
+  // カード登録の導線が存在しなかった(super_admin限定の /billing/onboard しか無い)。
+  // 基本料ありのプラン(Standard/Growth)は subscriptions.create が即座に課金を試みるため、
+  // カード未登録のまま作ると subscription が incomplete で止まる。Stripe Checkout
+  // (mode: subscription)ならカード入力と3DS認証をStripe側に丸ごと任せられる。
+  //
+  // ★このエンドポイントは Customer/Subscription を作らない★
+  // Checkout セッションを作って戻り先の URL を返すだけ。実際の顧客・サブスク作成は
+  // Stripe が Checkout 完了時に行い、stripeWebhook.ts の checkout.session.completed
+  // で記録する(セッション作成レスポンスの時点ではまだカード入力前で確定していない)。
+  // ──────────────────────────────────────────────────────────────
+  app.post(
+    '/v1/admin/my-tenant/billing/checkout-session',
+    ...mw,
+    async (req: Request, res: Response): Promise<void> => {
+      const { tenantId, isSuperAdmin } = resolveTenantId(req);
+      // super_admin は集約ビューで特定テナントに紐付かないため対象外。
+      // 個別テナントのカード登録を代行したい場合は /billing/onboard を使う。
+      if (isSuperAdmin || !tenantId) {
+        res.status(403).json({ error: 'forbidden', message: 'この操作はテナント管理者のみ実行できます' });
+        return;
+      }
+
+      const parsed = onboardSchema.pick({ billingCycle: true }).safeParse(req.body ?? {});
+      if (!parsed.success) {
+        res.status(400).json({ error: 'invalid_request', details: parsed.error.issues });
+        return;
+      }
+      const { billingCycle } = parsed.data;
+
+      const stripeKey = process.env.STRIPE_SECRET_KEY;
+      if (!stripeKey) { res.status(500).json({ error: 'stripe_not_configured' }); return; }
+
+      try {
+        const tenantRow = await db.query(
+          `SELECT id, name, tenant_contact_email, plan FROM tenants WHERE id = $1`,
+          [tenantId]
+        );
+        if (tenantRow.rows.length === 0) {
+          res.status(404).json({ error: 'tenant not found' });
+          return;
+        }
+        const tenant = tenantRow.rows[0] as {
+          id: string; name: string; tenant_contact_email: string | null; plan: string | null;
+        };
+
+        const stripe = getStripe(stripeKey);
+
+        // ★冪等性チェック(このブロックが本エンドポイントの最重要ガード)★
+        // ここが無いと、二重クリック・ネットワーク遅延中の再送・「支払い設定へ進む」
+        // バナーが古いまま残っている状態での再訪問のいずれでも、テナントごとに
+        // 1本のはずの Stripe Customer/Subscription が複数作られうる(= 二重請求)。
+        // /billing/onboard(super_admin経路)が同じ理由で existing チェックを持つのと
+        // 同じ配慮を、こちらのセルフサービス経路にも適用する。
+        //
+        // 既にアクティブな契約がある場合は新規 Checkout を作らず、Billing Portal
+        // (支払い方法の変更・請求書確認ができる Stripe 保護下の画面)へ誘導する。
+        // フロント側は「Checkoutのurl」も「Portalのurl」も同じ `url` フィールドで
+        // 受け取り、そのままリダイレクトするだけでよい(呼び出し元に分岐を持たせない)。
+        const existing = await db.query(
+          `SELECT stripe_customer_id FROM stripe_subscriptions
+            WHERE tenant_id = $1 AND is_active = true LIMIT 1`,
+          [tenantId]
+        );
+        if (existing.rows.length > 0) {
+          const stripeCustomerId = existing.rows[0].stripe_customer_id as string;
+          const portalSession = await stripe.billingPortal.sessions.create({
+            customer: stripeCustomerId,
+            return_url: process.env.BILLING_PORTAL_RETURN_URL ?? 'https://example.com',
+          });
+          logger.info(
+            { tenantId, plan: tenant.plan },
+            '[billingApi] checkout-session: 既にアクティブな契約があるためPortalへ誘導した(新規Checkoutは作らない)'
+          );
+          res.json({ ok: true, url: portalSession.url, alreadyOnboarded: true });
+          return;
+        }
+
+        // プラン→price は planPricing.ts が唯一の出どころ(禁止6)。
+        // オンボード(super_admin)経路と同じ関数を通す。
+        const priceResult = getSubscriptionItemPrices(tenant.plan, billingCycle);
+        if (!priceResult.ok) {
+          if (priceResult.reason === 'plan_not_self_serve') {
+            res.status(400).json({
+              error: 'plan_not_self_serve',
+              detail: tenant.plan === 'enterprise'
+                ? 'Enterprise は個別契約です。担当までお問い合わせください。'
+                : 'Free(広告表示)プランは請求が発生しないため、お支払い登録は不要です。',
+            });
+            return;
+          }
+          if (priceResult.reason === 'billing_cycle_not_supported') {
+            res.status(400).json({
+              error: 'billing_cycle_not_supported',
+              detail: tenant.plan === 'starter'
+                ? 'Starter は基本料の無い純従量プランのため、年払いを選択できません。'
+                : '年払いは現在準備中です。月払いをご利用ください。',
+            });
+            return;
+          }
+          logger.error(
+            { tenantId, plan: tenant.plan, billingCycle, missing: priceResult.missing },
+            '[billingApi] checkout-session: price env not configured'
+          );
+          res.status(500).json({ error: 'stripe_price_not_configured', missing: priceResult.missing });
+          return;
+        }
+
+        const returnBase = process.env.BILLING_PORTAL_RETURN_URL ?? 'https://example.com';
+
+        // ★base(基本料・licensed)には quantity:1 を明示、text/avatarOverage(metered)には
+        // quantity を付けない★ Stripe Checkout は metered price に quantity を渡すと
+        // 拒否する。ここは priceResult.prices の構造(base=licensed、それ以外=metered)を
+        // 直接知っているので、toSubscriptionItems() は使わず組み立てる。
+        const lineItems = [
+          priceResult.prices.base ? { price: priceResult.prices.base, quantity: 1 } : null,
+          priceResult.prices.text ? { price: priceResult.prices.text } : null,
+          priceResult.prices.avatarOverage ? { price: priceResult.prices.avatarOverage } : null,
+        ].filter((item): item is { price: string; quantity?: number } => item !== null);
+
+        // ★冪等キー — 上の existing チェックの TOCTOU を Stripe 側で塞ぐ★
+        // existing チェック(SELECT)と本 create の間にロックが無いため、ほぼ同時に
+        // 2リクエストが来ると両方が「既存契約なし」を見て、Customer/Subscription が
+        // 2本作られうる(= 二重請求)。DBロックで直そうとすると Stripe API 呼び出しを
+        // トランザクション内に抱えることになり、Stripe が遅いときに接続を占有する。
+        // 「同じ意図のリクエストが複数届く」問題は Stripe の冪等キーが本来の解。
+        //
+        // ★キーに分単位の時刻を含める理由★
+        // テナント固定キーにすると Stripe 側で24時間同じレスポンスが返るため、
+        // 「一度Checkoutを離脱して、後で気が変わってやり直す」が丸一日ブロックされる。
+        // 分で丸めることで、連打・二重送信(数百ms〜数秒)は同一キーに畳みつつ、
+        // 正当なやり直しは次の分から通る。
+        const idempotencyWindow = Math.floor(Date.now() / 60_000);
+        const session = await stripe.checkout.sessions.create({
+          mode: 'subscription',
+          customer_email: tenant.tenant_contact_email ?? undefined,
+          line_items: lineItems,
+          success_url: `${returnBase}?checkout=success`,
+          cancel_url: `${returnBase}?checkout=cancelled`,
+          metadata: { tenant_id: tenantId, plan: tenant.plan ?? '', billing_cycle: billingCycle },
+          subscription_data: {
+            metadata: { tenant_id: tenantId, plan: tenant.plan ?? '', billing_cycle: billingCycle },
+          },
+        }, {
+          idempotencyKey: `billing:checkout:${tenantId}:${tenant.plan ?? ''}:${billingCycle}:${idempotencyWindow}`,
+        });
+
+        logger.info(
+          { tenantId, plan: tenant.plan, billingCycle, sessionId: session.id },
+          '[billingApi] tenant created a Checkout session for self-serve billing'
+        );
+        res.json({ ok: true, url: session.url });
+      } catch (err: any) {
+        logger.error({ err, tenantId }, '[billingApi] checkout-session creation failed');
+        res.status(500).json({ error: 'Checkoutセッションの作成に失敗しました', detail: String(err?.message ?? err) });
       }
     }
   );
