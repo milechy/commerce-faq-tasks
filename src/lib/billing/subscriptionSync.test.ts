@@ -393,11 +393,14 @@ describe("syncSubscriptionForTenant(ラッパー — HTTPルートが実際に�
   const mockRetrieve = jest.fn();
   const mockUpdate = jest.fn();
 
+  // ★{virtual:true}を付けない★ 'stripe' は実在パッケージなので不要かつ有害
+  // (詳細は stripeWebhook.test.ts の同種コメント参照。フルスイート実行時に
+  // 他ファイルの'stripe'モックと競合し、無関係なテストファイルが全滅する)。
   jest.mock("stripe", () => {
     return jest.fn().mockImplementation(() => ({
       subscriptions: { retrieve: (...a: unknown[]) => mockRetrieve(...a), update: (...a: unknown[]) => mockUpdate(...a) },
     }));
-  }, { virtual: true });
+  });
 
   const savedStripeKey = process.env.STRIPE_SECRET_KEY;
 

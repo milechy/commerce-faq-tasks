@@ -15,12 +15,15 @@ import { registerBillingAdminRoutes } from "./billingApi";
 const mockCheckoutSessionsCreate = jest.fn();
 const mockPortalSessionsCreate = jest.fn();
 
+// ★{virtual:true}を付けない★ 'stripe' は実在パッケージなので不要かつ有害
+// (詳細は stripeWebhook.test.ts の同種コメント参照。フルスイート実行時に
+// 他ファイルの'stripe'モックと競合し、無関係なテストファイルが全滅する)。
 jest.mock("stripe", () => {
   return jest.fn().mockImplementation(() => ({
     checkout: { sessions: { create: (...args: unknown[]) => mockCheckoutSessionsCreate(...args) } },
     billingPortal: { sessions: { create: (...args: unknown[]) => mockPortalSessionsCreate(...args) } },
   }));
-}, { virtual: true });
+});
 
 const silentLogger = pino({ level: "silent" });
 

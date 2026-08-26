@@ -12,13 +12,20 @@
 import { createStripeWebhookHandler } from './stripeWebhook';
 
 // stripe をモック
+// ★{virtual:true}を付けない★ 'stripe' は実在するnpmパッケージ(node_modulesに
+// 存在)なので、virtual指定は不要かつ有害。virtualはモジュールが実在しない場合
+// 専用のオプションで、実在するモジュールに使うとJestの仮想モックレジストリが
+// 実モジュール解決パスと別系統になり、フルスイート実行時に他のテストファイル
+// (同じ'stripe'を通常のjest.mockで扱うファイル)と競合して、どちらのモックも
+// 効かず実際の'stripe'パッケージが読み込まれる事故を招く(2026-08-26、CI Gate 1で
+// tests/phase54/billingDashboard.test.ts が無関係に全滅する形で発覚)。
 jest.mock('stripe', () => {
   return jest.fn().mockImplementation(() => ({
     webhooks: {
       constructEvent: jest.fn(),
     },
   }));
-}, { virtual: true });
+});
 
 function makeReqRes(overrides: {
   body?: any;
