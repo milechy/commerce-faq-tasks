@@ -805,7 +805,7 @@
       <!-- Unit price banner -->
       <div style="display:inline-flex; align-items:center; gap:10px; background:rgba(124,58,237,0.12); border:1px solid rgba(124,58,237,0.3); border-radius:999px; padding:8px 20px; margin-bottom:8px;">
         <span style="font-size:20px; font-weight:800; color:#c4b5fd;">都度課金〜月額固定まで</span>
-        <span style="font-size:13px; color:var(--muted);">事業の成長に合わせて選べる4プラン</span>
+        <span style="font-size:13px; color:var(--muted);">事業の成長に合わせて選べる5プラン</span>
       </div>
       <div style="font-size:12px; color:var(--muted);">* 1対話 = ユーザー発言1往復</div>
     </div>
@@ -817,12 +817,29 @@
       </div>
     </div>
 
-    <div class="pricing-grid" style="display:grid; grid-template-columns:repeat(4,1fr); gap:20px;">
+    <div class="pricing-grid" style="display:grid; grid-template-columns:repeat(5,1fr); gap:20px;">
       <style>
-        @media (max-width: 1024px) { .pricing-grid { grid-template-columns: repeat(2,1fr) !important; } }
+        @media (max-width: 1200px) { .pricing-grid { grid-template-columns: repeat(3,1fr) !important; } }
         @media (max-width: 767px) { .pricing-grid { grid-template-columns: 1fr !important; } }
       </style>
       <div style="display:contents;">
+        <!-- Free(広告表示) -->
+        <div class="glass-card" style="border-radius:16px; padding:28px;">
+          <div style="font-weight:700; font-size:18px; margin-bottom:6px;">Free</div>
+          <div style="font-size:13px; color:var(--muted); margin-bottom:20px;">まずは無料で試したい方向け</div>
+          <div style="font-size:28px; font-weight:800; margin-bottom:4px;">¥0<span style="font-size:15px; font-weight:600; color:var(--muted);">/月</span></div>
+          <div style="font-size:13px; color:var(--muted); margin-bottom:24px;">〜200対話/月・テキストのみ</div>
+          <ul style="list-style:none; padding:0; margin:0 0 24px; display:flex; flex-direction:column; gap:10px;">
+            <li style="font-size:13px; color:var(--muted); display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> ウィジェット埋め込み</li>
+            <li style="font-size:13px; color:var(--muted); display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> FAQ自動回答（PDF/URL）</li>
+            <li style="font-size:13px; color:var(--muted); display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> テキスト接客</li>
+            <li style="font-size:13px; color:var(--muted); display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> 心理学Sales AI</li>
+            <li style="font-size:13px; color:var(--muted); display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> 基本の管理画面</li>
+          </ul>
+          <div style="font-size:12px; color:var(--muted); margin-bottom:16px; line-height:1.5;">クレジットカード登録不要。上限到達で一時停止し、いつでも有料プランへ切り替え可能。</div>
+          <a href="#contact" style="display:block; text-align:center; background:rgba(124,58,237,0.15); border:1px solid rgba(124,58,237,0.35); color:#c4b5fd; text-decoration:none; font-weight:600; font-size:14px; padding:12px; border-radius:10px; transition:all 0.2s;" onmouseover="this.style.background='rgba(124,58,237,0.25)'" onmouseout="this.style.background='rgba(124,58,237,0.15)'">無料で始める</a>
+        </div>
+
         <!-- Starter -->
         <div class="glass-card" style="border-radius:16px; padding:28px;">
           <div style="font-weight:700; font-size:18px; margin-bottom:6px;">Starter</div>
@@ -830,14 +847,10 @@
           <div style="font-size:28px; font-weight:800; margin-bottom:4px;">¥20<span style="font-size:15px; font-weight:600; color:var(--muted);">/対話</span></div>
           <div style="font-size:13px; color:var(--muted); margin-bottom:24px;">〜500対話/月</div>
           <ul style="list-style:none; padding:0; margin:0 0 24px; display:flex; flex-direction:column; gap:10px;">
-            <li style="font-size:13px; color:var(--muted); display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> ウィジェット埋め込み</li>
-            <li style="font-size:13px; color:var(--muted); display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> FAQ自動回答（PDF/URL）</li>
-            <li style="font-size:13px; color:var(--muted); display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> テキスト接客</li>
-            <li style="font-size:13px; color:var(--muted); display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> 心理学Sales AI</li>
+            <li style="font-size:13px; color:var(--muted); display:flex; gap:8px; align-items:center; font-weight:700; padding-bottom:10px; margin-bottom:2px; border-bottom:1px dashed rgba(124,58,237,0.35);"><span style="display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px; border-radius:50%; background:rgba(124,58,237,0.35); color:#fff; font-size:11px; font-weight:800; flex-shrink:0;">+</span> Freeの全機能</li>
             <li style="font-size:13px; color:var(--muted); display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> スタッフへの引き継ぎ</li>
             <li style="font-size:13px; color:var(--muted); display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> 未回答質問の自動抽出</li>
             <li style="font-size:13px; color:var(--muted); display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> 先回り声がけ</li>
-            <li style="font-size:13px; color:var(--muted); display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> 基本の管理画面</li>
           </ul>
           <a href="#contact" style="display:block; text-align:center; background:rgba(124,58,237,0.15); border:1px solid rgba(124,58,237,0.35); color:#c4b5fd; text-decoration:none; font-weight:600; font-size:14px; padding:12px; border-radius:10px; transition:all 0.2s;" onmouseover="this.style.background='rgba(124,58,237,0.25)'" onmouseout="this.style.background='rgba(124,58,237,0.15)'">無料で始める</a>
         </div>
@@ -1317,7 +1330,7 @@
   data-avatar-mode="animated"
   data-avatar-image-url="https://rpqrwifbrhlebbelyqog.supabase.co/storage/v1/object/public/avatar-defaults/default_02.png"
   data-scripted-responses='[
-    {"keywords":["料金","値段","いくら","費用","価格"],"answer":"プランは4種類（Starter/Standard/Growth/Enterprise）あり、使い方に応じて月額固定〜従量課金までお選びいただけます。詳しいプランは料金セクションをご覧ください🙂"},
+    {"keywords":["料金","値段","いくら","費用","価格"],"answer":"プランは5種類（Free/Starter/Standard/Growth/Enterprise）あり、使い方に応じて月額固定〜従量課金までお選びいただけます。詳しいプランは料金セクションをご覧ください🙂"},
     {"keywords":["導入","日数","どのくらい","期間","何日"],"answer":"最短3日で本番稼働できます。コピペで埋め込むだけなので、難しい設定は不要です。"},
     {"keywords":["セキュリティ","個人情報","暗号化","安全"],"answer":"全データを暗号化して日本国内サーバーに保管しています。個人情報は自動で伏せ字処理されます。"},
     {"keywords":["音声","話せ","声"],"answer":"はい、Standardプラン以上で音声対応のAIアバターが使えます。このデモ画面は文字チャットのみでご案内しています。"},
