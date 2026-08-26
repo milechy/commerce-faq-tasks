@@ -82,14 +82,26 @@ export interface SubscriptionSyncResult {
  * failed をここに含めるのは、原因が env でも Stripe 障害でも、
  * テナント側から見れば「請求が始まっていない」という同じ事実だから。
  */
+const ATTENTION_STATUSES: ReadonlySet<SubscriptionSyncStatus> = new Set([
+  'no_subscription',
+  'price_not_configured',
+  'stripe_not_configured',
+  'failed',
+  'manual_plan',
+]);
+
 export function needsBillingAttention(result: SubscriptionSyncResult): boolean {
-  return (
-    result.status === 'no_subscription' ||
-    result.status === 'price_not_configured' ||
-    result.status === 'stripe_not_configured' ||
-    result.status === 'failed' ||
-    result.status === 'manual_plan'
-  );
+  return ATTENTION_STATUSES.has(result.status);
+}
+
+/**
+ * tenants.billing_sync_status に永続化された文字列に対する同じ判定(2026-08-26 レビュー是正)。
+ * billingApi.ts の fetchBillingInvoices がリロード後の「支払い設定が未完了」表示を
+ * 復元するために使う。needsBillingAttention と判定基準を分けると、片方だけ直した
+ * ときにドリフトする(禁止6と同種の理由でロジックを1箇所にする)。
+ */
+export function billingSyncStatusNeedsAttention(status: string | null): boolean {
+  return status !== null && ATTENTION_STATUSES.has(status as SubscriptionSyncStatus);
 }
 
 function getStripeClient(): any {
@@ -379,7 +391,25 @@ export async function syncSubscriptionForTenant(
           );
           return { status: 'superseded' };
         }
-        return await syncSubscriptionItemsToPlan(client, stripe, logger, tenantId, plan, billingCycle, currentIsActive);
+        const result = await syncSubscriptionItemsToPlan(client, stripe, logger, tenantId, plan, billingCycle, currentIsActive);
+
+        // ★直近の同期結果をtenantsへ焼き付ける(2026-08-26 レビュー是正)★
+        // 従来はレスポンスにしか載せておらず、PlanSection.tsxのコンポーネントstateが
+        // 消えるリロードのたびに「支払い設定が未完了」の警告が跡形もなく消えていた。
+        // billingApi.ts の fetchBillingInvoices がこれを読み直し、リロード後も
+        // billingSyncStatusNeedsAttention() で同じ判定を復元する。
+        // migration_billing_sync_status.sql 未適用環境でも42703をfail-openし、
+        // 同期処理自体(=この関数の戻り値)は正常に完了させる。
+        try {
+          await client.query(
+            `UPDATE tenants SET billing_sync_status = $1, billing_sync_at = NOW() WHERE id = $2`,
+            [result.status, tenantId],
+          );
+        } catch (err) {
+          logger.warn({ err, tenantId }, '[subscriptionSync] billing_sync_status の永続化に失敗した(migration未適用の可能性)');
+        }
+
+        return result;
       } finally {
         await client.query('SELECT pg_advisory_unlock(hashtext($1))', [`billing_sync:${tenantId}`]);
       }

@@ -43,6 +43,7 @@ export function PlanSection({
   currentPlan,
   planStatus = "ready",
   billingStatus = null,
+  billingSyncNeedsAttention = null,
   onChanged,
   showToast,
 }: {
@@ -65,6 +66,14 @@ export function PlanSection({
    * 親(BillingPage)が既に取得している値をそのまま下ろすだけで、新しい取得はしない。
    */
   billingStatus?: "ok" | "no_subscription" | null;
+  /**
+   * tenants.billing_sync_status に永続化された直近のプラン変更同期結果が、
+   * 対応を要する状態か(2026-08-26 レビュー是正)。billingStatusは「決済契約の
+   * 有無」しか見ないため no_subscription 以外(failed/manual_plan等)をリロード後に
+   * 見失っていた。判定基準(何が"対応要"か)はサーバの billingSyncStatusNeedsAttention
+   * (subscriptionSync.ts)一箇所にあり、ここでSetを再掲しない(禁止6)。
+   */
+  billingSyncNeedsAttention?: boolean | null;
   onChanged: (plan: TenantPlan) => void;
   showToast: (msg: string) => void;
 }) {
@@ -83,36 +92,37 @@ export function PlanSection({
   // フォールバックへ落ちてしまい、"変更は成功したのに古いサーバ状態のせいで
   // 案内が出たまま" になる(実際にテストで検出した)。
   const [lastBillingSync, setLastBillingSync] = useState<string | null>(null);
+  // サーバが計算した「対応要」判定(billing_sync_needs_attention)。lastBillingSync
+  // と対で保持する — 判定ロジック自体はサーバ側(subscriptionSync.ts)にのみ存在させ、
+  // ここでは受け取った結果を使うだけにする。
+  const [lastBillingSyncNeedsAttention, setLastBillingSyncNeedsAttention] = useState<boolean | null>(null);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
-
-  const NEEDS_ATTENTION_STATUSES = new Set([
-    "no_subscription",
-    "price_not_configured",
-    "stripe_not_configured",
-    "manual_plan",
-    "failed",
-  ]);
 
   /**
    * 実際に案内を出すかどうかの最終判定。
    *
    * 直近のプラン変更結果があればそれが唯一の真実(良い結果でも悪い結果でも)。
-   * 無ければサーバ側の契約有無(billingStatus)へフォールバックする。この順序が重要:
+   * 無ければサーバ側の永続化状態(billingSyncNeedsAttention)へフォールバックする。
+   * この順序が重要:
    *  - 変更直後は lastBillingSync の方が新しい(親の再取得はまだ走っていない)
-   *  - リロード後は lastBillingSync が消えるので billingStatus が引き継ぐ
+   *  - リロード後は lastBillingSync が消えるので billingSyncNeedsAttention が引き継ぐ
+   *
+   * "no_subscription" という具体的な値は「支払い設定へ進む」ボタンの表示要否にだけ
+   * 使う(下記コメント参照)。それ以外の対応要状態は "attention" という総称に畳む
+   * (リロード後はどの状態だったかの文字列までは持ち越さないため区別できない —
+   * ボタンを出さない側に倒すのは安全側)。
    *
    * free_ad/enterprise など「そもそも決済契約を持たないのが正常」なプランでは
-   * no_subscription を異常として出さない(出すと、無料プランのテナントに永久に
-   * 「支払い設定が必要」と表示される)。
+   * 出さない(出すと、無料プランのテナントに永久に「支払い設定が必要」と表示される)。
    */
   const needsPaymentSetup =
     lastBillingSync !== null
-      ? (NEEDS_ATTENTION_STATUSES.has(lastBillingSync) ? lastBillingSync : null)
-      : billingStatus === "no_subscription" &&
+      ? (lastBillingSyncNeedsAttention ? lastBillingSync : null)
+      : billingSyncNeedsAttention &&
           currentPlan !== "free_ad" &&
           currentPlan !== "enterprise"
-        ? "no_subscription"
+        ? (billingStatus === "no_subscription" ? "no_subscription" : "attention")
         : null;
 
   // no_subscription のときだけ「支払い設定へ進む」ボタンを出す。他のステータス
@@ -169,13 +179,15 @@ export function PlanSection({
         const data = (await res.json().catch(() => ({}))) as {
           plan?: TenantPlan;
           billing_sync?: string;
+          billing_sync_needs_attention?: boolean;
         };
         onChanged(data.plan ?? target);
         setPending(null);
         // 良い結果(synced/no_change)も含めて記録する。これが billingStatus より
         // 新しい真実になり、古いサーバ状態による誤った案内表示を打ち消す。
         setLastBillingSync(data.billing_sync ?? null);
-        if (data.billing_sync && NEEDS_ATTENTION_STATUSES.has(data.billing_sync)) {
+        setLastBillingSyncNeedsAttention(data.billing_sync_needs_attention ?? false);
+        if (data.billing_sync_needs_attention) {
           // プランは変わったが請求構成が追随していない。トーストの成功表示に
           // 混ぜず、消えない案内として残す(「即時反映」の嘘と同じ理由で、
           // ここは楽観的な文言にしない)。

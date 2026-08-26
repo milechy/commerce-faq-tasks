@@ -86,6 +86,11 @@ export default function BillingPage() {
   // PR-7(2026-08-25収益監査): 「未登録」と「登録済みだが偶然0件」を同じ値
   // (portalUrl===null)で表現しない(CLAUDE.md禁止20)。APIのstatusをそのまま保持する。
   const [billingStatus, setBillingStatus] = useState<"ok" | "no_subscription" | null>(null);
+  // 2026-08-26 レビュー是正: tenants.billing_sync_status に永続化された直近の
+  // プラン変更同期結果。リロード後もPlanSectionの「支払い設定が未完了」警告を
+  // 復元するために使う(billingStatusだけだとno_subscription以外の対応要状態
+  // (failed/manual_plan等)をリロード後に見失う)。
+  const [billingSyncNeedsAttention, setBillingSyncNeedsAttention] = useState<boolean | null>(null);
   const [onboardLoading, setOnboardLoading] = useState(false);
   const [costBreakdown, setCostBreakdown] = useState<CostBreakdown | null>(null);
   const [crossTenantRows, setCrossTenantRows] = useState<CrossTenantRow[]>([]);
@@ -317,6 +322,7 @@ export default function BillingPage() {
     setInvoices([]);
     setPortalUrl(null);
     setBillingStatus(null);
+    setBillingSyncNeedsAttention(null);
     setCostBreakdown(null);
     setCrossTenantRows([]);
     setQuotaStatus("loading");
@@ -424,6 +430,7 @@ export default function BillingPage() {
           status?: "ok" | "no_subscription";
           customerId: string;
           portalUrl: string;
+          billingSyncNeedsAttention?: boolean;
           invoices: Array<{
             id: string;
             status: string;
@@ -440,6 +447,7 @@ export default function BillingPage() {
 
         setPortalUrl(data.portalUrl ?? null);
         setBillingStatus(data.status ?? null);
+        setBillingSyncNeedsAttention(data.billingSyncNeedsAttention ?? null);
 
         const mappedInvoices: Invoice[] = data.invoices.map((inv) => ({
           id: inv.id,
@@ -786,6 +794,7 @@ export default function BillingPage() {
         currentPlan={effectivePlan}
         planStatus={planStatus}
         billingStatus={billingStatus}
+        billingSyncNeedsAttention={billingSyncNeedsAttention}
         onChanged={(p) => setPlanOverride(p)}
         showToast={showToast}
       />
