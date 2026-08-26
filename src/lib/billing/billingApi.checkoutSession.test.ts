@@ -42,7 +42,7 @@ function makeApp(db: any, role: Role, tenantId = "tenant-a") {
 
 function makeDb(
   tenant: { plan: string | null; tenantContactEmail?: string | null } | null,
-  opts: { activeSubscriptionCustomerId?: string } = {},
+  opts: { activeSubscriptionCustomerId?: string; inactiveSubscriptionCustomerId?: string } = {},
 ) {
   return {
     query: jest.fn(async (sql: string) => {
@@ -51,10 +51,16 @@ function makeDb(
           ? { rows: [{ id: "tenant-a", name: "テストテナント", tenant_contact_email: tenant.tenantContactEmail ?? null, plan: tenant.plan }] }
           : { rows: [] };
       }
-      if (sql.includes("FROM stripe_subscriptions") && sql.includes("is_active = true")) {
-        return opts.activeSubscriptionCustomerId
-          ? { rows: [{ stripe_customer_id: opts.activeSubscriptionCustomerId }] }
-          : { rows: [] };
+      // is_active はJS側で判定する(SQLでフィルタしない) — 解約済み(is_active=false)の
+      // 既存Customerを再利用するため、is_activeを問わず行を取得する必要がある。
+      if (sql.includes("SELECT stripe_customer_id, is_active FROM stripe_subscriptions")) {
+        if (opts.activeSubscriptionCustomerId) {
+          return { rows: [{ stripe_customer_id: opts.activeSubscriptionCustomerId, is_active: true }] };
+        }
+        if (opts.inactiveSubscriptionCustomerId) {
+          return { rows: [{ stripe_customer_id: opts.inactiveSubscriptionCustomerId, is_active: false }] };
+        }
+        return { rows: [] };
       }
       return { rows: [] };
     }),
@@ -264,6 +270,25 @@ describe("POST /v1/admin/my-tenant/billing/checkout-session", () => {
       expect(res.status).toBe(200);
       expect(mockCheckoutSessionsCreate).toHaveBeenCalledTimes(1);
       expect(mockPortalSessionsCreate).not.toHaveBeenCalled();
+    });
+
+    // ★孤児Customer防止(2026-08-26 レビュー是正)★ 解約済み(is_active=false)の
+    // 既存Customerがあれば、Checkoutのたびに新しいStripe Customerを作らず使い回す。
+    // customer と customer_email は Stripe が同時指定を拒否するため排他になる。
+    it("既存契約が is_active=false でも stripe_customer_id が分かれば、それを再利用する(customer_emailは使わない)", async () => {
+      const db = makeDb(
+        { plan: "standard", tenantContactEmail: "owner@example.com" },
+        { inactiveSubscriptionCustomerId: "cus_reactivate" },
+      );
+      const res = await request(makeApp(db, "client_admin"))
+        .post("/v1/admin/my-tenant/billing/checkout-session")
+        .set("Authorization", "Bearer dummy")
+        .send({});
+
+      expect(res.status).toBe(200);
+      const arg = mockCheckoutSessionsCreate.mock.calls[0][0];
+      expect(arg.customer).toBe("cus_reactivate");
+      expect(arg.customer_email).toBeUndefined();
     });
 
     it("Portalセッション作成が失敗したら500を返し、Checkoutへフォールバックしない(二重契約より安全側)", async () => {

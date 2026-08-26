@@ -109,6 +109,23 @@ describe('createStripeWebhookHandler', () => {
     }));
   }
 
+  // _handleCheckoutSessionCompleted は代表priceを解決するため getStripeClient() を
+  // 再度呼ぶ(署名検証用のクライアントとは別インスタンス)。stripeモックは
+  // mockImplementationOnce をFIFOで消費するため、署名検証用の1回に続けてこれを
+  // 積む。cancelSpy を渡すと孤児subscriptionキャンセル経路(subscriptions.cancel)も
+  // モックできる。
+  function mockSubscriptionRetrieveOnce(priceId: string | null, cancelSpy?: jest.Mock) {
+    const stripeMock = require('stripe');
+    stripeMock.mockImplementationOnce(() => ({
+      subscriptions: {
+        retrieve: jest.fn().mockResolvedValue(
+          priceId === null ? { items: { data: [] } } : { items: { data: [{ price: priceId }] } }
+        ),
+        cancel: cancelSpy ?? jest.fn().mockResolvedValue({}),
+      },
+    }));
+  }
+
   it('stripe-signature ヘッダーがない場合は 400 を返す', async () => {
     const db = makeDb();
     const handler = createStripeWebhookHandler(db as any, mockLogger);
@@ -391,6 +408,7 @@ describe('createStripeWebhookHandler', () => {
       };
       const event = { id: 'evt_checkout_1', type: 'checkout.session.completed', data: { object: session } };
       mockConstructEventOnce(event);
+      mockSubscriptionRetrieveOnce('price_growth_base');
 
       const db = makeDb({
         'INSERT INTO stripe_subscriptions': () => ({ rowCount: 1, rows: [] }),
@@ -406,7 +424,7 @@ describe('createStripeWebhookHandler', () => {
       expect(res._status).toBe(200);
       expect(db.query).toHaveBeenCalledWith(
         expect.stringContaining('INSERT INTO stripe_subscriptions'),
-        ['tenant-a', 'cus_abc', 'sub_abc']
+        ['tenant-a', 'cus_abc', 'sub_abc', 'price_growth_base']
       );
     });
 
@@ -421,6 +439,7 @@ describe('createStripeWebhookHandler', () => {
       };
       const event = { id: 'evt_checkout_2', type: 'checkout.session.completed', data: { object: session } };
       mockConstructEventOnce(event);
+      mockSubscriptionRetrieveOnce('price_growth_base');
 
       const db = makeDb({
         'INSERT INTO stripe_subscriptions': () => ({ rowCount: 1, rows: [] }),
@@ -435,7 +454,7 @@ describe('createStripeWebhookHandler', () => {
 
       expect(db.query).toHaveBeenCalledWith(
         expect.stringContaining('INSERT INTO stripe_subscriptions'),
-        ['tenant-b', 'cus_xyz', 'sub_xyz']
+        ['tenant-b', 'cus_xyz', 'sub_xyz', 'price_growth_base']
       );
     });
 
@@ -552,10 +571,12 @@ describe('createStripeWebhookHandler', () => {
       const handler = createStripeWebhookHandler(db as any, mockLogger);
 
       mockConstructEventOnce(event1);
+      mockSubscriptionRetrieveOnce('price_growth_base');
       const { req: req1, res: res1 } = makeReqRes({ body: Buffer.from(JSON.stringify(event1)), headers: { 'stripe-signature': 'valid_sig' } });
       await handler(req1, res1);
 
       mockConstructEventOnce(event2);
+      mockSubscriptionRetrieveOnce('price_growth_base');
       const { req: req2, res: res2 } = makeReqRes({ body: Buffer.from(JSON.stringify(event2)), headers: { 'stripe-signature': 'valid_sig' } });
       await handler(req2, res2);
 
@@ -565,8 +586,76 @@ describe('createStripeWebhookHandler', () => {
         ([sql]: [string]) => typeof sql === 'string' && sql.includes('INSERT INTO stripe_subscriptions')
       );
       expect(insertCalls).toHaveLength(2); // 2回とも実行される(ON CONFLICTで1行に収束するのはDB側の責務)
-      expect(insertCalls[0][1]).toEqual(['tenant-a', 'cus_abc', 'sub_abc']);
-      expect(insertCalls[1][1]).toEqual(['tenant-a', 'cus_abc', 'sub_abc']);
+      expect(insertCalls[0][1]).toEqual(['tenant-a', 'cus_abc', 'sub_abc', 'price_growth_base']);
+      expect(insertCalls[1][1]).toEqual(['tenant-a', 'cus_abc', 'sub_abc', 'price_growth_base']);
+    });
+
+    // ★孤児subscription防止(2026-08-26 レビュー是正)★
+    // 別タブに残った古いCheckoutが後で完了し、同一テナントに別のsubscriptionが
+    // 作られた場合。無条件上書きだと先のsubscriptionがDBから消えStripe側だけ
+    // 課金され続ける。ON CONFLICTのWHERE句が0行更新になり、新しい方をキャンセルする。
+    it('既に別のアクティブなsubscriptionが記録済みなら上書きせず、新しい方をキャンセルする', async () => {
+      const session = {
+        id: 'cs_test_orphan',
+        mode: 'subscription',
+        customer: 'cus_new',
+        subscription: 'sub_new',
+        metadata: { tenant_id: 'tenant-a' },
+      };
+      const event = { id: 'evt_checkout_orphan', type: 'checkout.session.completed', data: { object: session } };
+      mockConstructEventOnce(event);
+      const cancelSpy = jest.fn().mockResolvedValue({});
+      mockSubscriptionRetrieveOnce('price_growth_base', cancelSpy);
+
+      // ON CONFLICTのWHERE句(stripe_subscription_id一致 OR is_active=false)に
+      // 合致しない = 既に別のアクティブなsubscriptionが紐づいている状態を再現する。
+      const db = makeDb({
+        'INSERT INTO stripe_subscriptions': () => ({ rowCount: 0, rows: [] }),
+      });
+      const handler = createStripeWebhookHandler(db as any, mockLogger);
+      const { req, res } = makeReqRes({
+        body:    Buffer.from(JSON.stringify(event)),
+        headers: { 'stripe-signature': 'valid_sig' },
+      });
+
+      await handler(req, res);
+
+      expect(res._status).toBe(200); // 孤児化は防いだが、イベント自体はハンドリング成功
+      expect(cancelSpy).toHaveBeenCalledWith('sub_new');
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ tenantId: 'tenant-a', subscriptionId: 'sub_new' }),
+        expect.stringContaining('キャンセルする')
+      );
+    });
+
+    // 代表priceが解決できない(subscriptionにitemが無い等)場合、NULLは絶対に
+    // INSERTしない。500で失敗させ、Stripeの5xxリトライに委ねる。
+    it('代表priceが解決できなければ記録せず500で失敗させる(NULLをINSERTしない)', async () => {
+      const session = {
+        id: 'cs_test_no_price',
+        mode: 'subscription',
+        customer: 'cus_abc',
+        subscription: 'sub_abc',
+        metadata: { tenant_id: 'tenant-a' },
+      };
+      const event = { id: 'evt_checkout_no_price', type: 'checkout.session.completed', data: { object: session } };
+      mockConstructEventOnce(event);
+      mockSubscriptionRetrieveOnce(null); // items.data が空
+
+      const db = makeDb();
+      const handler = createStripeWebhookHandler(db as any, mockLogger);
+      const { req, res } = makeReqRes({
+        body:    Buffer.from(JSON.stringify(event)),
+        headers: { 'stripe-signature': 'valid_sig' },
+      });
+
+      await handler(req, res);
+
+      expect(res._status).toBe(500);
+      expect(db.query).not.toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO stripe_subscriptions'),
+        expect.anything()
+      );
     });
   });
 
