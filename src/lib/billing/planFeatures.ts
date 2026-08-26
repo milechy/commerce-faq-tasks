@@ -4,9 +4,17 @@
 // PLAN_OPTIONS)と一致させること。
 //
 // LPの機能マッピング:
-//   Growth〜: AIアバター（顔・声）、高度なAnalytics、CV計測、プレミアムアバター生成
+//   Standard〜: AIアバター（R2C既定アバターの利用のみ。自社アバターの作成は不可）
+//   Growth〜: アバターの自社カスタム作成（avatar_customize）、高度なAnalytics、CV計測、
+//             プレミアムアバター生成
 //   Enterprise〜: カスタムアバター（Fish Audio Voice Cloning）、ディープリサーチ、Sai代行（R2Cエージェント）
 // 「心理学Sales AI」は現状すべてのプランで提供するため、ここでは制限しない。
+//
+// ★avatar と avatar_customize を1つのゲートに戻さないこと★
+// Standard(¥9,800)は「アバターを使えること」だけを開放する段で、
+// 画像生成・声マッチング・プロンプト生成（Avatar Customization Studio）は Growth 以上。
+// 2つを統合すると、Standard の売り(既定アバターで安く始められる)か
+// Growth の売り(自社アバターを作れる)のどちらかが消える。
 //
 // GID 1216961878992581: super_admin バイパスの境界（意図的な区別。「割れている」わけではない）。
 // 新しいゲートを追加する際は、以下のどちらに当てはまるかで super_admin バイパスの可否を判断すること。
@@ -19,7 +27,7 @@
 import type { Pool } from "pg";
 import { getPool } from "../db";
 
-export type TenantPlan = "free_ad" | "starter" | "growth" | "enterprise";
+export type TenantPlan = "free_ad" | "starter" | "standard" | "growth" | "enterprise";
 
 // free_ad は starter よりさらに下の最下段（広告原資の無料プラン。テキストチャット限定・
 // 月次会話数上限あり）。既存の fail-safe（取得失敗・未設定時は最も制限の強い段）の
@@ -28,15 +36,24 @@ export type TenantPlan = "free_ad" | "starter" | "growth" | "enterprise";
 // 返り値の3箇所すべてで同時に直すこと。1箇所でも取り残すと、DB障害時に
 // 無料テナントが starter へ「昇格」する経路になる（型チェック・テストは通り、
 // 障害時にしか発現しないため気づけない）。
+//
+// ★standard は starter と growth の「間」に挿入された段（CLAUDE.md 禁止55）★
+// 序数は planHasFeature が `>=` で比較する相対順序そのものなので、
+// standard を 1 にする際に growth/enterprise を 2/3 へ繰り上げる必要がある。
+// 繰り上げを忘れて standard に既存値と同じ数値を与えると、型チェックもテストの
+// 大半も通ったまま「growth と standard が同格」になり、全ゲートが静かに壊れる。
+// 値そのものに意味は無く、意味があるのは順序だけ。
 const PLAN_RANK: Record<TenantPlan, number> = {
   free_ad: -1,
   starter: 0,
-  growth: 1,
-  enterprise: 2,
+  standard: 1,
+  growth: 2,
+  enterprise: 3,
 };
 
 export type GatedFeature =
   | "avatar"
+  | "avatar_customize"
   | "voice_clone"
   | "analytics"
   | "conversion"
@@ -47,7 +64,11 @@ export type GatedFeature =
   | "hide_branding";
 
 const FEATURE_MIN_PLAN: Record<GatedFeature, TenantPlan> = {
-  avatar: "growth",
+  // アバター「そのもの」を使えるか。Standard は R2C 既定アバターのみ利用できる。
+  avatar: "standard",
+  // アバターを自社向けに作り込めるか（画像生成・声マッチング・声デザイン・
+  // プロンプト生成 = Avatar Customization Studio）。Standard との差別化の実体。
+  avatar_customize: "growth",
   voice_clone: "enterprise",
   analytics: "growth",
   conversion: "growth",
@@ -86,9 +107,17 @@ export async function queryTenantPlan(
       [tenantId],
     );
     const plan = result.rows[0]?.plan;
-    // (b) fail-safe 3箇所のうち2つ目: 既知の4値のみ通す allowlist。
+    // (b) fail-safe 3箇所のうち2つ目: 既知の5値のみ通す allowlist。
     // それ以外(null・未知の文字列・テナント不在で rows が空)は free_ad へ倒す。
-    if (plan === "free_ad" || plan === "starter" || plan === "growth" || plan === "enterprise") {
+    // ★プラン段を足したらここに必ず加えること★ 落とすと、そのプランのテナントが
+    // 恒久的に free_ad 扱いになり、契約済みの機能が全て閉じる(DB障害時ではなく常時)。
+    if (
+      plan === "free_ad" ||
+      plan === "starter" ||
+      plan === "standard" ||
+      plan === "growth" ||
+      plan === "enterprise"
+    ) {
       return plan;
     }
     return "free_ad";
@@ -169,11 +198,11 @@ export async function tenantHasFeature(tenantId: string, feature: GatedFeature):
 
 /**
  * テナントの現在のプランを取得する。queryTenantPlan と異なり fail-safe に相乗りせず、
- * 「確実に4値のいずれかと判明したか」を呼び出し側が区別できるよう null で失敗を表す。
+ * 「確実に5値のいずれかと判明したか」を呼び出し側が区別できるよう null で失敗を表す。
  *
  * - DB例外 → null（取得失敗。free_ad と確定させない）
  * - plan列が null / 未知の文字列 / テナント不在(rowsが空) → null（未確定）
- * - 既知の4値のいずれか → その値
+ * - 既知の5値のいずれか → その値
  *
  * queryTenantPlan(機能ゲート用。未知/null/DB障害はfree_adへ倒す)とは用途が異なるため、
  * 実装を共有せず独立させている。共有すると片方の修正がもう片方のfail-safeの向きを
@@ -189,7 +218,15 @@ export async function queryTenantPlanResult(
       [tenantId],
     );
     const plan = result.rows[0]?.plan;
-    if (plan === "free_ad" || plan === "starter" || plan === "growth" || plan === "enterprise") {
+    // queryTenantPlan と同じ allowlist を独立に持つ(実装共有すると片方の修正が
+    // もう片方の fail-safe の向きを変える)。プラン段を足すときは両方に加えること。
+    if (
+      plan === "free_ad" ||
+      plan === "starter" ||
+      plan === "standard" ||
+      plan === "growth" ||
+      plan === "enterprise"
+    ) {
       return plan;
     }
     return null;
@@ -212,7 +249,7 @@ export type ShareForPlanResolution = { forced: true; value: true } | { forced: f
  *   free_ad 扱いにせず強制しない({forced:false, default:false})。
  *   ★ここが本タスク最大の罠: queryTenantPlan の fail-safe(未知→free_ad)に
  *   相乗りしてはいけない。相乗りすると DB障害時に全テナントが強制共有になる。★
- * - starter/growth/enterprise は選択可能・既定OFF({forced:false, default:false})。
+ * - starter/standard/growth/enterprise は選択可能・既定OFF({forced:false, default:false})。
  */
 export function resolveShareForPlan(plan: TenantPlan | null): ShareForPlanResolution {
   if (plan === "free_ad") {

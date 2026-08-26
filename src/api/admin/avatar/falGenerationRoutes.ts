@@ -7,6 +7,8 @@ import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddlewa
 import { supabaseAdmin } from "../../../auth/supabaseClient";
 import { logger } from "../../../lib/logger";
 import { trackUsage } from "../../../lib/billing/usageTracker";
+import { getPool } from "../../../lib/db";
+import { avatarCustomizeDenial } from "./avatarCustomizeGate";
 import { roleAuthMiddleware, requireRole, resolveEffectiveTenantId, type AuthedReq } from "../../middleware/roleAuth";
 
 type AuthReq = Request & { supabaseUser?: Record<string, unknown>; requestId?: string };
@@ -96,6 +98,17 @@ export function registerFalGenerationRoutes(app: Express): void {
       if (!tenantId) {
         return res.status(400).json({ error: "テナント情報が取得できません" });
       }
+
+      // 自社アバターの画像生成なので avatar_customize(Growth〜)。
+      // Standard は R2C の既定アバターを使う段で、生成はできない。
+      // fal.ai の呼び出し（＝原価の発生）より手前で弾く。
+      // super_admin はバイパス（premium_avatar ゲートと同じ規則）。
+      const isSuperAdmin = (req as AuthedReq).user?.role === "super_admin";
+      const denial = await avatarCustomizeDenial(getPool(), isSuperAdmin, tenantId);
+      if (denial) {
+        return res.status(403).json(denial);
+      }
+
       const requestId = (req as AuthReq).requestId ?? crypto.randomUUID();
 
       const falKey = process.env.FAL_KEY?.trim();

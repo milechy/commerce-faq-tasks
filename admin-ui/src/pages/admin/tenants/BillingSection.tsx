@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useLang } from "../../../i18n/LangContext";
 import type { TenantDetail, TenantPlan } from "./types";
 import { PLAN_OPTIONS } from "./types";
+import { fmtPlanMultiplier } from "../billing/utils";
 
 // ─── 課金管理セクション（Super Admin専用） ────────────────────────────────────
 
@@ -114,7 +115,7 @@ export function BillingSection({
           プラン
         </p>
         <p style={{ margin: "0 0 10px", fontSize: 13, color: "var(--muted-foreground)" }}>
-          対話単価にプラン倍率が適用されます（Starter ×1.0 / Growth ×1.5 / Enterprise ×2.5）。
+          対話単価にプラン倍率が適用されます（Starter ×1.0 / Standard ×1.25 / Growth ×1.5 / Enterprise ×2.5）。
         </p>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
           {PLAN_OPTIONS.map((opt) => {
@@ -137,7 +138,7 @@ export function BillingSection({
                 }}
               >
                 <span style={{ display: "block", fontWeight: 700, fontSize: 14 }}>
-                  {opt.label} <span style={{ color: "#a78bfa" }}>×{opt.multiplier.toFixed(1)}</span>
+                  {opt.label} <span style={{ color: "#a78bfa" }}>×{fmtPlanMultiplier(opt.multiplier)}</span>
                 </span>
                 <span style={{ display: "block", fontSize: 12, color: "var(--muted-foreground)", marginTop: 2 }}>
                   {opt.desc}

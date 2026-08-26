@@ -20,9 +20,10 @@ import { lemonsliceShareJpy, monthlyShareJpy, getLemonsliceMonthlyFeeJpy, getLiv
 import { PLAN_MULTIPLIERS, planMultiplier } from './planPricing';
 
 describe('planMultiplier', () => {
-  it('プラン別の倍率を返す（Free(広告表示) 0 / Starter 1.0 / Growth 1.5 / Enterprise 2.5）', () => {
+  it('プラン別の倍率を返す（Free(広告表示) 0 / Starter 1.0 / Standard 1.25 / Growth 1.5 / Enterprise 2.5）', () => {
     expect(planMultiplier('free_ad')).toBe(0);
     expect(planMultiplier('starter')).toBe(1.0);
+    expect(planMultiplier('standard')).toBe(1.25);
     expect(planMultiplier('growth')).toBe(1.5);
     expect(planMultiplier('enterprise')).toBe(2.5);
   });
@@ -38,8 +39,8 @@ describe('planMultiplier', () => {
     expect(planMultiplier('unknown-plan')).toBe(1.0);
   });
 
-  it('PLAN_MULTIPLIERS は admin-ui PLAN_OPTIONS と同一の4プランを持つ', () => {
-    expect(Object.keys(PLAN_MULTIPLIERS).sort()).toEqual(['enterprise', 'free_ad', 'growth', 'starter']);
+  it('PLAN_MULTIPLIERS は admin-ui PLAN_OPTIONS と同一の5プランを持つ', () => {
+    expect(Object.keys(PLAN_MULTIPLIERS).sort()).toEqual(['enterprise', 'free_ad', 'growth', 'standard', 'starter']);
   });
 });
 
@@ -612,10 +613,10 @@ describe('PLAN_MULTIPLIERS と admin-ui PLAN_OPTIONS の倍率一致', () => {
 
   it('抽出できている(正規表現が空振りしていないことの自己検査)', () => {
     const ui = readUiMultipliers();
-    expect(Object.keys(ui).sort()).toEqual(['enterprise', 'free_ad', 'growth', 'starter']);
+    expect(Object.keys(ui).sort()).toEqual(['enterprise', 'free_ad', 'growth', 'standard', 'starter']);
   });
 
-  it('4プランすべてで倍率が一致する', () => {
+  it('5プランすべてで倍率が一致する', () => {
     const ui = readUiMultipliers();
     for (const [plan, multiplier] of Object.entries(PLAN_MULTIPLIERS)) {
       expect([plan, ui[plan]]).toEqual([plan, multiplier]);

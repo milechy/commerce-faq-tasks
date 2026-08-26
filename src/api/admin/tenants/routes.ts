@@ -17,10 +17,16 @@ import { invalidateBillingPlanCache } from "../../../lib/billing/usageTracker";
 import { deriveOnboardingStage, type OnboardingStageStatus } from "../agent/onboardingStage";
 import { isValidOriginPattern } from "../../middleware/originCheck";
 
-// free_ad(starterより下の最下段。広告原資の無料プラン)を含む4値。
+// free_ad(starterより下の最下段。広告原資の無料プラン)と
+// standard(starter と growth の間。既定アバターの利用を開放する段)を含む5値。
 // src/lib/billing/planFeatures.ts の TenantPlan と一致させること
-// (既知の多重化。DBのCHECK制約は migration_free_ad_plan.sql で別途対応が必要)。
-const planValues = ["free_ad", "starter", "growth", "enterprise"] as const;
+// (既知の多重化。DBのCHECK制約は migration_free_ad_plan.sql /
+//  migration_standard_plan.sql で別途対応が必要)。
+//
+// ★このZod enumがプラン段の「到達可能性」そのもの★
+// ここに無い値は POST/PATCH /v1/admin/tenants も PUT /v1/admin/my-tenant/plan も
+// 400 で弾くため、PLAN_RANK や CHECK 制約を直しても誰もそのプランになれない。
+const planValues = ["free_ad", "starter", "standard", "growth", "enterprise"] as const;
 
 // S5b(共有学習プールの参加モデル・D1決定案): free_adはshareが強制ONだが、消費者向け
 // 同意バナーの開示基盤が整うまでfree_adテナントを増やさない、という一時的なブロック。
@@ -383,8 +389,10 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
     if (Object.keys(fields).length === 0) {
       return res.status(400).json({ error: "no_fields", message: "更新フィールドが必要です。" });
     }
-    // GID: LP料金表(Growth〜: AIアバター)に基づくプラン制限。
-    // avatar/voiceをtrueにするにはGrowth以上のプランが必要（UIの非表示に加えAPI側でも防御）。
+    // LP料金表(Standard〜: AIアバター)に基づくプラン制限。
+    // avatar/voiceをtrueにするにはStandard以上のプランが必要（UIの非表示に加えAPI側でも防御）。
+    // 自社アバターの作成(avatar_customize)はGrowth以上で、そちらは
+    // generationRoutes.ts / falGenerationRoutes.ts が別途ゲートする。
     if (fields.features?.avatar === true || fields.features?.voice === true) {
       const planResult = await db.query<{ plan: TenantPlan | null }>(
         `SELECT plan FROM tenants WHERE id = $1`,
@@ -393,7 +401,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       if (!planHasFeature(planResult.rows[0]?.plan, "avatar")) {
         return res.status(403).json({
           error: "plan_upgrade_required",
-          message: "AIアバター機能はGrowthプラン以上でご利用いただけます",
+          message: "AIアバター機能はStandardプラン以上でご利用いただけます",
         });
       }
     }
@@ -845,7 +853,8 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
         const effectivePlan = fields.plan ?? beforeRow.plan;
         const knownPlan =
           effectivePlan === "free_ad" || effectivePlan === "starter" ||
-          effectivePlan === "growth" || effectivePlan === "enterprise"
+          effectivePlan === "standard" || effectivePlan === "growth" ||
+          effectivePlan === "enterprise"
             ? effectivePlan
             : null;
         const shareResolution = resolveShareForPlan(knownPlan);

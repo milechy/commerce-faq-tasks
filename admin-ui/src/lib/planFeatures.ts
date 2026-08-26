@@ -12,15 +12,21 @@
 
 import type { TenantPlan } from "../auth/useAuth";
 
+// ★standard は starter と growth の「間」の段（CLAUDE.md 禁止55）★
+// 意味があるのは値そのものではなく相対順序（planHasFeature が `>=` で比較する）。
+// standard を挿入するときは growth/enterprise を繰り上げること。
+// backend(src/lib/billing/planFeatures.ts)の PLAN_RANK と同じ順序を保つ。
 const PLAN_RANK: Record<TenantPlan, number> = {
   free_ad: -1,
   starter: 0,
-  growth: 1,
-  enterprise: 2,
+  standard: 1,
+  growth: 2,
+  enterprise: 3,
 };
 
 export type GatedFeature =
   | "avatar"
+  | "avatar_customize"
   | "voice_clone"
   | "analytics"
   | "conversion"
@@ -31,7 +37,11 @@ export type GatedFeature =
   | "hide_branding";
 
 const FEATURE_MIN_PLAN: Record<GatedFeature, TenantPlan> = {
-  avatar: "growth",
+  // アバター「そのもの」を使えるか。Standard は R2C 既定アバターのみ利用できる。
+  avatar: "standard",
+  // アバターを自社向けに作り込めるか（画像生成・声マッチング・声デザイン・
+  // プロンプト生成 = Avatar Customization Studio）。Standard との差別化の実体。
+  avatar_customize: "growth",
   voice_clone: "enterprise",
   analytics: "growth",
   conversion: "growth",
@@ -47,7 +57,8 @@ const FEATURE_MIN_PLAN: Record<GatedFeature, TenantPlan> = {
 
 /** プラン変更の確認画面で「何が増えるか / 何が使えなくなるか」を出すための表示名。 */
 export const GATED_FEATURE_LABELS: Record<GatedFeature, string> = {
-  avatar: "AIアバター",
+  avatar: "AIアバター（R2C既定アバター）",
+  avatar_customize: "アバターの作成・カスタマイズ",
   voice_clone: "音声クローン",
   analytics: "会話分析",
   conversion: "成果分析・A/Bテスト",

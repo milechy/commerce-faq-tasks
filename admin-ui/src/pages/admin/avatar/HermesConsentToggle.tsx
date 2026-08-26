@@ -34,7 +34,7 @@ interface TenantFeatures {
   learning?: LearningConsent;
 }
 
-type Plan = "free_ad" | "starter" | "growth" | "enterprise" | null;
+type Plan = "free_ad" | "starter" | "standard" | "growth" | "enterprise" | null;
 
 /** features.learning があればそちらを優先し、無ければ旧フラグから解決する(後方互換)。 */
 function resolveShare(features: TenantFeatures | null): boolean {

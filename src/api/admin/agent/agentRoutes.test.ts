@@ -8511,10 +8511,12 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(result).toContain(`URL: ${path}\n`);
     });
 
+    // avatar_feature_toggle は avatar ゲート(Standard〜)、avatar_premium は
+    // premium_avatar ゲート(Growth〜)で、最低プランが異なる。案内文も別々になる。
     it.each([
-      ['avatar_feature_toggle'],
-      ['avatar_premium'],
-    ])('feature=%s: starterプランはリンクを返さずプラン制限メッセージを返す', async (feature) => {
+      ['avatar_feature_toggle', 'Standardプラン以上'],
+      ['avatar_premium', 'Growthプラン以上'],
+    ])('feature=%s: starterプランはリンクを返さずプラン制限メッセージ(%s)を返す', async (feature, notice) => {
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('call-lu-gate-2', 'get_legacy_ui_link', { feature }))
         .mockResolvedValueOnce(makeGroqResponse('プラン制限のためお伝えしました。'));
@@ -8526,9 +8528,44 @@ describe('POST /v1/admin/agent/chat', () => {
 
       expect(res.status).toBe(200);
       const result = res.body.actions[0].result as string;
-      expect(result).toContain('Growthプラン以上');
+      expect(result).toContain(notice);
       // 押せないリンクカードが出ないよう、成功時の3行フォーマット(画面:/URL:/説明:)に一致しないこと
       expect(result).not.toMatch(/画面:/);
+      expect(result).not.toMatch(/URL:/);
+    });
+
+    // Standard(¥9,800)はアバター設定画面には行けるが、プレミアム生成には行けない。
+    // 2つを同じゲートで扱うとどちらかが必ず誤案内になる
+    // (使えない画面へ案内する / 使える画面を隠す)。
+    it('feature=avatar_feature_toggle: standardプランはアバター設定画面の案内を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-lu-gate-3', 'get_legacy_ui_link', { feature: 'avatar_feature_toggle' }))
+        .mockResolvedValueOnce(makeGroqResponse('こちらの画面でご対応ください。'));
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'standard' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '確認したい', sessionId: 'sess-lu-gate-standard-toggle' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('URL: /admin/avatar\n');
+      expect(result).not.toContain('プラン以上');
+    });
+
+    it('feature=avatar_premium: standardプランはGrowth案内で止まる(プレミアム生成は開けない)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-lu-gate-4', 'get_legacy_ui_link', { feature: 'avatar_premium' }))
+        .mockResolvedValueOnce(makeGroqResponse('プラン制限のためお伝えしました。'));
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'standard' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '確認したい', sessionId: 'sess-lu-gate-standard-premium' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('Growthプラン以上');
       expect(result).not.toMatch(/URL:/);
     });
 
@@ -11490,7 +11527,7 @@ describe('POST /v1/admin/agent/chat', () => {
         .send({ message: 'アバターを有効化して', sessionId: 'sess-act-01' });
 
       expect(res.status).toBe(200);
-      expect(res.body.actions[0].result).toContain('Growthプラン以上');
+      expect(res.body.actions[0].result).toContain('Standardプラン以上');
       expect(mockConnect).not.toHaveBeenCalled();
     });
 
@@ -11529,7 +11566,7 @@ describe('POST /v1/admin/agent/chat', () => {
         .send({ message: 'アバターを有効化して', sessionId: 'sess-act-03' });
 
       expect(res.status).toBe(200);
-      expect(res.body.actions[0].result).toContain('Growthプラン以上');
+      expect(res.body.actions[0].result).toContain('Standardプラン以上');
       expect(mockConnect).not.toHaveBeenCalled();
     });
 
@@ -11611,7 +11648,7 @@ describe('POST /v1/admin/agent/chat', () => {
         .send({ message: 'アバター機能をONにして', sessionId: 'sess-saf-01' });
 
       expect(res.status).toBe(200);
-      expect(res.body.actions[0].result).toContain('Growthプラン以上');
+      expect(res.body.actions[0].result).toContain('Standardプラン以上');
       // プラン確認のSELECTのみ呼ばれ、UPDATE tenantsには到達しない
       expect(mockQuery).toHaveBeenCalledTimes(1);
     });
@@ -11691,7 +11728,7 @@ describe('POST /v1/admin/agent/chat', () => {
         .send({ message: 'アバター機能をONにして', sessionId: 'sess-saf-05', targetTenantId: 'tenant-preview' });
 
       expect(res.status).toBe(200);
-      expect(res.body.actions[0].result).toContain('Growthプラン以上');
+      expect(res.body.actions[0].result).toContain('Standardプラン以上');
     });
 
     it('previewMode中は操作対象テナント側のfeaturesが更新される(super_admin自身のテナントには書かない)', async () => {
@@ -12477,7 +12514,7 @@ describe('POST /v1/admin/agent/chat', () => {
     // 他のAPI(analytics/routes.ts 等)と共有している既存の文言。この繰り返し抑制で
     // 初回メッセージの文言が変わっていないことを1文字単位で固定する。
     const FULL_GROWTH_NOTICE = 'この機能はGrowthプラン以上でご利用いただけます';
-    const FULL_AVATAR_NOTICE = 'AIアバター機能はGrowthプラン以上でご利用いただけます';
+    const FULL_AVATAR_NOTICE = 'AIアバター機能はStandardプラン以上でご利用いただけます';
 
     /** starterプランのテナントとしてプラン制限付きツールを1ターン実行し、その結果文字列を返す */
     async function askGated(
@@ -13274,7 +13311,7 @@ describe('POST /v1/admin/agent/chat', () => {
         .send({ message: 'アバターを有効化して', sessionId: 'sess-audit-05' });
 
       expect(res.status).toBe(200);
-      expect(res.body.actions[0].result).toContain('Growthプラン以上');
+      expect(res.body.actions[0].result).toContain('Standardプラン以上');
       expect(mockConnect).not.toHaveBeenCalled();
       expect(mockRecordAgentSettingsChange).not.toHaveBeenCalled();
     });

@@ -156,6 +156,7 @@ const MAX_FAQ_TAG_LENGTH = 30;
 const BILLING_PLAN_LABEL: Record<string, string> = {
   free_ad: 'Free（広告表示）',
   starter: 'Starter',
+  standard: 'Standard',
   growth: 'Growth',
   enterprise: 'Enterprise',
 };
@@ -227,7 +228,7 @@ type PlanLimitedFeature = 'avatar' | 'premium_avatar' | 'analytics' | 'conversio
 
 const PLAN_LIMIT_NOTICES: Record<PlanLimitedFeature, { full: string; short: string }> = {
   avatar: {
-    full: 'AIアバター機能はGrowthプラン以上でご利用いただけます',
+    full: 'AIアバター機能はStandardプラン以上でご利用いただけます',
     short: 'AIアバター機能はプラン対象外のままです',
   },
   premium_avatar: {
@@ -1626,7 +1627,7 @@ export async function executeToolCall(
         return truncate('id は必須です');
       }
 
-      // GID: LP料金表(Growth〜: AIアバター)に基づくプラン制限。
+      // LP料金表(Standard〜: AIアバター)に基づくプラン制限。
       // tenants/routes.ts の features.avatar 更新チェックと同じ基準をここでも適用する
       // （AIエージェント経由でのチャットからのアクティベートがプラン制限を素通りしないように）。
       // 注入済みの db を使う（tenantHasFeature 経由だと内部で getPool() の実Poolを

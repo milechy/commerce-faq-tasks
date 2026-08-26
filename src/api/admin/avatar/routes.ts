@@ -659,7 +659,7 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
           ? (req.query["tenant"] as string || tenantId)
           : tenantId;
 
-        // プラン制限（LP料金表 Growth〜: AIアバター）。actionExecutor.ts の
+        // プラン制限（LP料金表 Standard〜: AIアバター）。actionExecutor.ts の
         // activate_avatar ツールと同じ基準・同じ実装パターンを適用する
         // （チャット経由は既にゲートされているのに旧UIだけ素通りする不整合を解消）。
         // 注入済み client を使う（tenantHasFeature 経由だと内部で getPool() の
@@ -671,7 +671,7 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
             await client.query("ROLLBACK");
             return res.status(403).json({
               error: "plan_upgrade_required",
-              message: "アバター機能はGrowthプラン以上でご利用いただけます。",
+              message: "アバター機能はStandardプラン以上でご利用いただけます。",
             });
           }
         }

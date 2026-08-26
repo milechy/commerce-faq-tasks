@@ -78,6 +78,10 @@ FILES=(
   "src/lib/billing/migration_usage_logs_plan_snapshot.sql"
   # stripe_usage_reports.billed_quantity(#936)
   "src/lib/billing/migration_stripe_usage_reports_billed_quantity.sql"
+  # tenants.plan の CHECK 制約に standard を追加。CHECK 制約系は DROP+ADD で
+  # 丸ごと置き換わるため、free_ad 分を含んだ最終形であるこのファイルを
+  # migration_free_ad_plan.sql より後に置くこと(順序を入れ替えると free_ad が落ちる)。
+  "src/api/admin/tenants/migration_standard_plan.sql"
 )
 
 for f in "${FILES[@]}"; do

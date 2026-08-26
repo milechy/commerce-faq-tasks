@@ -15,6 +15,13 @@ jest.mock("../../../lib/billing/usageTracker", () => ({
   trackUsage: (...args: any[]) => mockTrackUsage(...args),
 }));
 
+// avatar_customize ゲートが queryTenantPlan 経由で参照する。
+// 既定は growth（＝ゲートを通す）。ゲートそのものを見るテストだけが上書きする。
+const mockQuery = jest.fn();
+jest.mock("../../../lib/db", () => ({
+  getPool: () => ({ query: mockQuery }),
+}));
+
 const mockFetch = jest.fn();
 global.fetch = mockFetch as unknown as typeof fetch;
 
@@ -52,6 +59,7 @@ function mockVoiceDesignOk() {
 describe("POST /v1/admin/avatar/design-voice", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockQuery.mockResolvedValue({ rows: [{ plan: "growth" }] });
     process.env.FISH_AUDIO_API_KEY = "test-fish-key";
   });
 
@@ -374,5 +382,118 @@ describe("POST /v1/admin/avatar/design-voice", () => {
 
     expect(res.status).toBe(500);
     expect(mockTrackUsage).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// avatar_customize（Growth〜）のプランゲート
+// ---------------------------------------------------------------------------
+//
+// これら4ルートは Avatar Customization Studio の実体（画像生成・声マッチング・
+// 声デザイン・プロンプト生成）で、Standard(¥9,800)では使えない。
+// Standard は R2C の既定アバターをそのまま使う段であり、ここが通ってしまうと
+// 「既定のみ」という Standard の商品性が成立しない。
+//
+// ゲート導入前はロール認可のみで、client_admin なら全プランで素通りしていた。
+// premiumGenerationRoutes.test.ts の premium_avatar ゲートと同じ構造で固定する。
+describe("avatar_customize プランゲート（4ルート共通）", () => {
+  const ROUTES: Array<[string, Record<string, unknown>]> = [
+    ["/v1/admin/avatar/generate-image", { description: "30代女性の受付スタッフ" }],
+    ["/v1/admin/avatar/match-voice", { description: "落ち着いた女性の声" }],
+    ["/v1/admin/avatar/design-voice", { instruction: "落ち着いた30代女性の声。" }],
+    ["/v1/admin/avatar/generate-prompt", { rules: "丁寧に接客する" }],
+  ];
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    process.env.FISH_AUDIO_API_KEY = "test-fish-key";
+    process.env.GROQ_API_KEY = "test-groq-key";
+    process.env.LEONARDO_API_KEY = "test-leonardo-key";
+  });
+
+  afterEach(() => {
+    delete process.env.FISH_AUDIO_API_KEY;
+    delete process.env.GROQ_API_KEY;
+    delete process.env.LEONARDO_API_KEY;
+  });
+
+  describe.each(ROUTES)("POST %s", (path, body) => {
+    it("standardプランは403(plan_upgrade_required)で拒否され、外部APIを一切呼ばない", async () => {
+      mockQuery.mockResolvedValue({ rows: [{ plan: "standard" }] });
+
+      const res = await request(makeApp()).post(path).send(body);
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toBe("plan_upgrade_required");
+      // 原価の発生前に落ちていること（拒否したのに課金だけ走る状態を作らない）
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(mockTrackUsage).not.toHaveBeenCalled();
+    });
+
+    it("案内文は Growth への変更と、Standard でも既定アバターが使えることの両方を伝える", async () => {
+      mockQuery.mockResolvedValue({ rows: [{ plan: "standard" }] });
+
+      const res = await request(makeApp()).post(path).send(body);
+
+      expect(res.body.message).toContain("Growth");
+      expect(res.body.message).toContain("Standard");
+    });
+
+    it.each(["free_ad", "starter"])("%s プランも403で拒否される", async (plan) => {
+      mockQuery.mockResolvedValue({ rows: [{ plan }] });
+
+      const res = await request(makeApp()).post(path).send(body);
+
+      expect(res.status).toBe(403);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it("plan取得がDB障害で失敗した場合もfail-safeで403(プラン外機能を開かない)", async () => {
+      mockQuery.mockRejectedValue(new Error("db down"));
+
+      const res = await request(makeApp()).post(path).send(body);
+
+      expect(res.status).toBe(403);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it("growthプランはゲートを通過する(403にならない=過剰ブロックの対検証)", async () => {
+      mockQuery.mockResolvedValue({ rows: [{ plan: "growth" }] });
+      // 外部APIの成否はここでは問わない。ゲートで止まっていないことだけを見る。
+      mockFetch.mockRejectedValue(new Error("network"));
+
+      const res = await request(makeApp()).post(path).send(body);
+
+      expect(res.status).not.toBe(403);
+      expect(mockFetch).toHaveBeenCalled();
+    });
+
+    it("enterpriseプランもゲートを通過する", async () => {
+      mockQuery.mockResolvedValue({ rows: [{ plan: "enterprise" }] });
+      mockFetch.mockRejectedValue(new Error("network"));
+
+      const res = await request(makeApp()).post(path).send(body);
+
+      expect(res.status).not.toBe(403);
+    });
+
+    it("super_adminはプラン照会自体をせずバイパスする(原価の出るサポート業務を止めない)", async () => {
+      mockFetch.mockRejectedValue(new Error("network"));
+
+      const res = await request(makeApp("super_admin", "tenant-a")).post(path).send(body);
+
+      expect(res.status).not.toBe(403);
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    it("bodyが不正なときはプラン判定より先に400を返す(切り分けの順序を保つ)", async () => {
+      mockQuery.mockResolvedValue({ rows: [{ plan: "standard" }] });
+
+      const res = await request(makeApp()).post(path).send({});
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
   });
 });
