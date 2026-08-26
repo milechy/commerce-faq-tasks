@@ -768,15 +768,19 @@ export function registerBillingAdminRoutes(
         // (支払い方法の変更・請求書確認ができる Stripe 保護下の画面)へ誘導する。
         // フロント側は「Checkoutのurl」も「Portalのurl」も同じ `url` フィールドで
         // 受け取り、そのままリダイレクトするだけでよい(呼び出し元に分岐を持たせない)。
+        // is_active を問わず取得する: アクティブなら下でPortalへ誘導、非アクティブ
+        // (解約済み等)でも stripe_customer_id は再契約時に使い回し、Checkoutのたびに
+        // 新しい Stripe Customer を作らない(2026-08-26 レビュー是正: 別タブの古い
+        // Checkoutが後で完了した場合に別Customerが作られる問題を軽減する)。
         const existing = await db.query(
-          `SELECT stripe_customer_id FROM stripe_subscriptions
-            WHERE tenant_id = $1 AND is_active = true LIMIT 1`,
+          `SELECT stripe_customer_id, is_active FROM stripe_subscriptions
+            WHERE tenant_id = $1 LIMIT 1`,
           [tenantId]
         );
-        if (existing.rows.length > 0) {
-          const stripeCustomerId = existing.rows[0].stripe_customer_id as string;
+        const existingCustomerId = existing.rows[0]?.stripe_customer_id as string | undefined;
+        if (existing.rows[0]?.is_active === true) {
           const portalSession = await stripe.billingPortal.sessions.create({
-            customer: stripeCustomerId,
+            customer: existingCustomerId!,
             return_url: process.env.BILLING_PORTAL_RETURN_URL ?? 'https://example.com',
           });
           logger.info(
@@ -842,9 +846,14 @@ export function registerBillingAdminRoutes(
         // 分で丸めることで、連打・二重送信(数百ms〜数秒)は同一キーに畳みつつ、
         // 正当なやり直しは次の分から通る。
         const idempotencyWindow = Math.floor(Date.now() / 60_000);
+        // Stripe は customer と customer_email の同時指定を拒否するため排他にする。
+        // 既知の Customer があれば使い回し(上のコメント参照)、無ければメールから
+        // Stripe に解決させる(新規テナントの初回Checkout)。
         const session = await stripe.checkout.sessions.create({
           mode: 'subscription',
-          customer_email: tenant.tenant_contact_email ?? undefined,
+          ...(existingCustomerId
+            ? { customer: existingCustomerId }
+            : { customer_email: tenant.tenant_contact_email ?? undefined }),
           line_items: lineItems,
           success_url: `${returnBase}?checkout=success`,
           cancel_url: `${returnBase}?checkout=cancelled`,

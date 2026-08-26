@@ -303,22 +303,73 @@ async function _handleCheckoutSessionCompleted(
     return;
   }
 
-  // stripe_price_id(「そのテナントのプランを代表する price」の表示専用列。
-  // 業務ロジックからは読まれない — schemaHealth.ts の存在チェック以外に参照箇所なし)
-  // は null で先に行を作る。Checkout の line_items をここで読み直して二重に真実を
-  // 持たない。次にプランが変わったとき、subscriptionSync.ts の同期処理が
-  // 代表 price を書き込んで埋める(それまでは null のままで、機能的な影響は無い)。
-  await db.query(
+  // ★stripe_price_id は migration.sql で TEXT NOT NULL★ 以前はここに NULL を
+  // 挿入していたが、NOT NULL制約違反で本INSERTが新規・ON CONFLICT更新の両経路とも
+  // 必ず失敗し、セルフサービス決済が一度も記録されない事故になっていた
+  // (2026-08-26 レビュー是正、実Postgresで再現確認済み)。
+  //
+  // 代表priceはCheckoutのline_itemsを推測で再構成せず、今まさにStripe上に存在する
+  // subscriptionの実itemから読む(単一の真実)。取得できなければ記録せず、Stripeの
+  // 5xxリトライに任せる(handler_errorでこの関数全体を再試行させる)。
+  const stripe = getStripeClient();
+  let representativePriceId: string | null = null;
+  try {
+    const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+    const firstItem = subscription.items?.data?.[0];
+    const price = firstItem?.price;
+    representativePriceId = typeof price === 'string' ? price : (price?.id ?? null);
+  } catch (err) {
+    logger.error(
+      { err, subscriptionId },
+      '[webhook] checkout.session.completed: subscription取得に失敗、代表priceを解決できない'
+    );
+  }
+
+  if (!representativePriceId) {
+    logger.error(
+      { sessionId: session.id, tenantId, subscriptionId },
+      '[webhook] checkout.session.completed: 代表priceを解決できず記録できない(subscriptionにitemが無い、またはStripe取得失敗)'
+    );
+    throw new Error('checkout.session.completed: representative price unresolved');
+  }
+
+  // ★衝突検知★ 既にアクティブな別subscriptionが記録済みなら上書きしない。
+  // 別タブに残った古いCheckoutが後で完了する等で同一テナントに2本目の
+  // subscriptionが作られた場合、無条件上書き(旧実装)だと先に作られた
+  // subscriptionの行がDBから消え、Stripe側だけ課金され続ける孤児になる
+  // (2026-08-26 レビュー是正)。is_active=false の既存行(解約済み等)は
+  // 再契約として上書きを許す。
+  const result = await db.query(
     `INSERT INTO stripe_subscriptions
        (tenant_id, stripe_customer_id, stripe_subscription_id, stripe_price_id, is_active)
-     VALUES ($1, $2, $3, NULL, true)
+     VALUES ($1, $2, $3, $4, true)
      ON CONFLICT (tenant_id) DO UPDATE SET
        stripe_customer_id     = EXCLUDED.stripe_customer_id,
        stripe_subscription_id = EXCLUDED.stripe_subscription_id,
+       stripe_price_id        = EXCLUDED.stripe_price_id,
        is_active               = true,
-       updated_at              = NOW()`,
-    [tenantId, customerId, subscriptionId]
+       updated_at              = NOW()
+     WHERE stripe_subscriptions.stripe_subscription_id = EXCLUDED.stripe_subscription_id
+        OR NOT stripe_subscriptions.is_active
+     RETURNING tenant_id`,
+    [tenantId, customerId, subscriptionId, representativePriceId]
   );
+
+  if ((result.rowCount ?? 0) === 0) {
+    // 既に別のアクティブなsubscriptionが紐づいている(孤児が生まれた)。
+    // このCheckoutで新しく作られた方をキャンセルして二重課金を防ぎ、運用に通知する。
+    logger.error(
+      { tenantId, subscriptionId, customerId },
+      '[webhook] checkout.session.completed: 既に別のsubscriptionが記録済みのため、新規subscriptionをキャンセルする'
+    );
+    try {
+      await stripe.subscriptions.cancel(subscriptionId);
+    } catch (err) {
+      logger.error({ err, subscriptionId }, '[webhook] checkout.session.completed: 孤児subscriptionのキャンセルに失敗');
+    }
+    await _sendSlackAlert({ type: 'orphaned_subscription', subscriptionId, tenantId }, logger);
+    return;
+  }
 
   logger.info(
     { tenantId, subscriptionId, customerId },
@@ -327,10 +378,11 @@ async function _handleCheckoutSessionCompleted(
 }
 
 interface SlackAlertPayload {
-  type: 'payment_failed' | 'subscription_deleted';
+  type: 'payment_failed' | 'subscription_deleted' | 'orphaned_subscription';
   subscriptionId: string;
   invoiceId?: string;
   amountDue?: number;
+  tenantId?: string;
 }
 
 async function _sendSlackAlert(payload: SlackAlertPayload, logger: pino.Logger): Promise<void> {
@@ -340,7 +392,9 @@ async function _sendSlackAlert(payload: SlackAlertPayload, logger: pino.Logger):
   const text =
     payload.type === 'payment_failed'
       ? `⚠️ *課金エラー*: 支払い失敗 | subscription: ${payload.subscriptionId} | invoice: ${payload.invoiceId} | 金額: ${payload.amountDue}セント`
-      : `🚨 *解約アラート*: サブスクリプション削除 | subscription: ${payload.subscriptionId}`;
+      : payload.type === 'subscription_deleted'
+      ? `🚨 *解約アラート*: サブスクリプション削除 | subscription: ${payload.subscriptionId}`
+      : `🚨 *孤児サブスクリプション*: tenant ${payload.tenantId} に既に別のsubscriptionが記録済みのため、新規subscription ${payload.subscriptionId} をキャンセルしました(別タブに残った古いCheckoutの完走等)。手動確認してください。`;
 
   try {
     await fetch(webhookUrl, {
