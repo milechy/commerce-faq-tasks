@@ -20,16 +20,33 @@ function licensedItem(id: string, priceId: string) {
   return { id, price: { id: priceId, recurring: { usage_type: "licensed" } } };
 }
 
-function makeDb(subscriptionId: string | null) {
-  return {
-    query: jest.fn(async (sql: string, _params?: unknown[]) => {
-      if (sql.includes("FROM stripe_subscriptions")) {
-        return subscriptionId
-          ? { rows: [{ stripe_subscription_id: subscriptionId }], rowCount: 1 }
-          : { rows: [], rowCount: 0 };
-      }
+// currentPlan/currentIsActive: syncSubscriptionForTenant がロック獲得後に
+// 再読込する tenants の状態。省略時は呼び出し側が渡す plan と一致させ、
+// アクティブ扱いにする(=同期が supersede/停止扱いにならない通常経路)。
+function makeDb(
+  subscriptionId: string | null,
+  opts: { currentPlan?: string | null; currentIsActive?: boolean } = {},
+) {
+  const query = jest.fn(async (sql: string, _params?: unknown[]) => {
+    if (sql.includes("pg_advisory_lock") || sql.includes("pg_advisory_unlock")) {
       return { rows: [], rowCount: 1 };
-    }),
+    }
+    if (sql.includes("SELECT plan, is_active FROM tenants")) {
+      return {
+        rows: [{ plan: opts.currentPlan ?? null, is_active: opts.currentIsActive ?? true }],
+        rowCount: 1,
+      };
+    }
+    if (sql.includes("FROM stripe_subscriptions")) {
+      return subscriptionId
+        ? { rows: [{ stripe_subscription_id: subscriptionId }], rowCount: 1 }
+        : { rows: [], rowCount: 0 };
+    }
+    return { rows: [], rowCount: 1 };
+  });
+  return {
+    query,
+    connect: jest.fn(async () => ({ query, release: jest.fn() })),
   };
 }
 
@@ -184,6 +201,44 @@ describe("syncSubscriptionItemsToPlan", () => {
     // 呼ばれた引数そのもので固定する。
     expect(stripe.subscriptions.update).toHaveBeenCalledWith("sub_1", { cancel_at_period_end: true });
     expect(stripe.subscriptions.update).toHaveBeenCalledTimes(1);
+  });
+
+  // ★停止中テナント(2026-08-26 レビュー是正)★ super_admin の PATCH は
+  // 「停止(is_active:false) + 昇格(plan)」を同一リクエストで送れる。この判定を
+  // 欠くと、テナントは使えないのにStripe側だけ新プランの基本料itemが追加され
+  // 課金が始まる。isActive=false はどんなplanが渡されてもitem差分計算に入らず、
+  // 期末解約予約だけを行う(free_adと同じ理由・同じAPI呼び出し)。
+  it("isActive=false なら、要求されたplanに関わらずitemを差分計算せず期末解約を予約する", async () => {
+    const db = makeDb("sub_1");
+    const stripe = makeStripe([licensedItem("si_base", "price_growth_base"), meteredItem("si_text", "price_growth_text")]);
+
+    // "growth"(昇格)を要求しても、isActive=falseなら item は一切追加されない。
+    const result = await syncSubscriptionItemsToPlan(db, stripe, silentLogger, "tenant-a", "growth", "monthly", false);
+
+    expect(result.status).toBe("scheduled_cancel");
+    expect(stripe.subscriptions.update).toHaveBeenCalledWith("sub_1", { cancel_at_period_end: true });
+    expect(stripe.subscriptions.retrieve).not.toHaveBeenCalled(); // item差分計算に入らない
+  });
+
+  it("isActive=false かつ subscriptionが無ければ、Stripeを一切呼ばずnot_billable_planを返す", async () => {
+    const db = makeDb(null);
+    const stripe = makeStripe([]);
+
+    const result = await syncSubscriptionItemsToPlan(db, stripe, silentLogger, "tenant-a", "growth", "monthly", false);
+
+    expect(result.status).toBe("not_billable_plan");
+    expect(stripe.subscriptions.retrieve).not.toHaveBeenCalled();
+    expect(stripe.subscriptions.update).not.toHaveBeenCalled();
+  });
+
+  it("isActive=false の期末解約予約に失敗したらfailedを返す(プランはCOMMIT済みである点に注意)", async () => {
+    const db = makeDb("sub_1");
+    const stripe = makeStripe([]);
+    stripe.subscriptions.update.mockRejectedValueOnce(new Error("stripe down"));
+
+    const result = await syncSubscriptionItemsToPlan(db, stripe, silentLogger, "tenant-a", "growth", "monthly", false);
+
+    expect(result.status).toBe("failed");
   });
 
   // enterprise は個別交渉。自動処理が契約内容を踏み潰さないことを固定する。
@@ -423,7 +478,7 @@ describe("syncSubscriptionForTenant(ラッパー — HTTPルートが実際に�
 
   it("STRIPE_SECRET_KEY 設定時は実際に Stripe クライアントを組み立てて同期する", async () => {
     process.env.STRIPE_SECRET_KEY = "sk_test_dummy";
-    const db = makeDb("sub_1");
+    const db = makeDb("sub_1", { currentPlan: "standard" });
     mockRetrieve.mockResolvedValue({
       items: { data: [licensedItem("si_base", "price_std_base"), meteredItem("si_text", "price_std_text"), meteredItem("si_avatar", "price_std_avatar")] },
       cancel_at_period_end: false,
@@ -440,12 +495,66 @@ describe("syncSubscriptionForTenant(ラッパー — HTTPルートが実際に�
   // 成功している)。同期処理側のどんな失敗も戻り値に閉じ込めることを直接固定する。
   it("内部で例外が起きても例外を外に漏らさず failed を返す", async () => {
     process.env.STRIPE_SECRET_KEY = "sk_test_dummy";
-    const db = makeDb("sub_1");
+    const db = makeDb("sub_1", { currentPlan: "standard" });
     mockRetrieve.mockRejectedValue(new Error("network error"));
 
     const result = await syncSubscriptionForTenant(db, silentLogger, "tenant-a", "standard");
 
     expect(result.status).toBe("failed");
+  });
+
+  // ★同一テナントへの並行プラン変更(2026-08-26 レビュー是正)★
+  // ロック獲得後に再読込した plan が、自分が呼ばれた時点で要求された plan と
+  // 食い違う = 自分より新しいプラン変更が既にCOMMIT済み。古い状態でStripeを
+  // 更新すると、基本料 item が二重に付く事故を招くため、同期を見送る。
+  it("ロック獲得時点でplanが別の変更により更新済みなら、Stripeを一切呼ばずsupersededを返す", async () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_dummy";
+    // DB上の最新planは"growth"だが、この呼び出しは古い"standard"を要求している
+    // (=このリクエストがCOMMITした後、別のリクエストがgrowthへ更新済み)。
+    const db = makeDb("sub_1", { currentPlan: "growth" });
+
+    const result = await syncSubscriptionForTenant(db, silentLogger, "tenant-a", "standard");
+
+    expect(result.status).toBe("superseded");
+    expect(mockRetrieve).not.toHaveBeenCalled();
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("plan が一致していれば通常どおり同期する(supersededにならない)", async () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_dummy";
+    const db = makeDb("sub_1", { currentPlan: "standard" });
+    mockRetrieve.mockResolvedValue({
+      items: { data: [licensedItem("si_base", "price_std_base"), meteredItem("si_text", "price_std_text"), meteredItem("si_avatar", "price_std_avatar")] },
+      cancel_at_period_end: false,
+    });
+
+    const result = await syncSubscriptionForTenant(db, silentLogger, "tenant-a", "standard");
+
+    expect(result.status).toBe("no_change");
+  });
+
+  // ★停止中テナント(2026-08-26 レビュー是正)★ super_admin の PATCH で
+  // is_active:false と plan 変更を同一リクエストで送っても、停止中は
+  // 期末解約が優先され、新プランの item は決して追加されない。
+  it("DB上でis_active=falseなら、要求されたplanに関わらず期末解約を予約する(scheduled_cancel)", async () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_dummy";
+    const db = makeDb("sub_1", { currentPlan: "growth", currentIsActive: false });
+
+    const result = await syncSubscriptionForTenant(db, silentLogger, "tenant-a", "growth");
+
+    expect(result.status).toBe("scheduled_cancel");
+    expect(mockUpdate).toHaveBeenCalledWith("sub_1", { cancel_at_period_end: true });
+    expect(mockRetrieve).not.toHaveBeenCalled(); // item差分計算は不要、即座に解約予約
+  });
+
+  it("is_active=false かつ subscriptionが無ければ、何もせずnot_billable_planを返す", async () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_dummy";
+    const db = makeDb(null, { currentPlan: "starter", currentIsActive: false });
+
+    const result = await syncSubscriptionForTenant(db, silentLogger, "tenant-a", "starter");
+
+    expect(result.status).toBe("not_billable_plan");
+    expect(mockUpdate).not.toHaveBeenCalled();
   });
 });
 
@@ -460,6 +569,10 @@ describe("needsBillingAttention", () => {
     ["stripe_not_configured", true],
     ["manual_plan", true],
     ["failed", true],
+    // superseded: 自分より新しいプラン変更が既にCOMMIT済みなので同期を見送っただけ。
+    // その新しい変更自身の同期呼び出しが正しいplanで請求を追随させるため、
+    // テナントに「支払い設定が未完了」と誤って出してはいけない。
+    ["superseded", false],
   ])("%s → %s", (status, expected) => {
     expect(needsBillingAttention({ status } as any)).toBe(expected);
   });

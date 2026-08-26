@@ -55,7 +55,13 @@ export type SubscriptionSyncStatus =
   /** STRIPE_SECRET_KEY が無い(ローカル・CI)。 */
   | 'stripe_not_configured'
   /** Stripe 呼び出しが失敗した。プラン自体は既に変更済みである点に注意。 */
-  | 'failed';
+  | 'failed'
+  /**
+   * 同期の実行中に、別の(より新しい)プラン変更が既にCOMMIT済みだったため
+   * この同期を見送った。その新しい変更自身の同期呼び出しが正しいplanで
+   * 追随するため、これはエラーではない(needsBillingAttentionには含めない)。
+   */
+  | 'superseded';
 
 export interface SubscriptionSyncResult {
   status: SubscriptionSyncStatus;
@@ -123,6 +129,14 @@ export async function syncSubscriptionItemsToPlan(
   tenantId: string,
   plan: string | null,
   billingCycle: BillingCycle = 'monthly',
+  // ★停止中(is_active=false)テナントは何のplanであろうと期末解約を予約する★
+  // (2026-08-26 レビュー是正)。PUT /v1/admin/my-tenant/plan は停止中テナントの
+  // プラン変更自体を403で塞いでいるため常に true で呼ばれるが、super_admin の
+  // PATCH /v1/admin/tenants/:id は「停止(is_active:false) + 昇格(plan)」を
+  // 同一リクエストで送れる。この判定を欠くと、テナントは使えないのに
+  // Stripe側だけ基本料 item が追加され課金が始まる(=停止しても課金は止まらず、
+  // 停止中に昇格すると課金だけ始まる、の両方の事故を1箇所で防ぐ)。
+  isActive: boolean = true,
 ): Promise<SubscriptionSyncResult> {
   const subRow = await db.query(
     `SELECT stripe_subscription_id FROM stripe_subscriptions
@@ -130,6 +144,23 @@ export async function syncSubscriptionItemsToPlan(
     [tenantId],
   );
   const subscriptionId: string | undefined = subRow.rows[0]?.stripe_subscription_id;
+
+  if (!isActive) {
+    if (!subscriptionId) return { status: 'not_billable_plan' };
+    try {
+      // free_ad降格と同じ理由で即時解約ではなく期末解約にする(当期報告済みの
+      // 従量分を取りこぼさない)。
+      await stripe.subscriptions.update(subscriptionId, { cancel_at_period_end: true });
+      logger.info(
+        { tenantId, subscriptionId },
+        '[subscriptionSync] テナントが停止中のため期末解約を予約した',
+      );
+      return { status: 'scheduled_cancel' };
+    } catch (err) {
+      logger.error({ err, tenantId, subscriptionId }, '[subscriptionSync] 停止中テナントの期末解約予約に失敗した');
+      return { status: 'failed', message: String((err as Error)?.message ?? err) };
+    }
+  }
 
   // ── 自動請求の対象外プラン ───────────────────────────────────────────────
   // free_ad は倍率0で請求が発生しない。enterprise は個別交渉で人が Stripe 側を組む。
@@ -299,6 +330,18 @@ export async function syncSubscriptionItemsToPlan(
  * プラン変更は既に COMMIT 済みで、ここで throw すると 500 になり
  * 「変更に失敗した」と表示されてテナントが再送する(2回目は no-op)。
  * 失敗は必ず戻り値で表現し、呼び出し元がレスポンスに載せる。
+ *
+ * ★同一テナントへの並行プラン変更を advisory lock で直列化する(2026-08-26 レビュー是正)★
+ * 呼び出し元(routes.ts)は SELECT ... FOR UPDATE の行ロックを COMMIT 後に解放してから
+ * この関数を呼ぶため、Stripe への read-modify-write(subscriptions.retrieve → update)は
+ * 排他区間の外で実行される。2つのプラン変更リクエストがほぼ同時に来ると、両方が
+ * 「変更前の item 構成」を見て自分の分の price を追加し、基本料 item が2本(旧・新の両プラン分)
+ * 同時に付いて二重請求になる(実際に再現可能なシナリオとして確認済み)。
+ * advisory lock でこの関数の実行そのものを直列化し、ロック獲得後に tenants.plan を
+ * 再読込して自分が呼ばれた時点の plan と一致するかを確認する。不一致なら「自分より新しい
+ * プラン変更が既に COMMIT 済み」ということなので、古い状態で同期して二重に item を
+ * 付けないよう同期を諦める(その新しい変更リクエスト自身の syncSubscriptionForTenant 呼び出しが、
+ * 自分の COMMIT 直後に正しい plan で同期するため、結果的に最新の plan だけが同期される)。
  */
 export async function syncSubscriptionForTenant(
   db: any,
@@ -316,7 +359,33 @@ export async function syncSubscriptionForTenant(
       );
       return { status: 'stripe_not_configured' };
     }
-    return await syncSubscriptionItemsToPlan(db, stripe, logger, tenantId, plan, billingCycle);
+
+    const client = await db.connect();
+    try {
+      // pg_advisory_lock はセッション(=このコネクション)単位。lock/unlock を
+      // 同一クライアントで行わないと、プールが別コネクションへ振り分けたときに
+      // 解放されず全体を巻き込んで詰まる。
+      await client.query('SELECT pg_advisory_lock(hashtext($1))', [`billing_sync:${tenantId}`]);
+      try {
+        // is_active もここで読み直す(呼び出し元から引数で受け取らない)。ロック獲得後の
+        // DBの値が唯一の真実で、呼び出し元が保持する古いスナップショットより信頼できる。
+        const current = await client.query('SELECT plan, is_active FROM tenants WHERE id = $1', [tenantId]);
+        const currentPlan: string | null = current.rows[0]?.plan ?? null;
+        const currentIsActive: boolean = current.rows[0]?.is_active ?? true;
+        if (currentPlan !== plan) {
+          logger.warn(
+            { tenantId, requestedPlan: plan, currentPlan },
+            '[subscriptionSync] ロック獲得時点で別の変更によりplanが更新済みのため、この同期は見送る(後続の変更が正しい状態に揃える)',
+          );
+          return { status: 'superseded' };
+        }
+        return await syncSubscriptionItemsToPlan(client, stripe, logger, tenantId, plan, billingCycle, currentIsActive);
+      } finally {
+        await client.query('SELECT pg_advisory_unlock(hashtext($1))', [`billing_sync:${tenantId}`]);
+      }
+    } finally {
+      client.release();
+    }
   } catch (err) {
     logger.error({ err, tenantId, plan }, '[subscriptionSync] 同期処理が例外で落ちた');
     return { status: 'failed', message: String((err as Error)?.message ?? err) };

@@ -1913,6 +1913,45 @@ describe("PATCH /v1/admin/tenants/:id — 降格時の features 整合", () => {
     expect(res.body.billing_sync).toBeUndefined();
   });
 
+  // ★停止中テナントへの課金開始/停止だけが漏れる事故(2026-08-26 レビュー是正)★
+  // 従来は plan が変わったときにしか syncSubscriptionForTenant を呼んでいなかった
+  // ため、「is_active:false のみ」の PATCH(plan は送らない)では Stripe 側の
+  // 請求が全く追随せず、テナントを停止しても課金だけが動き続けていた。
+  // is_active の変化だけでも同期を呼ぶことを、レスポンスに billing_sync が
+  // 現れることで固定する(STRIPE_SECRET_KEY未設定環境なのでstatus自体は
+  // stripe_not_configuredだが、「呼ばれたかどうか」はこれで検証できる)。
+  it("plan を送らず is_active だけを変更しても billing_sync が現れる(停止しても課金が止まらない事故の回帰)", async () => {
+    const db = {
+      query: jest.fn()
+        .mockResolvedValueOnce({ rows: [{ id: "tenant-a", plan: "growth", features: {}, billing_enabled: false, is_active: true }], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: [{ ...RETURNING_ROW, plan: "growth", is_active: false }], rowCount: 1 })
+        .mockResolvedValue({ rows: [], rowCount: 1 }),
+    };
+    const res = await request(makeApp(db, "super_admin"))
+      .patch("/v1/admin/tenants/tenant-a")
+      .set("Authorization", "Bearer dummy")
+      .send({ is_active: false });
+
+    expect(res.status).toBe(200);
+    expect(res.body.billing_sync).toBe("stripe_not_configured");
+  });
+
+  it("plan も is_active も変わらなければ billing_sync に触れない(名前変更等の無関係な更新)", async () => {
+    const db = {
+      query: jest.fn()
+        .mockResolvedValueOnce({ rows: [{ id: "tenant-a", plan: "growth", features: {}, billing_enabled: false, is_active: true }], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: [{ ...RETURNING_ROW, plan: "growth", is_active: true, name: "新しい名前" }], rowCount: 1 })
+        .mockResolvedValue({ rows: [], rowCount: 1 }),
+    };
+    const res = await request(makeApp(db, "super_admin"))
+      .patch("/v1/admin/tenants/tenant-a")
+      .set("Authorization", "Bearer dummy")
+      .send({ name: "新しい名前" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.billing_sync).toBeUndefined();
+  });
+
   // ★意図的な非対称性(PUTとは違う)を固定する★
   // PUT /v1/admin/my-tenant/plan(テナント自己申告)は is_active=false を403で弾くが、
   // このPATCHルート(super_admin)には同じチェックを入れていない。理由: PATCHは

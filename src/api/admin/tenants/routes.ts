@@ -1016,17 +1016,26 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
           }
         }
       })();
-      // ★プラン変更時は Stripe の item 構成も追随させる★
+      // ★プラン変更時・停止状態変更時は Stripe の item 構成も追随させる★
       // PUT /v1/admin/my-tenant/plan と同じ理由・同じ関数を通す。経路ごとに
       // 書き写すと、片方だけ直したときに「super_admin が変えた分だけ請求が動かない」
       // という非対称が生まれる(このファイルが features 剥奪で一度やった失敗）。
       // プラン以外のフィールド更新(名前・allowed_origins 等)では Stripe を触らない。
+      //
+      // ★is_active の変化だけでも呼ぶ理由(2026-08-26 レビュー是正)★
+      // 従来は plan 変更時にしか呼んでいなかったため、「停止(is_active:false)のみ」の
+      // PATCHではStripe側の請求が止まらなかった。syncSubscriptionItemsToPlan は
+      // ロック獲得後にDBから is_active を読み直して停止中なら期末解約を予約するため、
+      // ここでは「plan か is_active のどちらかが変わったら呼ぶ」だけでよい
+      // (実際に何をするかの判断は同期処理側のDB再読込に委ねる)。
       let planBillingSync: SubscriptionSyncResult | null = null;
-      if (fields.plan !== undefined && fields.plan !== beforeRow.plan) {
-        planBillingSync = await syncSubscriptionForTenant(db, logger, id, fields.plan);
+      const planChanged = fields.plan !== undefined && fields.plan !== beforeRow.plan;
+      const activeChanged = fields.is_active !== undefined && fields.is_active !== beforeRow.is_active;
+      if (planChanged || activeChanged) {
+        planBillingSync = await syncSubscriptionForTenant(db, logger, id, afterRow.plan);
         if (needsBillingAttention(planBillingSync)) {
           logger.warn(
-            { tenantId: id, plan: fields.plan, billingSyncStatus: planBillingSync.status },
+            { tenantId: id, plan: afterRow.plan, isActive: afterRow.is_active, billingSyncStatus: planBillingSync.status },
             "[PATCH /v1/admin/tenants/:id] プランは変更したが請求構成が追随していない"
           );
         }
