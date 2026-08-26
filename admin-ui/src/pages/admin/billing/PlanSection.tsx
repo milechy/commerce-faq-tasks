@@ -42,6 +42,7 @@ const FREE_AD_NOTES = [
 export function PlanSection({
   currentPlan,
   planStatus = "ready",
+  billingStatus = null,
   onChanged,
   showToast,
 }: {
@@ -54,6 +55,16 @@ export function PlanSection({
    * (currentPlan が null なら従来どおり不明表示になる)。
    */
   planStatus?: "loading" | "error" | "ready";
+  /**
+   * サーバ側から見た決済契約の有無(GET /v1/admin/billing/invoices の status)。
+   *
+   * ★プラン変更直後だけでなく、リロード後も案内を出し続けるために要る★
+   * billingSyncPending(下)はプラン変更のレスポンス由来なのでページを再読み込みすると
+   * 消える。それだけだと「決済未登録」というサーバ側の事実が画面から失われ、
+   * テナントは請求が始まっていないことに気づけないまま使い続ける(CLAUDE.md 禁止50)。
+   * 親(BillingPage)が既に取得している値をそのまま下ろすだけで、新しい取得はしない。
+   */
+  billingStatus?: "ok" | "no_subscription" | null;
   onChanged: (plan: TenantPlan) => void;
   showToast: (msg: string) => void;
 }) {
@@ -61,6 +72,75 @@ export function PlanSection({
   const [pending, setPending] = useState<TenantPlan | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // ★成功表示に潰さない★ プラン自体は変わっても、Stripe側のsubscription item
+  // 追随(syncSubscriptionForTenant)が失敗すると請求が1円も動かない。
+  // これをトーストの「✅ 変更しました」に混ぜると、支払い設定が未完了なことに
+  // 誰も気づけない(CLAUDE.md 禁止20)。
+  //
+  // ★needsAttention なものだけでなく、生のステータスを常に保持する★
+  // 「まだプラン変更していない(null)」と「変更して問題なかった(synced)」を
+  // 区別する必要があるため。同一視すると、synced のときに下の billingStatus
+  // フォールバックへ落ちてしまい、"変更は成功したのに古いサーバ状態のせいで
+  // 案内が出たまま" になる(実際にテストで検出した)。
+  const [lastBillingSync, setLastBillingSync] = useState<string | null>(null);
+  const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
+
+  const NEEDS_ATTENTION_STATUSES = new Set([
+    "no_subscription",
+    "price_not_configured",
+    "stripe_not_configured",
+    "manual_plan",
+    "failed",
+  ]);
+
+  /**
+   * 実際に案内を出すかどうかの最終判定。
+   *
+   * 直近のプラン変更結果があればそれが唯一の真実(良い結果でも悪い結果でも)。
+   * 無ければサーバ側の契約有無(billingStatus)へフォールバックする。この順序が重要:
+   *  - 変更直後は lastBillingSync の方が新しい(親の再取得はまだ走っていない)
+   *  - リロード後は lastBillingSync が消えるので billingStatus が引き継ぐ
+   *
+   * free_ad/enterprise など「そもそも決済契約を持たないのが正常」なプランでは
+   * no_subscription を異常として出さない(出すと、無料プランのテナントに永久に
+   * 「支払い設定が必要」と表示される)。
+   */
+  const needsPaymentSetup =
+    lastBillingSync !== null
+      ? (NEEDS_ATTENTION_STATUSES.has(lastBillingSync) ? lastBillingSync : null)
+      : billingStatus === "no_subscription" &&
+          currentPlan !== "free_ad" &&
+          currentPlan !== "enterprise"
+        ? "no_subscription"
+        : null;
+
+  // no_subscription のときだけ「支払い設定へ進む」ボタンを出す。他のステータス
+  // (price_not_configured/stripe_not_configured/manual_plan/failed)は env未設定や
+  // Stripe障害など運用側の問題で、テナントの操作では解決しないため出し分ける。
+  const handleStartCheckout = async () => {
+    setCheckoutLoading(true);
+    setCheckoutError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/v1/admin/my-tenant/billing/checkout-session`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const data = (await res.json().catch(() => ({}))) as { url?: string; message?: string; error?: string };
+      if (res.ok && data.url) {
+        // Checkout は Stripe が保護するページなのでこの画面から離脱してよい
+        // (portalUrl と同じ扱い。BillingSection.tsx 参照)。
+        window.location.href = data.url;
+        return;
+      }
+      setCheckoutError(data.message ?? data.error ?? "お支払い設定ページの作成に失敗しました");
+    } catch {
+      setCheckoutError("お支払い設定ページの作成に失敗しました");
+    } finally {
+      setCheckoutLoading(false);
+    }
+  };
 
   // CLAUDE.md 禁止13: isSuperAdmin で出し分けない（previewMode 中に false へ落ちる）。
   // ここは生の role で判定する。super_admin のJWTには tenant_id が無く、
@@ -86,10 +166,23 @@ export function PlanSection({
         // 成功応答でも本文がJSONとは限らない(204・空ボディ・プロキシの割り込み)。
         // ここで throw させると「サーバは変更済みなのに失敗表示」になり、
         // ユーザーが再送する(2回目はサーバ側 no-op)。本文が読めなくても成功は成功として扱う。
-        const data = (await res.json().catch(() => ({}))) as { plan?: TenantPlan };
+        const data = (await res.json().catch(() => ({}))) as {
+          plan?: TenantPlan;
+          billing_sync?: string;
+        };
         onChanged(data.plan ?? target);
         setPending(null);
-        showToast("✅ プランを変更しました");
+        // 良い結果(synced/no_change)も含めて記録する。これが billingStatus より
+        // 新しい真実になり、古いサーバ状態による誤った案内表示を打ち消す。
+        setLastBillingSync(data.billing_sync ?? null);
+        if (data.billing_sync && NEEDS_ATTENTION_STATUSES.has(data.billing_sync)) {
+          // プランは変わったが請求構成が追随していない。トーストの成功表示に
+          // 混ぜず、消えない案内として残す(「即時反映」の嘘と同じ理由で、
+          // ここは楽観的な文言にしない)。
+          showToast("プランを変更しました（お支払い設定の確認が必要です）");
+        } else {
+          showToast("✅ プランを変更しました");
+        }
       } else {
         const d = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
         setError(d.message ?? d.error ?? "プランの変更に失敗しました");
@@ -143,6 +236,52 @@ export function PlanSection({
           }}
         >
           {error}
+        </div>
+      )}
+
+      {/* ★赤帯にしない★ プラン変更自体は成功しており、これは403/エラーの一種
+          ではなく「お支払い設定が未完了」という別の状態(CLAUDE.md 禁止21)。
+          消えるトーストではなく、解消するまで残る案内として出す。 */}
+      {needsPaymentSetup && (
+        <div
+          style={{
+            marginBottom: 14,
+            padding: "10px 14px",
+            borderRadius: 8,
+            background: "rgba(217,119,6,0.15)",
+            border: "1px solid rgba(217,119,6,0.35)",
+            color: "#fbbf24",
+            fontSize: 13,
+          }}
+        >
+          <p style={{ margin: needsPaymentSetup === "no_subscription" ? "0 0 8px" : 0 }}>
+            お支払い設定の確認が必要です。プランの権能は反映されていますが、決済手段が未登録のため請求が開始されていません。
+          </p>
+          {needsPaymentSetup === "no_subscription" && (
+            <>
+              <button
+                type="button"
+                disabled={checkoutLoading}
+                onClick={() => void handleStartCheckout()}
+                style={{
+                  padding: "8px 16px",
+                  minHeight: 40,
+                  borderRadius: 8,
+                  border: "1px solid rgba(217,119,6,0.5)",
+                  background: "transparent",
+                  color: "#fbbf24",
+                  fontSize: 13,
+                  fontWeight: 700,
+                  cursor: checkoutLoading ? "not-allowed" : "pointer",
+                }}
+              >
+                {checkoutLoading ? "移動しています…" : "お支払い設定へ進む"}
+              </button>
+              {checkoutError && (
+                <p style={{ margin: "8px 0 0", fontSize: 12, color: "#fca5a5" }}>{checkoutError}</p>
+              )}
+            </>
+          )}
         </div>
       )}
 

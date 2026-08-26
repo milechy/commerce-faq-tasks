@@ -521,6 +521,168 @@ export function registerBillingAdminRoutes(
   );
 
   // ──────────────────────────────────────────────────────────────
+  // POST /v1/admin/my-tenant/billing/checkout-session  (client_admin)
+  //
+  // UX-A(2026-08-26 UI/UX棚卸し): テナント自身が有料プランへ変更しても、
+  // カード登録の導線が存在しなかった(super_admin限定の /billing/onboard しか無い)。
+  // 基本料ありのプラン(Standard/Growth)は subscriptions.create が即座に課金を試みるため、
+  // カード未登録のまま作ると subscription が incomplete で止まる。Stripe Checkout
+  // (mode: subscription)ならカード入力と3DS認証をStripe側に丸ごと任せられる。
+  //
+  // ★このエンドポイントは Customer/Subscription を作らない★
+  // Checkout セッションを作って戻り先の URL を返すだけ。実際の顧客・サブスク作成は
+  // Stripe が Checkout 完了時に行い、stripeWebhook.ts の checkout.session.completed
+  // で記録する(セッション作成レスポンスの時点ではまだカード入力前で確定していない)。
+  // ──────────────────────────────────────────────────────────────
+  app.post(
+    '/v1/admin/my-tenant/billing/checkout-session',
+    ...mw,
+    async (req: Request, res: Response): Promise<void> => {
+      const { tenantId, isSuperAdmin } = resolveTenantId(req);
+      // super_admin は集約ビューで特定テナントに紐付かないため対象外。
+      // 個別テナントのカード登録を代行したい場合は /billing/onboard を使う。
+      if (isSuperAdmin || !tenantId) {
+        res.status(403).json({ error: 'forbidden', message: 'この操作はテナント管理者のみ実行できます' });
+        return;
+      }
+
+      const parsed = onboardSchema.pick({ billingCycle: true }).safeParse(req.body ?? {});
+      if (!parsed.success) {
+        res.status(400).json({ error: 'invalid_request', details: parsed.error.issues });
+        return;
+      }
+      const { billingCycle } = parsed.data;
+
+      const stripeKey = process.env.STRIPE_SECRET_KEY;
+      if (!stripeKey) { res.status(500).json({ error: 'stripe_not_configured' }); return; }
+
+      try {
+        const tenantRow = await db.query(
+          `SELECT id, name, tenant_contact_email, plan FROM tenants WHERE id = $1`,
+          [tenantId]
+        );
+        if (tenantRow.rows.length === 0) {
+          res.status(404).json({ error: 'tenant not found' });
+          return;
+        }
+        const tenant = tenantRow.rows[0] as {
+          id: string; name: string; tenant_contact_email: string | null; plan: string | null;
+        };
+
+        const stripe = getStripe(stripeKey);
+
+        // ★冪等性チェック(このブロックが本エンドポイントの最重要ガード)★
+        // ここが無いと、二重クリック・ネットワーク遅延中の再送・「支払い設定へ進む」
+        // バナーが古いまま残っている状態での再訪問のいずれでも、テナントごとに
+        // 1本のはずの Stripe Customer/Subscription が複数作られうる(= 二重請求)。
+        // /billing/onboard(super_admin経路)が同じ理由で existing チェックを持つのと
+        // 同じ配慮を、こちらのセルフサービス経路にも適用する。
+        //
+        // 既にアクティブな契約がある場合は新規 Checkout を作らず、Billing Portal
+        // (支払い方法の変更・請求書確認ができる Stripe 保護下の画面)へ誘導する。
+        // フロント側は「Checkoutのurl」も「Portalのurl」も同じ `url` フィールドで
+        // 受け取り、そのままリダイレクトするだけでよい(呼び出し元に分岐を持たせない)。
+        const existing = await db.query(
+          `SELECT stripe_customer_id FROM stripe_subscriptions
+            WHERE tenant_id = $1 AND is_active = true LIMIT 1`,
+          [tenantId]
+        );
+        if (existing.rows.length > 0) {
+          const stripeCustomerId = existing.rows[0].stripe_customer_id as string;
+          const portalSession = await stripe.billingPortal.sessions.create({
+            customer: stripeCustomerId,
+            return_url: process.env.BILLING_PORTAL_RETURN_URL ?? 'https://example.com',
+          });
+          logger.info(
+            { tenantId, plan: tenant.plan },
+            '[billingApi] checkout-session: 既にアクティブな契約があるためPortalへ誘導した(新規Checkoutは作らない)'
+          );
+          res.json({ ok: true, url: portalSession.url, alreadyOnboarded: true });
+          return;
+        }
+
+        // プラン→price は planPricing.ts が唯一の出どころ(禁止6)。
+        // オンボード(super_admin)経路と同じ関数を通す。
+        const priceResult = getSubscriptionItemPrices(tenant.plan, billingCycle);
+        if (!priceResult.ok) {
+          if (priceResult.reason === 'plan_not_self_serve') {
+            res.status(400).json({
+              error: 'plan_not_self_serve',
+              detail: tenant.plan === 'enterprise'
+                ? 'Enterprise は個別契約です。担当までお問い合わせください。'
+                : 'Free(広告表示)プランは請求が発生しないため、お支払い登録は不要です。',
+            });
+            return;
+          }
+          if (priceResult.reason === 'billing_cycle_not_supported') {
+            res.status(400).json({
+              error: 'billing_cycle_not_supported',
+              detail: tenant.plan === 'starter'
+                ? 'Starter は基本料の無い純従量プランのため、年払いを選択できません。'
+                : '年払いは現在準備中です。月払いをご利用ください。',
+            });
+            return;
+          }
+          logger.error(
+            { tenantId, plan: tenant.plan, billingCycle, missing: priceResult.missing },
+            '[billingApi] checkout-session: price env not configured'
+          );
+          res.status(500).json({ error: 'stripe_price_not_configured', missing: priceResult.missing });
+          return;
+        }
+
+        const returnBase = process.env.BILLING_PORTAL_RETURN_URL ?? 'https://example.com';
+
+        // ★base(基本料・licensed)には quantity:1 を明示、text/avatarOverage(metered)には
+        // quantity を付けない★ Stripe Checkout は metered price に quantity を渡すと
+        // 拒否する。ここは priceResult.prices の構造(base=licensed、それ以外=metered)を
+        // 直接知っているので、toSubscriptionItems() は使わず組み立てる。
+        const lineItems = [
+          priceResult.prices.base ? { price: priceResult.prices.base, quantity: 1 } : null,
+          priceResult.prices.text ? { price: priceResult.prices.text } : null,
+          priceResult.prices.avatarOverage ? { price: priceResult.prices.avatarOverage } : null,
+        ].filter((item): item is { price: string; quantity?: number } => item !== null);
+
+        // ★冪等キー — 上の existing チェックの TOCTOU を Stripe 側で塞ぐ★
+        // existing チェック(SELECT)と本 create の間にロックが無いため、ほぼ同時に
+        // 2リクエストが来ると両方が「既存契約なし」を見て、Customer/Subscription が
+        // 2本作られうる(= 二重請求)。DBロックで直そうとすると Stripe API 呼び出しを
+        // トランザクション内に抱えることになり、Stripe が遅いときに接続を占有する。
+        // 「同じ意図のリクエストが複数届く」問題は Stripe の冪等キーが本来の解。
+        //
+        // ★キーに分単位の時刻を含める理由★
+        // テナント固定キーにすると Stripe 側で24時間同じレスポンスが返るため、
+        // 「一度Checkoutを離脱して、後で気が変わってやり直す」が丸一日ブロックされる。
+        // 分で丸めることで、連打・二重送信(数百ms〜数秒)は同一キーに畳みつつ、
+        // 正当なやり直しは次の分から通る。
+        const idempotencyWindow = Math.floor(Date.now() / 60_000);
+        const session = await stripe.checkout.sessions.create({
+          mode: 'subscription',
+          customer_email: tenant.tenant_contact_email ?? undefined,
+          line_items: lineItems,
+          success_url: `${returnBase}?checkout=success`,
+          cancel_url: `${returnBase}?checkout=cancelled`,
+          metadata: { tenant_id: tenantId, plan: tenant.plan ?? '', billing_cycle: billingCycle },
+          subscription_data: {
+            metadata: { tenant_id: tenantId, plan: tenant.plan ?? '', billing_cycle: billingCycle },
+          },
+        }, {
+          idempotencyKey: `billing:checkout:${tenantId}:${tenant.plan ?? ''}:${billingCycle}:${idempotencyWindow}`,
+        });
+
+        logger.info(
+          { tenantId, plan: tenant.plan, billingCycle, sessionId: session.id },
+          '[billingApi] tenant created a Checkout session for self-serve billing'
+        );
+        res.json({ ok: true, url: session.url });
+      } catch (err: any) {
+        logger.error({ err, tenantId }, '[billingApi] checkout-session creation failed');
+        res.status(500).json({ error: 'Checkoutセッションの作成に失敗しました', detail: String(err?.message ?? err) });
+      }
+    }
+  );
+
+  // ──────────────────────────────────────────────────────────────
   // POST /v1/admin/billing/onboard  (super_admin)
   //
   // PR-7(2026-08-25収益監査): リポジトリ全体に customers.create / subscriptions.create /
