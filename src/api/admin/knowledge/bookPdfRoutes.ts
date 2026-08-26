@@ -11,7 +11,7 @@ import AdmZip from "adm-zip";
 import type { Pool } from "pg";
 import { supabaseAdmin } from "../../../auth/supabaseClient";
 import { pipelineQueue } from "../../../lib/book-pipeline/pipelineQueue";
-import { deleteBookChunkFromEs } from "../../../lib/book-pipeline/embedAndStore";
+import { deleteBookChunkFromEs, setBookChunkExcludedInEs } from "../../../lib/book-pipeline/embedAndStore";
 import { decryptText } from "../../../lib/crypto/textEncrypt";
 import { logger } from '../../../lib/logger';
 
@@ -525,6 +525,88 @@ export function registerBookPdfRoutes(
           err instanceof Error ? err.message : String(err)
         );
         return res.status(500).json({ error: "削除に失敗しました" });
+      }
+    }
+  );
+
+  // -----------------------------------------------------------------------
+  // PATCH /v1/admin/knowledge/book-pdf/:id/search-visibility
+  // 書籍チャンクを削除せずに検索から外す/戻す(可逆)。
+  //
+  // tenant_id='global' の行はフラグ無しに全テナントの回答へ引かれる
+  // (src/search/pgvectorSearch.ts:62)。投入内容に問題が見つかったとき、
+  // これまでは DELETE(Storage ごと消える不可逆操作)しか手が無かった。
+  // -----------------------------------------------------------------------
+  app.patch(
+    "/v1/admin/knowledge/book-pdf/:id/search-visibility",
+    knowledgeAuth,
+    requireKnowledgeRole,
+    async (req: Request, res: Response) => {
+      const user = (req as BookPdfReq).user;
+      const isSuperAdmin = user?.role === "super_admin";
+
+      const id = parseInt(req.params.id, 10);
+      if (isNaN(id)) {
+        return res.status(400).json({ error: "無効なIDです" });
+      }
+
+      const excluded = (req.body as { excluded?: unknown })?.excluded;
+      if (typeof excluded !== "boolean") {
+        return res.status(400).json({ error: "excluded は boolean で指定してください" });
+      }
+
+      try {
+        const lookup = await db.query(
+          "SELECT id, tenant_id FROM book_uploads WHERE id = $1",
+          [id]
+        );
+        if (lookup.rows.length === 0) {
+          return res.status(404).json({ error: "書籍が見つかりません" });
+        }
+
+        const book = lookup.rows[0] as { id: number; tenant_id: string };
+        if (!isSuperAdmin && book.tenant_id !== user?.tenantId) {
+          return res
+            .status(403)
+            .json({ error: "他のテナントのデータにはアクセスできません" });
+        }
+
+        // pgvector 側。書籍チャンクは metadata.faq_id を持たない設計のため
+        // faq_docs 側の可視性ゲートが効かず、ここが唯一効くフラグになる。
+        const updated = await db.query<{ chunk_index: number }>(
+          `UPDATE faq_embeddings
+             SET is_excluded_from_search = $2
+           WHERE metadata->>'source' = 'book' AND metadata->>'book_id' = $1::text
+           RETURNING (metadata->>'chunk_index')::int AS chunk_index`,
+          [id, excluded]
+        );
+
+        // ES 側も揃える(best-effort)。揃えないと BM25 経由で引け続ける。
+        const esUrl = process.env.ES_URL;
+        if (esUrl) {
+          await Promise.all(
+            updated.rows.map((r) =>
+              setBookChunkExcludedInEs(
+                esUrl,
+                book.tenant_id,
+                `book_${id}_chunk_${r.chunk_index}`,
+                excluded
+              )
+            )
+          );
+        }
+
+        logger.info(
+          `[book-pdf] search-visibility book=${id} tenant=${book.tenant_id} excluded=${excluded} chunks=${updated.rowCount}`
+        );
+
+        return res.json({ ok: true, id, excluded, chunks: updated.rowCount });
+      } catch (err: unknown) {
+        logger.error(
+          "[book-pdf] search-visibility error:",
+          err instanceof Error ? err.message : String(err)
+        );
+        return res.status(500).json({ error: "更新に失敗しました" });
       }
     }
   );
