@@ -10,6 +10,8 @@ import { trackUsage, initUsageTracker, invalidateBillingPlanCache } from './usag
 const BILLABLE_PARAM_INDEX = 12;
 const PLAN_PARAM_INDEX = 13;
 const PLAN_MULTIPLIER_PARAM_INDEX = 14;
+/** session_id($16)。会話単位の請求のため後から末尾に足した列。 */
+const SESSION_ID_PARAM_INDEX = 15;
 
 // 各テスト前に pool を null にリセットして状態漏洩を防ぐ
 beforeEach(() => {
@@ -190,6 +192,89 @@ describe('usageTracker', () => {
       expect(insertCall).toBeDefined();
       const [, params] = insertCall!;
       expect(params[7]).toBe(4); // serverCost + 3ページ分のQWEN_OCR_COST_PER_PAGE_USD、切り上げ
+    });
+  });
+
+  // 会話単位の請求(CLAUDE.md 禁止56 / .claude/rules/billing.md §7)。
+  // sessionId が INSERT まで届かないと usage_logs.session_id が NULL になり、
+  // stripeSync 側が会話を復元できずリクエスト単位の課金へ静かに戻る。
+  describe('session_id の pass-through（会話単位の請求の前提）', () => {
+    const insertFor = (mockQuery: jest.Mock, requestId: string) =>
+      mockQuery.mock.calls.find(([, p]: [string, any[]]) => p?.[1] === requestId);
+
+    it('sessionId を渡すと INSERT の session_id 列に載る', async () => {
+      const mockQuery = jest.fn().mockResolvedValue({ rowCount: 1 });
+      const mockLogger = { warn: jest.fn(), error: jest.fn(), debug: jest.fn(), info: jest.fn() } as any;
+      initUsageTracker({ query: mockQuery } as any, mockLogger);
+
+      trackUsage({
+        tenantId: 'test-tenant',
+        requestId: 'req-session-1',
+        sessionId: 'sess-abc',
+        model: 'llama-3.1-8b-instant',
+        inputTokens: 100,
+        outputTokens: 50,
+        featureUsed: 'chat',
+      });
+
+      await flushSetImmediate();
+      await flushSetImmediate();
+
+      const insertCall = insertFor(mockQuery, 'req-session-1');
+      expect(insertCall).toBeDefined();
+      const [sql, params] = insertCall!;
+      expect(sql).toContain('session_id');
+      expect(params[SESSION_ID_PARAM_INDEX]).toBe('sess-abc');
+    });
+
+    it('sessionId 未指定（管理系・アバター経路）は NULL で記録し、記録自体は落とさない', async () => {
+      const mockQuery = jest.fn().mockResolvedValue({ rowCount: 1 });
+      const mockLogger = { warn: jest.fn(), error: jest.fn(), debug: jest.fn(), info: jest.fn() } as any;
+      initUsageTracker({ query: mockQuery } as any, mockLogger);
+
+      trackUsage({
+        tenantId: 'test-tenant',
+        requestId: 'req-session-none',
+        model: 'llama-3.1-8b-instant',
+        inputTokens: 10,
+        outputTokens: 5,
+        featureUsed: 'avatar',
+      });
+
+      await flushSetImmediate();
+      await flushSetImmediate();
+
+      const insertCall = insertFor(mockQuery, 'req-session-none');
+      expect(insertCall).toBeDefined();
+      // undefined を渡すと pg が「引数不足」で落ちる。必ず null に正規化すること。
+      expect(insertCall![1][SESSION_ID_PARAM_INDEX]).toBeNull();
+    });
+
+    it('新しい列を途中に差し込んでいない（既存の $n がずれていないことの自己検査）', async () => {
+      const mockQuery = jest.fn().mockResolvedValue({ rowCount: 1 });
+      const mockLogger = { warn: jest.fn(), error: jest.fn(), debug: jest.fn(), info: jest.fn() } as any;
+      initUsageTracker({ query: mockQuery } as any, mockLogger);
+
+      trackUsage({
+        tenantId: 'test-tenant',
+        requestId: 'req-session-order',
+        sessionId: 'sess-order',
+        model: 'llama-3.1-8b-instant',
+        inputTokens: 100,
+        outputTokens: 50,
+        featureUsed: 'chat',
+      });
+
+      await flushSetImmediate();
+      await flushSetImmediate();
+
+      const [, params] = insertFor(mockQuery, 'req-session-order')!;
+      expect(params[0]).toBe('test-tenant');
+      expect(params[1]).toBe('req-session-order');
+      expect(params[2]).toBe('llama-3.1-8b-instant'); // model は $3 のまま
+      expect(params[5]).toBe('chat');
+      expect(params[BILLABLE_PARAM_INDEX]).toBe(true);
+      expect(params).toHaveLength(16);
     });
   });
 

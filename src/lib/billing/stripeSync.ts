@@ -419,6 +419,60 @@ export interface ExpectedBilling {
  *   - 遅れて届いた行も次回実行で自動的に拾われる
  *   - 冪等キーの連番化が不要になる(呼び出し元で billedQuantity を鍵に含める)
  *
+ * ★2026-08-26: 課金単位を「リクエスト」から「会話」と「分」へ変える★
+ *
+ * 本番90日の実データで、それまでの前提が2つとも否定された
+ * (.claude/rules/billing.md §7 / CLAUDE.md 禁止56):
+ *   - テキスト: 「1会話 ≒ 5ターン」は誤り。message_count は中央値2・p99も2(＝1往復)で、
+ *     原価は ¥0.55/会話ではなく **¥0.11/会話**。リクエスト単位で請求すると
+ *     「会話を長く良くする」という製品目標がそのままテナントの値上げになる。
+ *     → `feature_used='chat'` は **会話(session_id)ごとに1単位**。
+ *   - アバター: 原価は回数ではなく時間に比例する(実測 **¥25.9/分**)。
+ *     1分未満819件が平均¥19、15分以上72件(7.6%)が平均¥799と **42倍の開き**があり、
+ *     回数あたりの定額では長時間セッション1件で赤字になる。
+ *     → `feature_used='avatar'` は **CEIL(avatar_session_ms/60000.0)** で分換算。
+ *       既存の anam_session の CEIL(秒/60.0) と同じ扱いを全アバターへ広げたもので、
+ *       anam_session の扱いは変えない(兄弟の CASE として並べる)。
+ * それ以外の feature_used は従来どおり 1行=1単位（今回は広げず、狭めるだけ）。
+ *
+ * ★message_count >= 2 の絞り込みを「読み取り時の LEFT JOIN」で行う理由★
+ *
+ * 課金対象の会話は `chat_sessions.message_count >= 2`(1往復以上)で、本番の23%を占める
+ * 「ウィジェットを開いただけ」は課金しない。この列は usage_logs ではなく chat_sessions
+ * にあるため、(a)集計時に JOIN する か (b)計上時に billable=false を焼き付ける、の2択になる。
+ *
+ * **(a) を採る。(b) は上の「毎回まるごと再計算する」不変条件を壊す。**
+ * trackUsage が走る時点ではその会話が1往復に達するかどうかがまだ確定していない
+ * (saveMessage は fire-and-forget で、assistant 側の記録は後から入る)。
+ * 書き込み時に billable=false を焼き付けると、後から2通目が入っても
+ * **二度と請求対象に戻らない**(=恒久的な過少請求)。読み取り時に JOIN すれば、
+ * 何度再計算しても常に「その時点の真実」に収束する。
+ *
+ * JOIN は INNER ではなく **LEFT JOIN で、対応する chat_sessions 行が無い場合は課金する**。
+ * 理由は2つ:
+ *   1. chat_sessions には Right to Erasure の削除経路がある
+ *      (`deleteSessionRepository.ts`)。INNER JOIN にすると、テナントが会話を削除した
+ *      瞬間にその月の billedQuantity が**減る**。これは idempotencyKey の
+ *      「billedQuantity は単調非減少」という前提(下の _reportTenantUsage 参照)を壊し、
+ *      過去のキーへ後戻りして請求が消える。
+ *   2. saveMessage は fire-and-forget なので、記録だけが落ちることが実際に起きる
+ *      (2026-08-24 の visitor_id 事故と同じ経路)。usage_logs に行がある＝
+ *      LLM を実際に呼んで原価が発生した確たる証拠なので、それを取りこぼす方が損害が大きい。
+ * つまり **課金しないのは「1往復に満たない会話だと積極的に確認できた」ときだけ**にする。
+ *
+ * ★アバターとテキストの二重計上について(既知の制約)★
+ *
+ * 規則上はアバターを使ったセッションはアバターとしてのみ計上する(.claude/rules/billing.md §7)。
+ * 実装上これは**構造的に満たされている**: アバター経路(avatar-agent/agent.py →
+ * POST /api/internal/usage)は `feature_used` に 'avatar'/'voice' しか入れられず、
+ * 会話単位の COUNT に入る `feature_used='chat'` の行を作らない。
+ * ただし avatar-agent は R2C の session_id をそもそも知らないため
+ * (LiveKit の room 名しか持たない。2026-08-26 時点)、
+ * **「このテキスト会話は同じ訪問者のアバター利用でもあったか」を突き合わせることはできない**。
+ * 現状のアバターはテキストチャットの /api/chat を経由しないので実害は無いが、
+ * 将来アバターとテキストが同一セッションを共有する経路が生まれた場合は、
+ * agent.py 側に session_id を配線する別 PR が必要になる。ここでは解決していない。
+ *
  * @param currentPlan 呼び出し時点の tenants.plan（plan_multiplier が NULL の行への
  *   フォールバック倍率算出にのみ使う。焼き付け済みの行の倍率には影響しない）。
  */
@@ -431,34 +485,69 @@ export async function computeExpectedBilling(
 ): Promise<ExpectedBilling> {
   const fallbackMultiplier = planMultiplier(currentPlan);
   const aggResult = await db.query(
-    `SELECT
-       COUNT(*)::integer           AS total_requests,
-       COALESCE(SUM(cost_total_cents), 0)::integer AS total_cost_cents,
-       COALESCE(SUM(
-         CASE WHEN feature_used = 'anam_session'
-              THEN CEIL(COALESCE(anam_session_seconds, 0) / 60.0)
+    `WITH billable_rows AS (
+       SELECT request_id, session_id, feature_used, created_at,
+              cost_total_cents, plan_multiplier,
+              anam_session_seconds, avatar_session_ms
+         FROM usage_logs
+        WHERE tenant_id = $1
+          AND created_at >= $2
+          AND created_at <  $3
+          AND billable = true
+     ),
+     -- 会話単位で数える分（テキストチャット）。1会話=1単位。
+     -- 同一会話に複数リクエストがあっても DISTINCT ON で1行に畳む。
+     -- 倍率は会話の最初の行の値を採る(.claude/rules/billing.md §7)。
+     -- 会話開始時点のプランで請求する、という意味。
+     -- LEFT JOIN の意図: chat_sessions 行が「有って message_count < 2」のときだけ課金しない。
+     -- 行が無い(削除済み・記録漏れ)場合は課金する。詳細は関数の doc コメント参照。
+     conversation_units AS (
+       SELECT DISTINCT ON (r.session_id)
+              COALESCE(r.plan_multiplier, $4::numeric) AS multiplier
+         FROM billable_rows r
+         LEFT JOIN chat_sessions cs
+                ON cs.tenant_id = $1
+               AND cs.session_id = r.session_id
+        WHERE r.feature_used = 'chat'
+          AND r.session_id IS NOT NULL
+          AND (cs.session_id IS NULL OR cs.message_count >= 2)
+        ORDER BY r.session_id, r.created_at, r.request_id
+     ),
+     -- 行単位で数える分。会話に紐付かないチャット行(migration 適用前の既存行)も
+     -- ここへ落ちて従来どおり 1行=1単位 になる（黙って請求から消さない）。
+     row_units AS (
+       SELECT
+         CASE WHEN r.feature_used = 'anam_session'
+                   THEN CEIL(COALESCE(r.anam_session_seconds, 0) / 60.0)
+              WHEN r.feature_used = 'avatar'
+                   THEN CEIL(COALESCE(r.avatar_session_ms, 0) / 60000.0)
               ELSE 1
-         END
-       ), 0)::integer AS billable_units,
-       COALESCE(SUM(
-         (CASE WHEN feature_used = 'anam_session'
-               THEN CEIL(COALESCE(anam_session_seconds, 0) / 60.0)
-               ELSE 1
-          END) * COALESCE(plan_multiplier, $4::numeric)
-       ), 0)::numeric AS billed_units_weighted,
-       COUNT(*) FILTER (WHERE plan_multiplier IS NULL)::integer AS unstamped_rows
-     FROM usage_logs
-     WHERE tenant_id = $1
-       AND created_at >= $2
-       AND created_at <  $3
-       AND billable = true`,
+         END AS units,
+         COALESCE(r.plan_multiplier, $4::numeric) AS multiplier
+         FROM billable_rows r
+        WHERE NOT (r.feature_used = 'chat' AND r.session_id IS NOT NULL)
+     )
+     SELECT
+       (SELECT COUNT(*) FROM billable_rows)::integer AS total_requests,
+       (SELECT COALESCE(SUM(cost_total_cents), 0) FROM billable_rows)::integer AS total_cost_cents,
+       ( (SELECT COALESCE(SUM(units), 0) FROM row_units)
+       + (SELECT COUNT(*) FROM conversation_units) )::integer AS billable_units,
+       ( (SELECT COALESCE(SUM(units * multiplier), 0) FROM row_units)
+       + (SELECT COALESCE(SUM(multiplier), 0) FROM conversation_units) )::numeric AS billed_units_weighted,
+       (SELECT COUNT(*) FILTER (WHERE plan_multiplier IS NULL) FROM billable_rows)::integer AS unstamped_rows`,
     [tenantId, startDate, endDate, fallbackMultiplier]
   );
 
   const totalRequests: number = aggResult.rows[0].total_requests;
   const totalCostCents: number = aggResult.rows[0].total_cost_cents;
-  // anam_session行は秒→分換算（anamSessionBillableUnits と同じ切り上げ規則をSQL側でも適用）、
-  // それ以外は従来通り1行=1単位。テキストのみのテナントは billableUnits === totalRequests。
+  // chat行は会話(session_id)ごとに1単位、anam_session行は秒→分、avatar行はミリ秒→分
+  // （いずれも anamSessionBillableUnits と同じ切り上げ規則）、それ以外は1行=1単位。
+  //
+  // avatar 行の avatar_session_ms が NULL なら 0 分になる。これは意図した挙動:
+  // avatar-agent の TTS 報告(_report_tts_usage)は featureUsed を送らないため
+  // feature_used='avatar' かつ avatar_session_ms=NULL の行として着地するが、
+  // その発話が含まれるセッションの長さは _report_avatar_usage が別行で報告する。
+  // ここで1単位ずつ数えると同じアバターセッションを発話回数分だけ二重請求する。
   const billableUnits: number = aggResult.rows[0].billable_units;
   const unstampedRows: number = aggResult.rows[0].unstamped_rows;
 

@@ -82,6 +82,15 @@ FILES=(
   # 丸ごと置き換わるため、free_ad 分を含んだ最終形であるこのファイルを
   # migration_free_ad_plan.sql より後に置くこと(順序を入れ替えると free_ad が落ちる)。
   "src/api/admin/tenants/migration_standard_plan.sql"
+  # chat_sessions / chat_messages: 課金テーブルではないが、課金単位を「会話」に
+  # 変えた時点で computeExpectedBilling の集計SQLが chat_sessions を LEFT JOIN する
+  # ようになった(message_count >= 2 の会話だけを課金する)。未作成だと集計SQLが
+  # 42P01 で落ち、請求が丸ごと止まる。REQUIRED_COLUMNS の chat_sessions 全列
+  # (visitor_id 等)を揃えるのが目的ではないので、後続の chat_sessions 系
+  # migration までは追わない(必要なのは tenant_id / session_id / message_count)。
+  "src/api/admin/chat-history/migration.sql"
+  # usage_logs.session_id(会話単位の請求)
+  "src/lib/billing/migration_usage_logs_session_id.sql"
 )
 
 for f in "${FILES[@]}"; do

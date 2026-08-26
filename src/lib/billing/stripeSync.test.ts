@@ -449,8 +449,14 @@ describe('集計SQL: 倍率は行ごとに適用する（月全体への遡及�
     return fs.readFileSync(path.join(__dirname, 'stripeSync.ts'), 'utf-8');
   };
 
-  it('請求数量は usage_logs.plan_multiplier を行ごとに掛けて集計する', () => {
-    expect(readSource()).toMatch(/\*\s*COALESCE\(plan_multiplier,\s*\$4::numeric\)/);
+  // 会話単位の課金で単位の作り方が2系統(行単位 / 会話単位)に分かれたが、
+  // どちらも「その行に焼き付けた倍率」を持ち回る点は変わらない。
+  // 片方でも tenants.plan 由来の倍率を月全体に掛けると遡及が復活する。
+  it('請求数量は行に焼き付けた plan_multiplier を持ち回って集計する（行単位・会話単位の両系統）', () => {
+    const src = readSource();
+    const occurrences = src.match(/COALESCE\(r\.plan_multiplier,\s*\$4::numeric\)\s+AS multiplier/g);
+    expect(occurrences).toHaveLength(2); // conversation_units と row_units
+    expect(src).toMatch(/SUM\(units \* multiplier\)/);
   });
 
   // 回帰の本体: billableUnits（月合計）に tenants.plan の倍率を掛け直すと、
@@ -526,13 +532,17 @@ describe('集計SQL: 絞り込み条件(壊れると請求額が変わる)', () 
     const path = require('path') as typeof import('path');
     return fs.readFileSync(path.join(__dirname, 'stripeSync.ts'), 'utf-8');
   };
-  /** _reportTenantUsage の集計クエリ本体を切り出す */
+  /**
+   * computeExpectedBilling の集計クエリ本体を切り出す。
+   * 会話単位の課金で CTE 構成になったため、末尾の `AS billed_units_weighted` から
+   * 逆算するのではなく、テンプレートリテラルの開始(`WITH billable_rows AS`)から
+   * バインド配列の直前までを丸ごと取る（CTE 内の述語も検査対象に含める）。
+   */
   const aggregationSql = () => {
     const src = readSource();
-    const start = src.indexOf('AS billed_units_weighted');
-    expect(start).toBeGreaterThan(-1);
-    const from = src.lastIndexOf('SELECT', start);
-    const end = src.indexOf('[tenantId, startDate, endDate', start);
+    const from = src.indexOf('WITH billable_rows AS');
+    expect(from).toBeGreaterThan(-1);
+    const end = src.indexOf('[tenantId, startDate, endDate', from);
     expect(end).toBeGreaterThan(from);
     return src.slice(from, end);
   };
@@ -577,13 +587,56 @@ describe('集計SQL: 絞り込み条件(壊れると請求額が変わる)', () 
 
   // 焼き付け済みの行にフォールバックが効いてしまうと、月中変更の按分が消える。
   it('フォールバックは plan_multiplier が NULL の行にだけ効く(COALESCE)', () => {
-    expect(aggregationSql()).toMatch(/COALESCE\(plan_multiplier,\s*\$4::numeric\)/);
+    expect(aggregationSql()).toMatch(/COALESCE\(r\.plan_multiplier,\s*\$4::numeric\)/);
   });
 
   it('anam_session は秒→分に切り上げ、それ以外は1単位として数える', () => {
     const sql = aggregationSql();
-    expect(sql).toMatch(/feature_used\s*=\s*'anam_session'/);
-    expect(sql).toMatch(/CEIL\(COALESCE\(anam_session_seconds,\s*0\)\s*\/\s*60\.0\)/);
+    expect(sql).toMatch(/r\.feature_used\s*=\s*'anam_session'/);
+    expect(sql).toMatch(/CEIL\(COALESCE\(r\.anam_session_seconds,\s*0\)\s*\/\s*60\.0\)/);
+  });
+
+  // ★CLAUDE.md 禁止56: アバターを「回数」で課金しない★
+  // 原価は時間に比例する(実測 ¥25.9/分、<1分と15分+で42倍の開き)。
+  // 1行=1単位に戻すと長時間セッション1件で赤字になる。
+  // anam_session の兄弟として並べるのであって、置き換えではない(上のテストと対)。
+  it('avatar はミリ秒→分に切り上げる(回数で数えない)', () => {
+    const sql = aggregationSql();
+    expect(sql).toMatch(/r\.feature_used\s*=\s*'avatar'/);
+    expect(sql).toMatch(/CEIL\(COALESCE\(r\.avatar_session_ms,\s*0\)\s*\/\s*60000\.0\)/);
+  });
+
+  // ★CLAUDE.md 禁止56: テキストを「リクエスト」で課金しない★
+  // session_id ごとに畳まないと、会話が長いほど請求が増える旧挙動に戻る。
+  it('chat は session_id ごとに1単位へ畳む(DISTINCT ON)', () => {
+    const sql = aggregationSql();
+    expect(sql).toMatch(/DISTINCT ON \(r\.session_id\)/);
+    expect(sql).toMatch(/r\.feature_used = 'chat'/);
+    expect(sql).toMatch(/r\.session_id IS NOT NULL/);
+  });
+
+  // 会話の倍率は「最初の行」の値(.claude/rules/billing.md §7)。
+  // ORDER BY が created_at 昇順でなくなると、月中プラン変更時に
+  // どの倍率が採られるかが不定になる(請求の再現性が消える)。
+  it('会話の倍率は最初の行(created_at 昇順)から採る', () => {
+    expect(aggregationSql()).toMatch(/ORDER BY r\.session_id, r\.created_at, r\.request_id/);
+  });
+
+  // 会話の絞り込みは INNER ではなく LEFT JOIN。
+  // INNER にすると、Right to Erasure で会話を削除した瞬間に billedQuantity が減り、
+  // 「単調非減少」を前提にした idempotencyKey が過去のキーへ後戻りする。
+  it('chat_sessions は LEFT JOIN で、行が無い会話は課金対象のまま残す', () => {
+    const sql = aggregationSql();
+    expect(sql).toMatch(/LEFT JOIN chat_sessions cs/);
+    expect(sql).toMatch(/cs\.session_id IS NULL OR cs\.message_count >= 2/);
+    expect(sql).not.toMatch(/\n\s*JOIN chat_sessions/);
+  });
+
+  // ★CLAUDE.md 禁止24: JOIN先にもテナント述語を張る★
+  // chat_sessions の業務キーは (tenant_id, session_id) の複合。session_id だけで
+  // 突き合わせると、他テナントの同名セッションの message_count で課金可否が決まる。
+  it('chat_sessions の結合条件にテナント述語を含む', () => {
+    expect(aggregationSql()).toMatch(/ON cs\.tenant_id = \$1\s*\n\s*AND cs\.session_id = r\.session_id/);
   });
 });
 
