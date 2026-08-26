@@ -47,7 +47,7 @@ import { recordSaiTask, resolveSaiTaskTenant } from '../../../lib/sai/saiTaskReg
 import { trackUsage } from '../../../lib/billing/usageTracker';
 import { GPT_OSS_120B } from '../../../config/groqModels';
 import { queryTenantPlan, planHasFeature, resolveShareForTenantPlan } from '../../../lib/billing/planFeatures';
-import { fetchBillingCostBreakdown, fetchBillingInvoices, computeBillingEstimateJpy } from '../../../lib/billing/billingApi';
+import { fetchBillingCostBreakdown, fetchBillingInvoices, computeBillingEstimateJpy, fetchBillingQuota } from '../../../lib/billing/billingApi';
 import { fetchAnalyticsSummary, fetchAnalyticsTrend, fetchConversionSummary, fetchKnowledgeAttribution, fetchLowScoreSessions } from '../analytics/summaryQueries';
 import { getRuleEffect } from '../analytics/ruleEffect';
 import { computeAbExperimentResults, fetchAbExperimentsOverview } from '../../conversion/abResultsQuery';
@@ -649,6 +649,16 @@ export type BillingSummaryCardPayload = {
     hostedInvoiceUrl: string | null;
   }>;
   portalUrl: string | null;
+  /**
+   * UX-C(2026-08-26): 込み枠・無料枠の当月消費(常にJST暦月。上のperiodとは別軸)。
+   * fetchBillingQuota が失敗/テナント不明を返した場合のみ null(カード全体は失わない)。
+   */
+  quota: {
+    plan: string | null;
+    text: { used: number; included: number | null; overage: number };
+    avatar: { usedMinutes: number; includedMinutes: number | null; overageMinutes: number };
+    freeAd: { used: number; limit: number; remaining: number } | null;
+  } | null;
 };
 
 export type ActionCardPayload =
@@ -4647,6 +4657,15 @@ export async function executeToolCall(
         ]);
         const planLabel = BILLING_PLAN_LABEL[plan] ?? plan;
 
+        // ★quotaは上のPromise.allに含めない★ quota(込み枠)は常に「当月(JST暦月)」を
+        // 見る、period(直近7/30/90日)とは別軸の値であるだけでなく、失敗時に他の
+        // 見積り・請求書情報まで巻き添えで失わせたくない(禁止20と同じ理由: 「請求は
+        // 見えるが枠だけ分からない」と「何も分からない」を同じ失敗として扱わない)。
+        const quota = await fetchBillingQuota(db, tenantId).catch((err: unknown) => {
+          logger.warn('[actionExecutor] get_billing_summary: fetchBillingQuota failed', err);
+          return null;
+        });
+
         const lines = [
           `ご利用状況・お支払い（${periodLabel}）`,
           `• 契約プラン: ${planLabel}`,
@@ -4657,6 +4676,20 @@ export async function executeToolCall(
         const breakdownEntries = Object.values(breakdown.breakdown);
         if (breakdownEntries.length > 0) {
           lines.push(`  原価内訳: ${breakdownEntries.map((b) => `${b.label} ${b.percentage}%（$${b.cost_usd.toLocaleString('en-US')}）`).join(' / ')}`);
+        }
+
+        // 今月(JST)の込み枠消費。periodは無関係(常に当月)であることを行頭に明示する。
+        if (quota) {
+          if (quota.freeAd) {
+            lines.push(`• 今月の無料枠: ${quota.freeAd.used}/${quota.freeAd.limit}会話（残り${quota.freeAd.remaining}会話）`);
+          } else if (quota.text.included !== null && quota.avatar.includedMinutes !== null) {
+            lines.push(
+              `• 今月の込み枠: テキスト ${quota.text.used}/${quota.text.included}会話` +
+                (quota.text.overage > 0 ? `（${quota.text.overage}会話超過）` : '') +
+                ` / アバター ${quota.avatar.usedMinutes}/${quota.avatar.includedMinutes}分` +
+                (quota.avatar.overageMinutes > 0 ? `（${quota.avatar.overageMinutes}分超過）` : '')
+            );
+          }
         }
 
         const invoicesAvailable = invoicesResult.status === 'ok';
@@ -4692,6 +4725,14 @@ export async function executeToolCall(
             hostedInvoiceUrl: inv.hostedInvoiceUrl,
           })),
           portalUrl: invoicesResult.status === 'ok' ? invoicesResult.portalUrl : null,
+          quota: quota
+            ? {
+                plan: quota.plan,
+                text: quota.text,
+                avatar: quota.avatar,
+                freeAd: quota.freeAd,
+              }
+            : null,
         };
 
         return { text: truncateRead(lines.join('\n')), card };

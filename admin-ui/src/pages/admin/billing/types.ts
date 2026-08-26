@@ -74,3 +74,26 @@ export interface CrossTenantRow {
   total_requests: number;
   cost_total_cents: number;
 }
+
+// UX-C(2026-08-26): GET /v1/admin/billing/quota のレスポンス型。
+// backend(src/lib/billing/billingApi.ts の BillingQuota)と1対1に保つ。
+export interface BillingQuota {
+  tenantId: string;
+  plan: TenantPlan | null;
+  periodFrom: string;
+  periodTo: string;
+  text: {
+    used: number;
+    /** 込み枠(会話数)。null=このプランに込み枠という概念が無い
+     *  (starter=純従量/enterprise=無制限/未知プラン)。 */
+    included: number | null;
+    overage: number;
+  };
+  avatar: {
+    usedMinutes: number;
+    includedMinutes: number | null;
+    overageMinutes: number;
+  };
+  /** free_ad のときだけ非null。 */
+  freeAd: { used: number; limit: number; remaining: number } | null;
+}

@@ -259,6 +259,13 @@ export type BillingSummaryAgentActionCard = {
     hostedInvoiceUrl: string | null;
   }>;
   portalUrl: string | null;
+  /** UX-C(2026-08-26): 今月(JST暦月)の込み枠・無料枠消費。取得不可ならnull。 */
+  quota: {
+    plan: string | null;
+    text: { used: number; included: number | null; overage: number };
+    avatar: { usedMinutes: number; includedMinutes: number | null; overageMinutes: number };
+    freeAd: { used: number; limit: number; remaining: number } | null;
+  } | null;
 };
 
 export type AgentActionCard =
