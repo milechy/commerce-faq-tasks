@@ -5,7 +5,7 @@
 //   - free_ad の制約（上限・バッジ・共有プール必須）を出すこと
 //   - 「即時反映」と言わないこと（CLAUDE.md 禁止38: ウィジェットは最大24hキャッシュ）
 //   - tenantId を body に載せないこと（CLAUDE.md 禁止1）
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { PlanSection } from "./PlanSection";
 import { authFetch } from "../../../lib/api";
@@ -22,6 +22,12 @@ vi.mock("../../../auth/useAuth", () => ({
 
 const asClientAdmin = () => mockUseAuth.mockReturnValue({ user: { role: "client_admin" } });
 
+// window.location はjsdomで代入不可なので defineProperty で差し替える。
+// ★beforeEach/afterEachで確実に復元する★ テスト内で手動save/restoreすると、
+// アサーション失敗(waitForのタイムアウト等)で復元コードまで到達せず、以降の
+// テストへ状態が漏れる(originalLocationが壊れた値のまま次のテストへ持ち越る)。
+const originalLocation = window.location;
+
 beforeEach(() => {
   vi.clearAllMocks();
   asClientAdmin();
@@ -29,11 +35,17 @@ beforeEach(() => {
     ok: true,
     json: async () => ({ plan: "growth" }),
   });
+  Object.defineProperty(window, "location", { value: { href: "" }, writable: true, configurable: true });
+});
+
+afterEach(() => {
+  Object.defineProperty(window, "location", { value: originalLocation, writable: true, configurable: true });
 });
 
 function renderSection(
   currentPlan: "free_ad" | "starter" | "standard" | "growth" | "enterprise" | null,
-  planStatus?: "loading" | "error" | "ready"
+  planStatus?: "loading" | "error" | "ready",
+  billingStatus?: "ok" | "no_subscription" | null
 ) {
   const onChanged = vi.fn();
   const showToast = vi.fn();
@@ -41,6 +53,7 @@ function renderSection(
     <PlanSection
       currentPlan={currentPlan}
       planStatus={planStatus}
+      billingStatus={billingStatus}
       onChanged={onChanged}
       showToast={showToast}
     />
@@ -372,6 +385,194 @@ describe("PlanSection", () => {
       fireEvent.click(screen.getByRole("button", { name: /Enterprise/ }));
       fireEvent.click(screen.getByRole("button", { name: /Enterprise に変更する/ }));
       await waitFor(() => expect(onChanged).toHaveBeenCalledWith("enterprise"));
+    });
+  });
+
+  // UX-A(2026-08-26): プラン変更自体は成功しても、Stripe側のsubscription item
+  // 追随(syncSubscriptionForTenant)が失敗すると請求が1円も動かない。
+  // 「✅ 変更しました」の成功トーストに混ぜず、消えない案内として残ることを固定する
+  // (CLAUDE.md 禁止20: 別の状態を同じ表示に潰さない)。
+  describe("billing_sync の可視化", () => {
+    it("no_subscription のときは支払い設定の案内とボタンを出す", async () => {
+      (authFetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ok: true,
+        json: async () => ({ plan: "growth", billing_sync: "no_subscription" }),
+      });
+      const { onChanged } = renderSection("starter");
+      fireEvent.click(screen.getByRole("button", { name: /Growth/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Growth に変更する/ }));
+
+      await waitFor(() => expect(onChanged).toHaveBeenCalledWith("growth"));
+      expect(screen.getByText(/お支払い設定の確認が必要です/)).toBeTruthy();
+      expect(screen.getByRole("button", { name: "お支払い設定へ進む" })).toBeTruthy();
+    });
+
+    // price_not_configured 等は env未設定やStripe障害など運用側の問題で、
+    // テナントが押しても解決しない。ボタンは出さず案内だけにする。
+    it("no_subscription 以外の needs-attention ステータスではボタンを出さない", async () => {
+      (authFetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ok: true,
+        json: async () => ({ plan: "growth", billing_sync: "price_not_configured" }),
+      });
+      const { onChanged } = renderSection("starter");
+      fireEvent.click(screen.getByRole("button", { name: /Growth/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Growth に変更する/ }));
+
+      await waitFor(() => expect(onChanged).toHaveBeenCalledWith("growth"));
+      expect(screen.getByText(/お支払い設定の確認が必要です/)).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "お支払い設定へ進む" })).toBeNull();
+    });
+
+    it("billing_sync が synced/no_change のときは案内を出さない", async () => {
+      (authFetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ok: true,
+        json: async () => ({ plan: "growth", billing_sync: "synced" }),
+      });
+      const { onChanged } = renderSection("starter");
+      fireEvent.click(screen.getByRole("button", { name: /Growth/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Growth に変更する/ }));
+
+      await waitFor(() => expect(onChanged).toHaveBeenCalledWith("growth"));
+      expect(screen.queryByText(/お支払い設定の確認が必要です/)).toBeNull();
+    });
+
+    it("「お支払い設定へ進む」を押すとCheckoutセッションを作成し、返ってきたURLへ遷移する", async () => {
+      (authFetch as unknown as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ plan: "growth", billing_sync: "no_subscription" }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ url: "https://checkout.stripe.com/cs_test_1" }) });
+
+      renderSection("starter");
+      fireEvent.click(screen.getByRole("button", { name: /Growth/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Growth に変更する/ }));
+      await waitFor(() => expect(screen.getByRole("button", { name: "お支払い設定へ進む" })).toBeTruthy());
+
+      fireEvent.click(screen.getByRole("button", { name: "お支払い設定へ進む" }));
+
+      await waitFor(() => expect(window.location.href).toBe("https://checkout.stripe.com/cs_test_1"));
+      const [url, init] = (authFetch as unknown as ReturnType<typeof vi.fn>).mock.calls[1];
+      expect(url).toContain("/v1/admin/my-tenant/billing/checkout-session");
+      expect(init.method).toBe("POST");
+    });
+
+    // ★イレギュラーな操作: 二重クリック★
+    // 遷移(window.location.href代入)が完了する前にボタンを連打すると、
+    // Checkoutセッションが複数回作られ、バックエンド側の冪等性チェックに
+    // 頼らずともフロント側で1回に抑えられているべき。
+    it("「お支払い設定へ進む」を連打しても Checkout セッション作成は1回しか呼ばれない", async () => {
+      let resolveCheckout: (v: unknown) => void = () => {};
+      (authFetch as unknown as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ plan: "growth", billing_sync: "no_subscription" }) })
+        .mockImplementationOnce(
+          () => new Promise((resolve) => { resolveCheckout = resolve; })
+        );
+
+      renderSection("starter");
+      fireEvent.click(screen.getByRole("button", { name: /Growth/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Growth に変更する/ }));
+      await waitFor(() => expect(screen.getByRole("button", { name: "お支払い設定へ進む" })).toBeTruthy());
+
+      const checkoutBtn = screen.getByRole("button", { name: "お支払い設定へ進む" });
+      fireEvent.click(checkoutBtn);
+      fireEvent.click(checkoutBtn); // レスポンスが返る前に連打
+      fireEvent.click(checkoutBtn);
+
+      resolveCheckout({ ok: true, json: async () => ({ url: "https://checkout.stripe.com/cs_test_1" }) });
+      await waitFor(() => expect(window.location.href).toBe("https://checkout.stripe.com/cs_test_1"));
+
+      // 1回目(プラン変更のPUT)を除き、checkout-session へのPOSTは1回のみ
+      const checkoutCalls = (authFetch as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(
+        (call: any[]) => String(call[0]).includes("/checkout-session")
+      );
+      expect(checkoutCalls).toHaveLength(1);
+    });
+
+    it("Checkoutセッション作成が失敗したらエラーを表示し、遷移しない", async () => {
+      (authFetch as unknown as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ plan: "growth", billing_sync: "no_subscription" }) })
+        .mockResolvedValueOnce({ ok: false, json: async () => ({ message: "Checkoutセッションの作成に失敗しました" }) });
+
+      renderSection("starter");
+      fireEvent.click(screen.getByRole("button", { name: /Growth/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Growth に変更する/ }));
+      await waitFor(() => expect(screen.getByRole("button", { name: "お支払い設定へ進む" })).toBeTruthy());
+
+      fireEvent.click(screen.getByRole("button", { name: "お支払い設定へ進む" }));
+
+      await waitFor(() => expect(screen.getByText("Checkoutセッションの作成に失敗しました")).toBeTruthy());
+    });
+  });
+
+  // ★リロードで案内が消える問題への対応(B-1)★
+  // billingSyncPending はプラン変更のレスポンス由来なのでリロードで消える。
+  // それだけだと「決済未登録」というサーバ側の事実が画面から失われ、テナントは
+  // 請求が始まっていないことに気づけないまま使い続ける(CLAUDE.md 禁止50)。
+  // 親が既に取得済みの billingStatus を下ろして、リロード後も出し続ける。
+  describe("billingStatus によるリロード後の継続表示", () => {
+    it("有料プランかつ billingStatus=no_subscription なら、プラン変更をしていなくても案内を出す", () => {
+      renderSection("growth", "ready", "no_subscription");
+      expect(screen.getByText(/お支払い設定の確認が必要です/)).toBeTruthy();
+      expect(screen.getByRole("button", { name: "お支払い設定へ進む" })).toBeTruthy();
+    });
+
+    it("billingStatus=ok なら案内を出さない", () => {
+      renderSection("growth", "ready", "ok");
+      expect(screen.queryByText(/お支払い設定の確認が必要です/)).toBeNull();
+    });
+
+    // 未取得(null)を「契約なし」と誤認しない。取得前に一瞬「支払い設定が必要」が
+    // 出ると、実際は契約済みのテナントを無用に不安にさせる(fail-safeの向き)。
+    it("billingStatus=null(未取得)では案内を出さない", () => {
+      renderSection("growth", "ready", null);
+      expect(screen.queryByText(/お支払い設定の確認が必要です/)).toBeNull();
+    });
+
+    // ★free_ad/enterprise は「契約が無いのが正常」★
+    // ここを分けないと、無料プランのテナントに永久に「支払い設定が必要」と
+    // 表示され続ける(サーバは正しく no_subscription を返すため)。
+    it("free_ad では billingStatus=no_subscription でも案内を出さない(契約が無いのが正常)", () => {
+      renderSection("free_ad", "ready", "no_subscription");
+      expect(screen.queryByText(/お支払い設定の確認が必要です/)).toBeNull();
+    });
+
+    it("enterprise では billingStatus=no_subscription でも案内を出さない(個別契約のため)", () => {
+      renderSection("enterprise", "ready", "no_subscription");
+      expect(screen.queryByText(/お支払い設定の確認が必要です/)).toBeNull();
+    });
+
+    // ★優先順位★ プラン変更直後は親の再取得がまだ走っておらず billingStatus が
+    // 古い(ok のまま)。この瞬間はプラン変更レスポンス由来の値の方が新しいので、
+    // そちらを優先しなければ「変更したのに案内が出ない」ことになる。
+    it("プラン変更直後は、古い billingStatus=ok より変更レスポンスの billing_sync を優先する", async () => {
+      (authFetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ok: true,
+        json: async () => ({ plan: "growth", billing_sync: "no_subscription" }),
+      });
+      const { onChanged } = renderSection("starter", "ready", "ok");
+
+      fireEvent.click(screen.getByRole("button", { name: /Growth/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Growth に変更する/ }));
+
+      await waitFor(() => expect(onChanged).toHaveBeenCalledWith("growth"));
+      expect(screen.getByText(/お支払い設定の確認が必要です/)).toBeTruthy();
+    });
+
+    // 逆向き: サーバは no_subscription を返しているが、たった今のプラン変更は
+    // 正常に同期できた(synced)。この場合は最新の synced を採って案内を消す。
+    it("変更レスポンスが synced なら、古い billingStatus=no_subscription より優先して案内を消す", async () => {
+      (authFetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ok: true,
+        json: async () => ({ plan: "growth", billing_sync: "synced" }),
+      });
+      const { onChanged } = renderSection("starter", "ready", "no_subscription");
+
+      // 変更前はサーバ由来の案内が出ている
+      expect(screen.getByText(/お支払い設定の確認が必要です/)).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: /Growth/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Growth に変更する/ }));
+
+      await waitFor(() => expect(onChanged).toHaveBeenCalledWith("growth"));
+      expect(screen.queryByText(/お支払い設定の確認が必要です/)).toBeNull();
     });
   });
 });
