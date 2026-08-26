@@ -800,12 +800,12 @@
 <section id="pricing" style="background:rgba(255,255,255,0.015); border-top:1px solid rgba(255,255,255,0.06); border-bottom:1px solid rgba(255,255,255,0.06); padding:80px 20px;">
   <div style="max-width:1100px; margin:0 auto;">
     <div style="text-align:center; margin-bottom:16px;">
-      <h2 style="font-size:clamp(22px,3vw,34px); font-weight:800; margin:0 0 12px;">シンプルな従量課金</h2>
-      <p style="color:var(--muted); font-size:15px; margin:0 0 20px;">固定費ゼロ。使った分だけお支払い。</p>
+      <h2 style="font-size:clamp(22px,3vw,34px); font-weight:800; margin:0 0 12px;">事業の規模に合わせて選べるプラン</h2>
+      <p style="color:var(--muted); font-size:15px; margin:0 0 20px;">初期費用ゼロ。使い方に合わせて、都度課金も月額固定も選べます。</p>
       <!-- Unit price banner -->
       <div style="display:inline-flex; align-items:center; gap:10px; background:rgba(124,58,237,0.12); border:1px solid rgba(124,58,237,0.3); border-radius:999px; padding:8px 20px; margin-bottom:8px;">
-        <span style="font-size:20px; font-weight:800; color:#c4b5fd;">1対話あたり ¥5〜</span>
-        <span style="font-size:13px; color:var(--muted);">業種・FAQ量により変動</span>
+        <span style="font-size:20px; font-weight:800; color:#c4b5fd;">都度課金〜月額固定まで</span>
+        <span style="font-size:13px; color:var(--muted);">事業の成長に合わせて選べる4プラン</span>
       </div>
       <div style="font-size:12px; color:var(--muted);">* 1対話 = ユーザー発言1往復</div>
     </div>
@@ -817,8 +817,9 @@
       </div>
     </div>
 
-    <div class="pricing-grid" style="display:grid; grid-template-columns:repeat(3,1fr); gap:20px;">
+    <div class="pricing-grid" style="display:grid; grid-template-columns:repeat(4,1fr); gap:20px;">
       <style>
+        @media (max-width: 1024px) { .pricing-grid { grid-template-columns: repeat(2,1fr) !important; } }
         @media (max-width: 767px) { .pricing-grid { grid-template-columns: 1fr !important; } }
       </style>
       <div style="display:contents;">
@@ -826,7 +827,7 @@
         <div class="glass-card" style="border-radius:16px; padding:28px;">
           <div style="font-weight:700; font-size:18px; margin-bottom:6px;">Starter</div>
           <div style="font-size:13px; color:var(--muted); margin-bottom:20px;">小規模サイト向け</div>
-          <div style="font-size:28px; font-weight:800; margin-bottom:4px;">従量課金のみ</div>
+          <div style="font-size:28px; font-weight:800; margin-bottom:4px;">¥20<span style="font-size:15px; font-weight:600; color:var(--muted);">/対話</span></div>
           <div style="font-size:13px; color:var(--muted); margin-bottom:24px;">〜500対話/月</div>
           <ul style="list-style:none; padding:0; margin:0 0 24px; display:flex; flex-direction:column; gap:10px;">
             <li style="font-size:13px; color:var(--muted); display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> ウィジェット埋め込み</li>
@@ -841,15 +842,29 @@
           <a href="#contact" style="display:block; text-align:center; background:rgba(124,58,237,0.15); border:1px solid rgba(124,58,237,0.35); color:#c4b5fd; text-decoration:none; font-weight:600; font-size:14px; padding:12px; border-radius:10px; transition:all 0.2s;" onmouseover="this.style.background='rgba(124,58,237,0.25)'" onmouseout="this.style.background='rgba(124,58,237,0.15)'">無料で始める</a>
         </div>
 
+        <!-- Standard -->
+        <div class="glass-card" style="border-radius:16px; padding:28px;">
+          <div style="font-weight:700; font-size:18px; margin-bottom:6px;">Standard</div>
+          <div style="font-size:13px; color:var(--muted); margin-bottom:20px;">アバターも使いたい小規模店舗向け</div>
+          <div style="font-size:28px; font-weight:800; margin-bottom:4px;">¥9,800<span style="font-size:15px; font-weight:600; color:var(--muted);">/月</span></div>
+          <div style="font-size:13px; color:var(--muted); margin-bottom:24px;">テキスト1,000対話 + アバター30分/月</div>
+          <ul style="list-style:none; padding:0; margin:0 0 24px; display:flex; flex-direction:column; gap:10px;">
+            <li style="font-size:13px; color:var(--muted); display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> Starterの全機能</li>
+            <li style="font-size:13px; color:var(--muted); display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> AIアバター（既定アバター・顔・声）</li>
+          </ul>
+          <a href="#contact" style="display:block; text-align:center; background:rgba(124,58,237,0.15); border:1px solid rgba(124,58,237,0.35); color:#c4b5fd; text-decoration:none; font-weight:600; font-size:14px; padding:12px; border-radius:10px; transition:all 0.2s;" onmouseover="this.style.background='rgba(124,58,237,0.25)'" onmouseout="this.style.background='rgba(124,58,237,0.15)'">無料で始める</a>
+        </div>
+
         <!-- Growth (featured) -->
         <div class="pricing-featured" style="border-radius:16px; padding:28px;">
           <div style="font-weight:700; font-size:18px; margin-bottom:6px; color:#c4b5fd;">Growth</div>
           <div style="font-size:13px; color:var(--muted); margin-bottom:20px;">成長期のビジネス向け</div>
-          <div style="font-size:28px; font-weight:800; margin-bottom:4px;" class="gradient-text">従量課金×1.5</div>
-          <div style="font-size:13px; color:var(--muted); margin-bottom:24px;">〜3,000対話/月</div>
+          <div style="font-size:28px; font-weight:800; margin-bottom:4px;"><span class="gradient-text">¥29,800</span><span style="font-size:15px; font-weight:600; color:var(--muted); -webkit-text-fill-color:var(--muted);">/月</span></div>
+          <div style="font-size:13px; color:var(--muted); margin-bottom:24px;">テキスト3,000対話 + アバター150分/月</div>
           <ul style="list-style:none; padding:0; margin:0 0 24px; display:flex; flex-direction:column; gap:10px;">
             <li style="font-size:13px; color:#fff; display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> Starterの全機能</li>
             <li style="font-size:13px; color:#fff; display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> AIアバター（顔・声）</li>
+            <li style="font-size:13px; color:#fff; display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> アバターのカスタム作成（自社の顔・声）</li>
             <li style="font-size:13px; color:#fff; display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> 詳しい分析レポート</li>
             <li style="font-size:13px; color:#fff; display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> 成果（購入・予約）の計測</li>
             <li style="font-size:13px; color:#fff; display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> 接客パターンの比較テスト</li>
@@ -863,11 +878,10 @@
         <div class="glass-card" style="border-radius:16px; padding:28px;">
           <div style="font-weight:700; font-size:18px; margin-bottom:6px;">Enterprise</div>
           <div style="font-size:13px; color:var(--muted); margin-bottom:20px;">大規模・高品質要求向け</div>
-          <div style="font-size:28px; font-weight:800; margin-bottom:4px;">従量課金×2.5</div>
+          <div style="font-size:28px; font-weight:800; margin-bottom:4px;">個別見積り</div>
           <div style="font-size:13px; color:var(--muted); margin-bottom:24px;">無制限対話</div>
           <ul style="list-style:none; padding:0; margin:0 0 24px; display:flex; flex-direction:column; gap:10px;">
             <li style="font-size:13px; color:var(--muted); display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> Growthの全機能</li>
-            <li style="font-size:13px; color:var(--muted); display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> カスタムアバター</li>
             <li style="font-size:13px; color:var(--muted); display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> 専任サポート</li>
             <li style="font-size:13px; color:var(--muted); display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> 稼働率保証</li>
             <li style="font-size:13px; color:var(--muted); display:flex; gap:8px;"><span style="color:#4ade80;">✓</span> カスタム開発対応</li>
@@ -888,8 +902,8 @@
     </div>
 
     <p style="text-align:center; font-size:13px; color:var(--muted); margin-top:24px; line-height:1.6;">
-      * 従量課金 = 対話数 × 単価（¥5〜/対話）。月のご利用上限を設定できます。<br>
-      超過分は翌月のご請求に自動加算。いつでもプラン変更・解約可能。
+      * Starterは対話数 × ¥20の純従量課金。Standard / Growthは月額固定＋込み枠（テキスト対話・アバター分）で、<br>
+      超過分はプランごとの単価で翌月のご請求に自動加算されます。年払いなら2ヶ月分お得です。いつでもプラン変更・解約可能。
     </p>
   </div>
 </section>
@@ -1304,7 +1318,7 @@
   data-avatar-mode="animated"
   data-avatar-image-url="https://rpqrwifbrhlebbelyqog.supabase.co/storage/v1/object/public/avatar-defaults/default_02.png"
   data-scripted-responses='[
-    {"keywords":["料金","値段","いくら","費用","価格"],"answer":"1対話あたり¥5〜の従量課金制で、初月完全無料です。詳しいプランは料金セクションをご覧ください🙂"},
+    {"keywords":["料金","値段","いくら","費用","価格"],"answer":"プランは4種類（Starter/Standard/Growth/Enterprise）あり、使い方に応じて月額固定〜従量課金までお選びいただけます。詳しいプランは料金セクションをご覧ください🙂"},
     {"keywords":["導入","日数","どのくらい","期間","何日"],"answer":"最短3日で本番稼働できます。コピペで埋め込むだけなので、難しい設定は不要です。"},
     {"keywords":["セキュリティ","個人情報","暗号化","安全"],"answer":"全データを暗号化して日本国内サーバーに保管しています。個人情報は自動で伏せ字処理されます。"},
     {"keywords":["音声","話せ","声"],"answer":"はい、Growthプラン以上で音声対応のAIアバターが使えます。このデモ画面は文字チャットのみでご案内しています。"},
