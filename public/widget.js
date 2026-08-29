@@ -55,7 +55,11 @@
   // （有料テナントのサイトに誤って広告が出る事故を避けるため）。adPromoUrlが無ければ描画しない。
   var showAdPromo = _rajiuceTenantCfg.showAdPromo === true;
   var adPromoUrl = _rajiuceTenantCfg.adPromoUrl || null;
-  var _abExposureSent = false;
+  // 広告帯インプレッションは1セッション1回に絞る（CTRの分母を正しく保つため）。
+  // openPanel()はパネルを開閉するたびに呼ばれるので、フラグ無しだと同一セッション内で
+  // 開き直すたびに重複計上され、AD-4(広告掲出の実績を見て共有プール強制解除を判断する)
+  // の母数が歪む。_abExposureSent と同じパターン。
+  var _adPromoImpressionSent = false;
   var accentColor = currentScript ? (currentScript.getAttribute('data-accent-color') || '#2563eb') : '#2563eb';
   var greetingText = currentScript ? (currentScript.getAttribute('data-greeting') || 'ご質問はお気軽にどうぞ') : 'ご質問はお気軽にどうぞ';
   var placeholderText = currentScript ? (currentScript.getAttribute('data-placeholder') || 'メッセージを入力…') : 'メッセージを入力…';
@@ -2690,8 +2694,13 @@
     // R2C自身の広告帯（free_adプラン限定）のインプレッション。パネル構築時点では
     // _tracker が未初期化（fetch(/api/widget/features)完了前）なため、実際にユーザーへ
     // 見える瞬間であるここ（openPanel）で計測する。
-    if (showAdPromo && adPromoUrl) {
-      if (_tracker) _tracker.track('ad_promo_impression', { tenant_id: tenantId });
+    // openPanel()は開閉のたびに呼ばれるため、_adPromoImpressionSentで1セッション1回に絞る
+    // （CTRの分母を正しく保つ。_abExposureSentと同じパターン）。_trackerが未初期化の間は
+    // フラグを立てない（次に開いたときに送れるようにするため。recordAbExposureが
+    // !apiKeyでフラグを立てずreturnするのと同じ考え方）。
+    if (!_adPromoImpressionSent && showAdPromo && adPromoUrl && _tracker) {
+      _adPromoImpressionSent = true;
+      _tracker.track('ad_promo_impression', { tenant_id: tenantId });
     }
     if (avatarMode === 'animated') {
       // LiveKit/Anam へは一切接続しない軽量デモモード。

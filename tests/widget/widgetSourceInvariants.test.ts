@@ -295,9 +295,27 @@ describe('public/widget.js バッジ描画条件 — 抽出ロジックとの契
       expect(WIDGET_SRC).not.toMatch(/adPromoUrl\s*=\s*_rajiuceTenantCfg\.adPromoUrl\s*\?\?\s*true/);
     });
 
-    it('広告帯のクリック・インプレッションは _tracker が未初期化(null)でも例外を投げないガードを持つ', () => {
+    it('広告帯のクリックは _tracker が未初期化(null)でも例外を投げないガードを持つ', () => {
       expect(WIDGET_SRC).toMatch(/if\s*\(\s*_tracker\s*\)\s*_tracker\.track\(\s*['"]ad_promo_click['"]/);
-      expect(WIDGET_SRC).toMatch(/if\s*\(\s*_tracker\s*\)\s*_tracker\.track\(\s*['"]ad_promo_impression['"]/);
+    });
+
+    // openPanel()はパネル開閉のたびに呼ばれるため、フラグ無しだと同一セッション内で
+    // 開き直すたびにインプレッションが重複計上され、CTRの分母が歪む(AD-4の判断材料が歪む)。
+    // _abExposureSentと同じ「送信済みフラグ」パターンで1セッション1回に絞る。
+    it('広告帯インプレッションは1セッション1回に絞る送信済みフラグ(_adPromoImpressionSent)を持つ', () => {
+      expect(WIDGET_SRC).toMatch(/var\s+_adPromoImpressionSent\s*=\s*false;/);
+      expect(WIDGET_SRC).toMatch(
+        /if\s*\(\s*!_adPromoImpressionSent\s*&&\s*showAdPromo\s*&&\s*adPromoUrl\s*&&\s*_tracker\s*\)\s*\{/
+      );
+      expect(WIDGET_SRC).toMatch(/_adPromoImpressionSent\s*=\s*true;/);
+    });
+
+    it('インプレッション送信条件に _tracker が含まれ、未初期化の間はフラグを立てずに次回開いたときへ持ち越す', () => {
+      const idx = WIDGET_SRC.indexOf('_adPromoImpressionSent = true;');
+      expect(idx).toBeGreaterThan(-1);
+      const before = WIDGET_SRC.slice(Math.max(0, idx - 300), idx);
+      // フラグを立てる直前のif条件に _tracker が入っている(未初期化=falsyならフラグを立てない)
+      expect(before).toMatch(/&&\s*_tracker\s*\)\s*\{\s*$/);
     });
 
     it('広告帯リンクにも rel="nofollow sponsored noopener" が付与されている（link scheme対策）', () => {
