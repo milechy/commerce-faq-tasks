@@ -9,6 +9,12 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import AuthorLoopPage, { MIN_CONVERSATIONS_FOR_REVIEW } from "./index";
 
+const mockNavigate = vi.fn();
+vi.mock("react-router-dom", async () => {
+  const actual = await vi.importActual("react-router-dom");
+  return { ...actual, useNavigate: () => mockNavigate };
+});
+
 vi.mock("../../../lib/api", () => ({
   API_BASE: "http://localhost:3100",
   authFetch: vi.fn(),
@@ -109,6 +115,7 @@ const FORBIDDEN_WORDS = [
 beforeEach(() => {
   installFakeLocalStorage();
   mockFetch.mockReset();
+  mockNavigate.mockReset();
 });
 
 describe("AuthorLoopPage", () => {
@@ -182,5 +189,23 @@ describe("AuthorLoopPage", () => {
     });
 
     expect(window.localStorage.getItem("r2c_author_loop_reviewed_v1")).toContain("希少性の原理");
+  });
+
+  it("「使われ方が違う（直しに行く）」を押すと、報告するだけで終わらず教えを直す画面に移動する", async () => {
+    const target = {
+      session: session("session-c", { last_message_at: "2026-08-22T00:00:00Z" }),
+      messages: [injectedAssistantMessage("回答C", "権威性の原理")],
+    };
+    mockConversations([target, ...fillerSessions(MIN_CONVERSATIONS_FOR_REVIEW, 200)]);
+
+    render(<AuthorLoopPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/権威性の原理/)).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("使われ方が違う（直しに行く）"));
+
+    expect(mockNavigate).toHaveBeenCalledWith("/admin/knowledge/global?tab=pdf");
   });
 });

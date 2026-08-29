@@ -15,6 +15,7 @@
 // これで足り、そのためだけに新しいテーブル/エンドポイントを増やさない判断とした。
 
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useNavigate } from "react-router-dom";
 import { authFetch, API_BASE } from "../../../lib/api";
 
 // ─── 型定義(バックエンドのレスポンス形をこのファイルだけで再宣言する。
@@ -151,6 +152,7 @@ function buildReviewItems(
 // ─── コンポーネント本体 ───────────────────────────────────────────────────────
 
 export default function AuthorLoopPage() {
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reviewItems, setReviewItems] = useState<ReviewItem[]>([]);
@@ -226,11 +228,16 @@ export default function AuthorLoopPage() {
     }
     if (answer === "yes") {
       setToast("確認しました");
-    } else {
-      setToast("教えました。直したい場合は下のリンクから編集できます");
+      markReviewed(currentItem.key);
+      setTimeout(() => setToast(null), 3000);
+      return;
     }
+    // answer === "no": 押しても何も起きない「報告ボタン」にはしない。
+    // 判断はどこにも届かないため、実際に直せる画面(既存のチャンク編集画面)へ
+    // その場で連れて行く。この会話はこのブラウザでは確認済み扱いにして良い
+    // (著者はこの後、教え自体を直しに行くため)。
     markReviewed(currentItem.key);
-    setTimeout(() => setToast(null), 3000);
+    navigate("/admin/knowledge/global?tab=pdf");
   };
 
   return (
@@ -240,7 +247,8 @@ export default function AuthorLoopPage() {
       </h1>
       <p style={{ fontSize: 14, color: "#9ca3af", marginBottom: 24, lineHeight: 1.6 }}>
         お店からの相談に、あなたの本の教えが使われた会話を1件ずつ確認できます。
-        「はい」「使われ方が違う」「あとで」のどれかを選ぶだけで進みます。
+        「はい」「使われ方が違う（直しに行く）」「あとで」のどれかを選ぶだけで進みます。
+        「使われ方が違う」を選ぶと、その場で教えを直す画面に移動します。
       </p>
 
       {loading && <p style={{ color: "#9ca3af" }}>読み込み中…</p>}
@@ -273,16 +281,13 @@ export default function AuthorLoopPage() {
             <div
               style={{
                 display: "flex",
-                justifyContent: "space-between",
+                justifyContent: "flex-end",
                 alignItems: "center",
                 marginBottom: 14,
                 flexWrap: "wrap",
                 gap: 8,
               }}
             >
-              <span style={{ fontSize: 13, color: "#9ca3af" }}>
-                お店: {currentItem.session.tenant_id}
-              </span>
               <span style={{ fontSize: 13, color: "#9ca3af" }}>
                 {formatDate(currentItem.session.last_message_at)}
               </span>
@@ -364,7 +369,7 @@ export default function AuthorLoopPage() {
                 onClick={() => handleAnswer("no")}
                 style={{ ...BUTTON_BASE, background: "#dc2626", color: "#fff" }}
               >
-                使われ方が違う
+                使われ方が違う（直しに行く）
               </button>
               <button
                 type="button"
