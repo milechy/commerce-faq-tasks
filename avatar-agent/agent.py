@@ -26,6 +26,8 @@ os.environ.setdefault("LIBVA_DRIVER_NAME", "dummy")
 
 # ─── 通常の import ────────────────────────────────────────────────────────────
 import asyncio
+import hashlib
+import hmac
 import json
 import logging
 import math
@@ -45,6 +47,40 @@ logger.setLevel(logging.INFO)
 logger.info(f"[module] LIVEKIT_URL={os.environ.get('LIVEKIT_URL', 'NOT SET')}")
 logger.info(f"[module] LIVEKIT_API_KEY={'SET' if os.environ.get('LIVEKIT_API_KEY') else 'NOT SET'}")
 logger.info(f"[module] LEMONSLICE_API_KEY={'SET' if os.environ.get('LEMONSLICE_API_KEY') else 'NOT SET'}")
+
+
+# --- 内部API HMAC 署名 ---------------------------------------------------------
+# 本体(R2C/Express)の内部APIは、loopback限定 + 固定ヘッダ X-Internal-Request に
+# 加えて HMAC-SHA256 署名を要求する（body.tenantId 全信用による偽課金・他テナント
+# 注入・設定漏洩を防ぐ P0 対策）。署名方式は TS 側と厳密一致させること:
+#   src/lib/crypto/hmacVerifier.ts / cloudflare-workers/.../lib/hmacSigner.ts
+#     message   = f"{timestamp}:{JSON.stringify(payload)}"
+#     JSON.stringify 相当 = 区切り compact(",", ":") ・ 非ASCII 素通し(ensure_ascii=False)
+#     signature = HMAC-SHA256(secret, message) の hex 小文字
+#     timestamp = Unix 秒（サーバ許容誤差 ±300 秒）
+#     ヘッダ    = X-HMAC-Timestamp / X-HMAC-Signature
+# サーバ側は受信ボディを parse 後 JSON.stringify で再直列化して検証するため、
+# 送信時の空白やキー順は payload(dict)の挿入順と一致していれば wire 表現に依存しない。
+# GET(ボディ無し)の署名対象は空オブジェクト {}（サーバ側 express.json が
+# req.body={} にするため）。
+def _internal_hmac_headers(payload: object) -> dict:
+    """内部API向け HMAC 署名ヘッダを返す。
+
+    secret 未設定なら RuntimeError を送出する（fail-closed）。呼び出し側は
+    try/except で握って「送らない/取得失敗」に degrade すること。サーバ側も
+    secret 未設定・署名不正・欠落はいずれも拒否する。
+    """
+    secret = os.environ.get("INTERNAL_API_HMAC_SECRET")
+    if not secret:
+        raise RuntimeError("INTERNAL_API_HMAC_SECRET not set — cannot sign internal API request")
+    canonical = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+    timestamp = str(int(time.time()))
+    message = f"{timestamp}:{canonical}"
+    signature = hmac.new(
+        secret.encode("utf-8"), message.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+    return {"X-HMAC-Timestamp": timestamp, "X-HMAC-Signature": signature}
+
 
 # --- 定数 ---
 # SYSTEM_PROMPT は Agent(instructions=...) のペルソナ設定にのみ使う。
@@ -176,11 +212,14 @@ async def fetch_avatar_config(
     if avatar_config_id:
         params["avatarConfigId"] = avatar_config_id
     try:
+        # GET はボディを持たないため、署名対象は空オブジェクト {}（サーバ側の
+        # express.json が req.body={} にするのと一致させる）。
+        hmac_headers = _internal_hmac_headers({})
         async with aiohttp.ClientSession() as http:
             async with http.get(
                 f"{api_url}/api/internal/avatar-config",
                 params=params,
-                headers={"X-Internal-Request": "1"},
+                headers={"X-Internal-Request": "1", **hmac_headers},
                 timeout=aiohttp.ClientTimeout(total=5),
             ) as resp:
                 if resp.status != 200:
@@ -235,11 +274,13 @@ async def _report_tts_usage(tenant_id: str, tts_text_bytes: int, tts_model: str)
     """TTS使用量をRAJIUCE APIに非同期レポート（fire-and-forget）。"""
     api_url = os.environ.get("RAJIUCE_API_URL", "http://localhost:3100")
     try:
+        payload = {"tenantId": tenant_id, "ttsTextBytes": tts_text_bytes, "ttsModel": tts_model}
+        hmac_headers = _internal_hmac_headers(payload)
         async with aiohttp.ClientSession() as http_session:
             await http_session.post(
                 f"{api_url}/api/internal/usage",
-                headers={"X-Internal-Request": "1", "Content-Type": "application/json"},
-                json={"tenantId": tenant_id, "ttsTextBytes": tts_text_bytes, "ttsModel": tts_model},
+                headers={"X-Internal-Request": "1", "Content-Type": "application/json", **hmac_headers},
+                json=payload,
                 timeout=aiohttp.ClientTimeout(total=5),
             )
         logger.debug(f"[usage] TTS usage reported: tenant={tenant_id} bytes={tts_text_bytes} model={tts_model}")
@@ -263,11 +304,13 @@ async def _report_avatar_usage(tenant_id: str, session_ms: int) -> None:
     credits = math.ceil(minutes * LEMONSLICE_CREDITS_PER_MINUTE)
     api_url = os.environ.get("RAJIUCE_API_URL", "http://localhost:3100")
     try:
+        payload = {"tenantId": tenant_id, "avatarCredits": credits, "avatarSessionMs": session_ms}
+        hmac_headers = _internal_hmac_headers(payload)
         async with aiohttp.ClientSession() as http_session:
             await http_session.post(
                 f"{api_url}/api/internal/usage",
-                headers={"X-Internal-Request": "1", "Content-Type": "application/json"},
-                json={"tenantId": tenant_id, "avatarCredits": credits, "avatarSessionMs": session_ms},
+                headers={"X-Internal-Request": "1", "Content-Type": "application/json", **hmac_headers},
+                json=payload,
                 timeout=aiohttp.ClientTimeout(total=5),
             )
         logger.info(

@@ -15,13 +15,18 @@
 import type { Express, Request, Response } from "express";
 import { INTERNAL_REQUEST_HEADER } from "../../lib/metrics/kpiDefinitions";
 import { internalNetworkOnly } from "../middleware/internalNetworkOnly";
+import { internalHmacMiddleware } from "../../lib/crypto/hmacVerifier";
 import { saveMessage } from "../admin/chat-history/chatHistoryRepository";
 import { logger } from "../../lib/logger";
 
 export function registerInternalAvatarTranscriptRoutes(app: Express): void {
+  // 多層防御: loopback限定に加え HMAC 署名検証を課す。固定ヘッダのみでは
+  // body.tenantId/sessionId を全信用でき、他テナントの chat_messages に
+  // 任意メッセージを注入できた (P0)。secret 未設定時は fail-closed(500)。
   app.post(
     "/api/internal/avatar-transcript",
     internalNetworkOnly,
+    internalHmacMiddleware,
     async (req: Request, res: Response) => {
       if (req.headers[INTERNAL_REQUEST_HEADER] !== "1") {
         return res.status(403).json({ error: "forbidden" });

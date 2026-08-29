@@ -54,7 +54,12 @@ export function internalHmacMiddleware(
     return;
   }
 
-  if (!verifyHmacSignature(secret, timestamp, req.body, signature)) {
+  // ボディ無しのリクエスト(GET /api/internal/avatar-config 等)では express.json が
+  // req.body を設定せず undefined になる。署名対象を決定的にするため空オブジェクト {}
+  // に正規化する(呼び出し側も GET は {} を署名する)。POST(body あり)では no-op。
+  const signedBody = req.body ?? {};
+
+  if (!verifyHmacSignature(secret, timestamp, signedBody, signature)) {
     logger.warn("[hmacVerifier] invalid HMAC signature");
     res.status(401).json({ error: "Invalid HMAC signature" });
     return;
