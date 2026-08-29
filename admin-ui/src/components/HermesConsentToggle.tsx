@@ -1,12 +1,17 @@
-// admin-ui/src/pages/admin/avatar/HermesConsentToggle.tsx
+// admin-ui/src/components/HermesConsentToggle.tsx
 // Phase75 → GID 1216978677372391(PR-16, D1): 外部Hermes VPSへの生データ提供同意 ON/OFF トグル
 // （Client Adminのみ、自己完結型。ExcludeSearchToggleの楽観的更新+ロールバックパターンを踏襲）
 //
 // D1: データ利用同意は2階層。
 //   ①自テナント内学習(learned_memory等) = 常時ON・同意不要(このトグルの対象外)
 //   ②社外Hermes VPSへの生データ提供 = 明示同意必須(このトグルが操作するのはこちらのみ)
-// このページ(/admin/avatar)は2026-10-13まで閉鎖観察中(docs/LEGACY_UI_SUNSET.md)。
-// 閉鎖後は copilot-preview の set_hermes_consent ツールが唯一の操作経路になる。
+//
+// [H-4]: 元は /admin/avatar 最下部に配置していたが、アバターはStandard以上限定機能のため
+// 未契約テナントがこのページを開く動機が無く、51晩連続で同意ゼロという結果を招いた
+// (docs/LEARNING_LOOP_REQUIREMENTS.md:497)。プランゲートが無く全プランから到達できる
+// /admin/tuning(AIへの指示ルール画面)へ移設した。
+// 旧UI閉鎖(docs/LEGACY_UI_SUNSET.md)後は copilot-preview の set_hermes_consent ツールが
+// 唯一の操作経路になる予定。
 //
 // S5(共有学習プールの参加モデル・決定案「D1・D5決定案」): features.learning.{learn,share}
 // の2軸に対応。このトグルは share のみを操作する(learnは常時true・非表示のまま)。
@@ -17,7 +22,7 @@
 // (src/lib/hermesConsent.ts の resolveLearningConsent と同じ優先順位)。
 
 import { useEffect, useState } from "react";
-import { authFetch, API_BASE } from "../../../lib/api";
+import { authFetch, API_BASE } from "../lib/api";
 
 interface LearningConsent {
   learn: boolean;
@@ -118,8 +123,8 @@ export function HermesConsentToggle({ overrideTenantId }: HermesConsentTogglePro
       setFeatures({ ...prev, ...updated.features });
       showToast(
         next
-          ? "✅ Hermesへのデータ提供に同意しました"
-          : "✅ 同意を取り消しました",
+          ? "✅ 共有学習プールに参加しました"
+          : "✅ 参加を取り消しました",
       );
     } catch {
       setFeatures(prev); // ロールバック
@@ -154,19 +159,24 @@ export function HermesConsentToggle({ overrideTenantId }: HermesConsentTogglePro
       >
         <div>
           <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0, color: "var(--foreground)" }}>
-            🧠 外部(Hermes)へのデータ提供同意
+            🧠 共有学習プールへの参加
           </h2>
           <p style={{ fontSize: 14, color: "var(--muted-foreground)", margin: "6px 0 0", maxWidth: 480 }}>
-            これは社外の分析エージェント(Hermes)へ会話ログ生データを提供するための同意です。
-            R2C社内での学習(FAQ改善・回答の自動学習)は、この同意の有無に関わらず常に行われます。
-            ONにすると、貴社の過去分を含む会話ログ(QA AI・アバターの応答)に加え、その会話に至るまでの
-            ページ閲覧履歴・流入元(URLのパス部分、検索語や会員IDなどのクエリ文字列は除く)がHermesでの
-            分析対象になります。OFFにすると以降の新規データ提供は停止しますが、それまでに提供済みの
-            データへの反映は取り消せません。
+            参加すると、他社の会話から学んだ改善が反映された「グローバルルール」が貴社のAI応答にも
+            使われるようになります(このページに🌐グローバルとして表示されるルール)。その代わりに、
+            貴社の会話ログ(QA AI・アバターとのやり取り。チャットを開いたが発話が無かったセッションを
+            含む)、そこに至るまでのページ閲覧履歴・流入元(URLのパス部分。検索語や会員IDなどの
+            クエリ文字列は除く)、成約時の詳細(金額・成約の種類・成約時点の会話ステージを含む)が、
+            社外の分析基盤での分析対象になります。
+          </p>
+          <p style={{ fontSize: 14, color: "var(--muted-foreground)", margin: "8px 0 0", maxWidth: 480 }}>
+            R2C社内での学習(FAQ改善・回答の自動学習)は、この設定に関わらず常に行われます。
+            ここで操作するのは社外への提供のみです。OFFにすると以降の新規データ提供は停止しますが、
+            それまでに提供済みのデータへの反映は取り消せません。
           </p>
           {forcedByPlan && (
             <p style={{ fontSize: 13, color: "#f0b429", margin: "8px 0 0", maxWidth: 480 }}>
-              ⚠️ 現在のプラン(広告プラン)では、無料でのご提供の対価としてデータ提供が必須です。
+              ⚠️ 現在のプラン(広告プラン)では、無料でのご提供の対価として参加が必須です。
               停止するには有料プランへの変更が必要です。
             </p>
           )}
@@ -178,10 +188,10 @@ export function HermesConsentToggle({ overrideTenantId }: HermesConsentTogglePro
           aria-pressed={consentGranted}
           aria-label={
             forcedByPlan
-              ? "広告プランのためデータ提供は必須です(変更不可)"
+              ? "広告プランのため参加は必須です(変更不可)"
               : consentGranted
-                ? "Hermesへのデータ提供同意を取り消す"
-                : "Hermesへのデータ提供に同意する"
+                ? "共有学習プールへの参加を取り消す"
+                : "共有学習プールに参加する"
           }
           style={{
             padding: "12px 28px",
@@ -207,8 +217,8 @@ export function HermesConsentToggle({ overrideTenantId }: HermesConsentTogglePro
             : forcedByPlan
               ? "🔒 必須(広告プラン)"
               : consentGranted
-                ? "✅ 同意済み"
-                : "⏸️ 未同意"}
+                ? "✅ 参加中"
+                : "⏸️ 未参加"}
         </button>
       </div>
       {toast && (
