@@ -18,6 +18,8 @@ jest.mock("../../../lib/billing/posthogUsageTracker", () => ({
   getMonthlyLLMUsageFromPostHog: jest.fn().mockResolvedValue(null),
 }));
 
+import { getMonthlyLLMUsageFromPostHog } from "../../../lib/billing/posthogUsageTracker";
+
 function makeDevJwt(payload: object): string {
   const header = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url");
   const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
@@ -25,6 +27,7 @@ function makeDevJwt(payload: object): string {
 }
 
 const SUPER_ADMIN_TOKEN = makeDevJwt({ app_metadata: { role: "super_admin" } });
+const CLIENT_ADMIN_TOKEN = makeDevJwt({ app_metadata: { role: "client_admin", tenant_id: "carnation" } });
 
 const mockQuery = jest.fn();
 const db = { query: (...args: unknown[]) => mockQuery(...args) } as unknown as Pool;
@@ -179,5 +182,102 @@ describe("GET /v1/admin/tenants/:id/analytics-summary", () => {
       // float を直接 ROUND に渡す形に戻っていないこと
       expect(sql).not.toMatch(/ROUND\s*\(\s*COUNT\(\*\)\s*\/[^,]*,\s*\d+\s*\)/i);
     }
+  });
+});
+
+// GID 1217969364194602 [H-7]: このタブはCV内訳(macro/micro/rank分布)・source不一致
+// アラートまで返し、routes.ts の /v1/admin/analytics/conversions と同じ「成果分析」の
+// 性質を持つのにplanゲートが一切無かった。conversion(Growth〜)を追加した回帰テスト。
+describe("GET /v1/admin/tenants/:id/analytics-summary — plan ゲート", () => {
+  it("client_admin + plan=starter → 403 plan_upgrade_required、以降のクエリは実行されない", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan: "starter" }] });
+
+    const res = await request(app)
+      .get("/v1/admin/tenants/carnation/analytics-summary?period=last_30d")
+      .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`);
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("plan_upgrade_required");
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it("client_admin + plan=standard → 403(analyticsは開放済みだがconversionはGrowthのまま)", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan: "standard" }] });
+
+    const res = await request(app)
+      .get("/v1/admin/tenants/carnation/analytics-summary?period=last_30d")
+      .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`);
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("plan_upgrade_required");
+  });
+
+  it("client_admin + plan=growth → planゲートを通過する(403にならない)", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan: "growth" }] }); // plan確認
+    mockQuery.mockResolvedValue({ rows: [] }); // 以降の集計クエリ用の汎用フォールバック
+
+    const res = await request(app)
+      .get("/v1/admin/tenants/carnation/analytics-summary?period=last_30d")
+      .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`);
+
+    expect(res.status).not.toBe(403);
+  });
+
+  it("super_adminはplanゲートをバイパスする(plan確認クエリが実行されない)", async () => {
+    const res = await request(app)
+      .get("/v1/admin/tenants/carnation/analytics-summary?period=last_30d")
+      .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`);
+
+    expect(res.status).not.toBe(403);
+    const firstCallSql = mockQuery.mock.calls[0]?.[0] ?? "";
+    expect(firstCallSql).not.toMatch(/SELECT plan FROM tenants/);
+  });
+});
+
+// GID 1217969364194602 [H-7]: llm_usage.cost_jpy はPostHogの $ai_cost(LLM呼び出しの
+// 原価)をJPY換算しただけの値で、テナントへの請求額ではない(costCalculator.ts の
+// MARGIN_MULTIPLIER 参照)。client_adminに見せると粗利率を開示することになるため
+// super_admin限定に絞った回帰テスト。
+describe("GET /v1/admin/tenants/:id/analytics-summary — LLM原価はsuper_admin限定", () => {
+  const mockedGetMonthlyLLMUsage = getMonthlyLLMUsageFromPostHog as jest.Mock;
+
+  beforeEach(() => {
+    mockedGetMonthlyLLMUsage.mockReset();
+  });
+
+  it("client_admin(plan=growthでplanゲート通過済み)にはllm_usageを返さず、PostHogも呼ばない", async () => {
+    mockedGetMonthlyLLMUsage.mockResolvedValue({
+      totalInputTokens: 100,
+      totalOutputTokens: 50,
+      estimatedCostUsd: 1.23,
+      totalGenerations: 3,
+    });
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan: "growth" }] }); // plan確認
+    mockQuery.mockResolvedValue({ rows: [] });
+
+    const res = await request(app)
+      .get("/v1/admin/tenants/carnation/analytics-summary?period=last_30d")
+      .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.llm_usage).toBeNull();
+    expect(mockedGetMonthlyLLMUsage).not.toHaveBeenCalled();
+  });
+
+  it("super_adminにはllm_usage(原価)を返す", async () => {
+    mockedGetMonthlyLLMUsage.mockResolvedValue({
+      totalInputTokens: 100,
+      totalOutputTokens: 50,
+      estimatedCostUsd: 1.23,
+      totalGenerations: 3,
+    });
+
+    const res = await request(app)
+      .get("/v1/admin/tenants/carnation/analytics-summary?period=last_30d")
+      .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.llm_usage).not.toBeNull();
+    expect(res.body.llm_usage.cost_jpy).toBe(Math.round(1.23 * 150));
   });
 });

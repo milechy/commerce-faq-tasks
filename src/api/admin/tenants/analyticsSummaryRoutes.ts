@@ -5,6 +5,7 @@ import { getMonthlyLLMUsageFromPostHog } from "../../../lib/billing/posthogUsage
 import { logger } from "../../../lib/logger";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 import { userSourceClause, userSourceExists } from "../analytics/summaryQueries";
+import { planHasFeature, queryTenantPlan } from "../../../lib/billing/planFeatures";
 
 const PERIOD_DAYS: Record<string, number> = {
   last_7d: 7,
@@ -38,6 +39,23 @@ export function registerAnalyticsSummaryRoutes(app: Express, db: Pool): void {
       const periodKey = (req.query.period as string) ?? "last_30d";
       const days = PERIOD_DAYS[periodKey] ?? 30;
       const interval = `${days} days`;
+
+      // GID 1217969364194602 [H-7]: このタブが返す内容の大半(マクロ/マイクロCV内訳・
+      // rank分布・source不一致アラート)は conversion_attributions 由来の「成果分析」で、
+      // routes.ts の /v1/admin/analytics/conversions と同じ性質。あちらが conversion
+      // (Growth〜)で据え置かれているのに、こちらにゲートが無いのは不整合だったため揃える。
+      // super_adminバイパスは既存のcanAccessTenantの区別に合わせる。
+      const su = (req as AuthedReq).supabaseUser;
+      const isSuperAdmin = su?.app_metadata?.role === "super_admin";
+      if (!isSuperAdmin) {
+        const plan = await queryTenantPlan(db, tenantId);
+        if (!planHasFeature(plan, "conversion")) {
+          return res.status(403).json({
+            error: "plan_upgrade_required",
+            message: "成果分析はGrowthプラン以上でご利用いただけます",
+          });
+        }
+      }
 
       try {
         const [
@@ -123,9 +141,15 @@ export function registerAnalyticsSummaryRoutes(app: Express, db: Pool): void {
         );
 
         // PostHog LLM usage (optional, non-blocking)
+        // GID 1217969364194602 [H-7]: cost_jpy はPostHogの $ai_cost(LLM呼び出しの原価)を
+        // 換算したものであり、テナントへの請求額ではない(costCalculator.ts の
+        // MARGIN_MULTIPLIER 参照。請求は会話単位のプラン料金)。原価をテナント側
+        // (client_admin)に見せると粗利率を開示することになるため super_admin 限定にする。
         const now = new Date();
         const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-        const llmUsage = await getMonthlyLLMUsageFromPostHog(tenantId, month).catch(() => null);
+        const llmUsage = isSuperAdmin
+          ? await getMonthlyLLMUsageFromPostHog(tenantId, month).catch(() => null)
+          : null;
 
         const alertData = alertRow.rows[0];
 
