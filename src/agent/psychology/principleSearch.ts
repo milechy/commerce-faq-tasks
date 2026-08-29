@@ -5,6 +5,11 @@
 import { Pool } from 'pg';
 import { getPool as _getDefaultPool } from '../../lib/db';
 import { embedText } from '../llm/openaiEmbeddingClient';
+import {
+  PRINCIPLE_FIELDS,
+  buildFieldSelect,
+  buildPrincipleWhereClause,
+} from './principleSchemaMap';
 
 export interface PrincipleChunk {
   principle: string;
@@ -41,6 +46,13 @@ function getPool(db?: InstanceType<typeof Pool>): InstanceType<typeof Pool> {
  * 「その場面で使う打ち手」が上位に来る(実測: 「受付で断られてしまいます」→
  * 「相手の注意を引くことで受付突破」が1位)。
  *
+ * ★2026-08-29: 書籍スキーマを psychology_book 決め打ちから複数対応へ変更した★
+ * 書籍の構造化フィールドは contentAnalyzer.ts が書籍ごとに選ぶため、
+ * psychology_book のキー名(principle/situation/...)を SQL に直接埋めると、
+ * sales_manual と判定された書籍が丸ごと原則注入から外れる。実際に本番の
+ * book_id=6(81件)が全て `principle IS NOT NULL` で落ちていた。
+ * 対応表は principleSchemaMap.ts に集約し、SQL はそこから組み立てる。
+ *
  * tenant_id は当該テナント または共有の 'global' テナントを対象とする
  * （他RAG経路 pgvector / langRouter / knowledgeSearchUtil と一貫: `tenant_id = $1 OR 'global'`）。
  * 各テキストフィールドに ragExcerpt.slice(0, 200) を適用（書籍内容漏洩防止）。
@@ -72,16 +84,17 @@ export async function searchPrincipleChunks(
       contraindication: string | null;
     }
 
+    // SELECT 句・WHERE 句は principleSchemaMap.ts の対応表から機械生成する
+    // (スキーマ追加時に SQL を手で書き換えないため)。
+    const selectClause = PRINCIPLE_FIELDS.map(buildFieldSelect).join(',\n        ');
+
     const result = await pool.query<RawRow>(
       `SELECT
-        metadata->>'principle' as principle,
-        metadata->>'situation' as situation,
-        metadata->>'example' as example,
-        metadata->>'contraindication' as contraindication
+        ${selectClause}
        FROM faq_embeddings
        WHERE (tenant_id = $1 OR tenant_id = 'global')
          AND metadata->>'source' = 'book'
-         AND metadata->>'principle' IS NOT NULL
+         AND ${buildPrincipleWhereClause()}
          AND (is_excluded_from_search IS NULL OR is_excluded_from_search = false)
        ORDER BY embedding <-> $2::vector
        LIMIT $3`,

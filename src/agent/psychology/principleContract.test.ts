@@ -20,6 +20,8 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import { PRINCIPLE_NAMES, isKnownPrinciple } from "./principleVocabulary";
 import { KEYWORD_MAP } from "./principleDetector";
+import { PRINCIPLE_SCHEMA_MAPPINGS, PRINCIPLE_FIELDS } from "./principleSchemaMap";
+import { KNOWN_SCHEMAS } from "../../lib/book-pipeline/contentAnalyzer";
 
 const READ = (relPath: string): string =>
   readFileSync(join(__dirname, "..", "..", "..", relPath), "utf-8");
@@ -53,21 +55,69 @@ describe("config/bookStructurizerPrompt.md の few-shot例は既知の原則名�
 });
 
 describe("bookStructurizer.ts が書く metadata は principleSearch.ts が読むキーを包含する", () => {
-  it("faq_embeddings.metadata の書き込みキー集合に、principleSearch の SELECT対象キーが全て含まれる", () => {
+  // 2026-08-29: principleSearch.ts はキー名を SQL に直書きせず
+  // principleSchemaMap.ts の対応表から生成するようになったため、
+  // 突き合わせ先を「ソース中の metadata->>'xxx' リテラル」から対応表に変更した。
+  // 経路2(bookStructurizer.ts)が書くのは psychology_book スキーマのみなので、
+  // 突き合わせ対象もそのマッピングに限定する。
+  it("faq_embeddings.metadata の書き込みキー集合に、psychology_book マッピングの参照キーが全て含まれる", () => {
     const producer = READ("src/agent/knowledge/bookStructurizer.ts");
-    const consumer = READ("src/agent/psychology/principleSearch.ts");
 
     // 書き側: `const metadata = { ... };` ブロック内の識別子キーを抽出する
     const metadataBlockMatch = producer.match(/const metadata = \{([\s\S]*?)\};/);
     expect(metadataBlockMatch).not.toBeNull();
     const writtenKeys = [...metadataBlockMatch![1]!.matchAll(/^\s*(\w+):/gm)].map((m) => m[1]!);
 
-    // 読み側: `metadata->>'xxx'` で参照しているキーを抽出する
-    const readKeys = [...consumer.matchAll(/metadata->>'(\w+)'/g)].map((m) => m[1]!);
+    const mapping = PRINCIPLE_SCHEMA_MAPPINGS.find((m) => m.contentType === "psychology_book");
+    expect(mapping).toBeDefined();
+    const readKeys = PRINCIPLE_FIELDS.map((f) => mapping![f]).filter(
+      (k): k is string => k !== null,
+    );
     expect(readKeys.length).toBeGreaterThan(0);
 
     for (const key of readKeys) {
       expect(writtenKeys).toContain(key);
+    }
+  });
+
+  it("principleSearch.ts はキー名を SQL に直書きしない(対応表から生成する)", () => {
+    // 直書きに戻すと、sales_manual 等の別スキーマで取り込まれた書籍が
+    // 再び原則注入から丸ごと外れる(本番 book_id=6 の81件が該当していた)。
+    const consumer = READ("src/agent/psychology/principleSearch.ts");
+    const sqlBlock = consumer.slice(consumer.indexOf("pool.query<RawRow>"));
+    expect(sqlBlock).not.toMatch(/metadata->>'(principle|situation|example|contraindication)'/);
+    expect(consumer).toContain("buildFieldSelect");
+    expect(consumer).toContain("buildPrincipleWhereClause");
+  });
+});
+
+describe("principleSchemaMap.ts の対応表は contentAnalyzer.ts の KNOWN_SCHEMAS と整合する", () => {
+  it("各マッピングの contentType が KNOWN_SCHEMAS に実在する", () => {
+    for (const mapping of PRINCIPLE_SCHEMA_MAPPINGS) {
+      expect(Object.keys(KNOWN_SCHEMAS)).toContain(mapping.contentType);
+    }
+  });
+
+  it("各マッピングが参照するキーが、そのスキーマのフィールドとして実在する", () => {
+    // 継ぎ目バグの本体: 存在しないキーを指すと、そのスキーマの書籍は
+    // 「対象になっているのに全フィールドが空」という無言の壊れ方をする。
+    for (const mapping of PRINCIPLE_SCHEMA_MAPPINGS) {
+      const schemaKeys = (KNOWN_SCHEMAS[mapping.contentType] ?? []).map((f) => f.key);
+      expect(schemaKeys.length).toBeGreaterThan(0);
+      for (const field of PRINCIPLE_FIELDS) {
+        const key = mapping[field];
+        if (key === null) continue;
+        expect(schemaKeys).toContain(key);
+      }
+    }
+  });
+
+  it("打ち手フィールド(principle)は null にできない", () => {
+    // principle が無いスキーマは原則注入の対象にしてはいけない
+    // (product_catalog / business_document / general_report が該当)。
+    for (const mapping of PRINCIPLE_SCHEMA_MAPPINGS) {
+      expect(typeof mapping.principle).toBe("string");
+      expect(mapping.principle.length).toBeGreaterThan(0);
     }
   });
 });
