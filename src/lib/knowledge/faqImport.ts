@@ -26,6 +26,7 @@ import { logger } from '../logger';
 import { buildFaqCategoryPromptSection } from './faqCategories';
 import { insertFaqEmbeddingAsync, upsertFaqToEs } from './faqIndexSync';
 import { trackUsage } from '../billing/usageTracker';
+import { safeFetch } from '../net/ssrfGuard';
 
 export interface FaqEntry {
   question: string;
@@ -359,9 +360,11 @@ export async function scrapeUrlToFaqs(
   usage?: FaqGenUsageContext,
 ): Promise<ScrapeUrlResult> {
   try {
-    const html = await fetch(url, {
+    // SSRF 対策: スキーム制限・DNS 解決先 IP 検査・redirect 手動追跡・
+    // タイムアウト・サイズ上限を safeFetch で強制する（メタデータ/内部IPを封鎖）。
+    const html = await safeFetch(url, {
       headers: { "User-Agent": "Mozilla/5.0 (compatible; R2C/1.0)" },
-      signal: AbortSignal.timeout(10_000),
+      timeoutMs: 10_000,
     }).then((r) => r.text());
 
     // OG/JSON-LD から商品メタを抽出（script/style 除去前の生 HTML を使う）
