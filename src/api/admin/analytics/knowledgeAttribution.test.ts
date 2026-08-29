@@ -253,9 +253,88 @@ describe('GET /v1/admin/analytics/knowledge-attribution', () => {
     expect(res.body.items[0].injected_count).toBe(7);
   });
 
+  // 2026-08-29 テスト強化: retrieved/injected の4通りの組み合わせが1チャンクに
+  // 混在したときの usage_count / injected_count。実SQLの FILTER 集計は本ファイルの
+  // mockQuery では実行できない(pool.query をモックしているため)。summaryQueries.ts の
+  // コメントに明記された仕様(COALESCE(retrieved, true) で usage_count、injected で
+  // injected_count)をここでも独立に再現し、DB応答としてルートへ渡すことで、
+  // どちらか一方の集計ロジックだけを見て「合っていそう」と誤読しないよう固定する。
+  it('retrieved/injectedの4通りが1チャンクに混在したときの usage_count / injected_count', async () => {
+    const rawEntries: Array<{ retrieved?: boolean; injected?: boolean }> = [
+      { retrieved: true, injected: true }, // 検索ヒット かつ 注入
+      { retrieved: true }, // 検索ヒットのみ
+      { retrieved: false, injected: true }, // 注入専用（通常RAGに乗らない）→ usage_count に入らない
+      {}, // 旧形式（キー無し）→ COALESCE(retrieved, true) で usage_count に入る
+    ];
+    const expectedUsageCount = rawEntries.filter((e) => (e.retrieved ?? true) === true).length;
+    const expectedInjectedCount = rawEntries.filter((e) => e.injected === true).length;
+    expect(expectedUsageCount).toBe(3);
+    expect(expectedInjectedCount).toBe(2);
+
+    const rows: AttrRow[] = [
+      {
+        chunk_id: '505',
+        src_type: 'book',
+        principle: 'reciprocity',
+        usage_count: expectedUsageCount,
+        injected_count: expectedInjectedCount,
+        conversation_count: 4,
+        conversion_count: 1,
+        conversion_rate: 0.25,
+        avg_judge_score: 60,
+        raw_text: '混在パターン',
+        book_title: '影響力の武器',
+        prev_rate: 0,
+        prev_conversation_count: 0,
+      },
+    ];
+    mockQuery.mockResolvedValueOnce({ rows });
+
+    const res = await request(makeApp())
+      .get('/v1/admin/analytics/knowledge-attribution')
+      .set('x-tenant-id', 'tenant-A');
+
+    expect(res.body.items[0].usage_count).toBe(3);
+    expect(res.body.items[0].injected_count).toBe(2);
+  });
+
+  // judge_score が全件 null のとき、ORDER BY に NULLS LAST が効いていないと
+  // 昇順/降順の実装次第で null が上位を占めうる(CLAUDE.md 禁止34と同系統の懸念)。
+  it('sort_by=judge_score のとき ORDER BY に NULLS LAST が付く(全件nullで上位を占めない)', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await request(makeApp())
+      .get('/v1/admin/analytics/knowledge-attribution')
+      .query({ sort_by: 'judge_score' })
+      .set('x-tenant-id', 'tenant-A');
+
+    const [sql] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toMatch(/ORDER BY\s+avg_judge_score\s+DESC\s+NULLS LAST/);
+  });
+
   // -------------------------------------------------------------------------
   // RBAC
   // -------------------------------------------------------------------------
+
+  it('super_admin: テナントを連続で切り替えても、各リクエストのパラメータは常にそのリクエスト自身のテナントに束縛される(前テナントの値が残らない)', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await request(makeApp())
+      .get('/v1/admin/analytics/knowledge-attribution')
+      .query({ tenant_id: 'tenant-X' })
+      .set('x-role', 'super_admin');
+
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await request(makeApp())
+      .get('/v1/admin/analytics/knowledge-attribution')
+      .query({ tenant_id: 'tenant-Y' })
+      .set('x-role', 'super_admin');
+
+    expect(mockQuery).toHaveBeenCalledTimes(2);
+    const [, paramsFirst] = mockQuery.mock.calls[0] as [string, unknown[]];
+    const [, paramsSecond] = mockQuery.mock.calls[1] as [string, unknown[]];
+    expect(paramsFirst[0]).toBe('tenant-X');
+    expect(paramsSecond[0]).toBe('tenant-Y');
+    expect(paramsSecond).not.toContain('tenant-X');
+  });
 
   it('super_admin: ?tenant_id で任意テナントを指定可能', async () => {
     mockQuery.mockResolvedValueOnce({ rows: [] });
