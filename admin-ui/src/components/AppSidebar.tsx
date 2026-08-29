@@ -15,6 +15,7 @@ import {
   FileText,
   CreditCard,
   LogOut,
+  KeyRound,
   BellRing,
   X,
   GitBranch,
@@ -390,6 +391,23 @@ function SidebarContent({ onClose }: SidebarContentProps) {
                 {user.email}
               </div>
             </div>
+            <button
+              onClick={() => navigate("/admin/account")}
+              title="アカウント設定"
+              style={{
+                background: "none",
+                border: "none",
+                color: "var(--muted-foreground)",
+                cursor: "pointer",
+                padding: 4,
+                borderRadius: "var(--radius-sm)",
+                display: "flex",
+                alignItems: "center",
+                flexShrink: 0,
+              }}
+            >
+              <KeyRound size={15} />
+            </button>
             <button
               onClick={() => void handleLogout()}
               title="ログアウト"
