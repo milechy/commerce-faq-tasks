@@ -1246,9 +1246,20 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
 
     try {
       // ユーザーを招待（メール送信）
+      //
+      // ★redirectTo を明示する理由★
+      // 省略すると着地先が Supabase ダッシュボードの Site URL 設定に依存し、
+      // コード側からは何も保証できない(設定変更に無言で追随してしまう)。
+      // 招待された人は初回にここでパスワードを自分で設定するため、着地に失敗すると
+      // ログインする手段が無い。Login.tsx の resetPasswordForEmail が使う
+      // `${origin}/reset-password` と同じ着地先へ明示的に送る。
+      const adminUiUrl = (process.env.ADMIN_UI_URL || "https://admin.r2c.biz").replace(/\/$/, "");
       const { data: inviteData, error: inviteError } = await supabaseAdmin.auth.admin.inviteUserByEmail(
         email,
-        { data: { role: "client_admin", tenant_id: id } }
+        {
+          data: { role: "client_admin", tenant_id: id },
+          redirectTo: `${adminUiUrl}/reset-password`,
+        }
       );
 
       if (inviteError) {
