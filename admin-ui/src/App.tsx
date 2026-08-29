@@ -9,6 +9,7 @@ import { AuthProvider, useAuth } from "./auth/useAuth";
 import { RequireAuth, SuperAdminRoute, AdminRoute } from "./components/RoleGuard";
 import Login from "./pages/Login";
 import AdminDashboard from "./pages/admin/index";
+import AccountPage from "./pages/admin/account/index";
 import KnowledgeIndexPage from "./pages/admin/knowledge/index";
 import TenantKnowledgePage from "./pages/admin/knowledge/[tenantId]";
 import MonitoringPage from "./pages/admin/monitoring/index";
@@ -110,6 +111,9 @@ export const ADMIN_ROUTES = (
 
         {/* 管理ダッシュボード */}
         <Route path="/admin" element={<RequireAuth><AdminDashboard /></RequireAuth>} />
+
+        {/* アカウント設定(パスワード変更)。全ロール共通 */}
+        <Route path="/admin/account" element={<RequireAuth><AccountPage /></RequireAuth>} />
 
         {/* ナレッジ管理 — テナント選択 */}
         <Route path="/admin/knowledge" element={<RequireAuth><KnowledgeIndexPage /></RequireAuth>} />
