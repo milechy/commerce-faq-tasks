@@ -7,11 +7,12 @@
 // 検索 index に届かない（= book pipeline が無言で検索に反映されない）バグだった。
 // 本テストは upsert 先 index が resolveFaqWriteIndex と一致し、ES_FAQ_INDEX を無視することを保証する。
 
-import { upsertToEs, structurizeBook } from './bookStructurizer';
+import { upsertToEs, structurizeBook, buildSearchText } from './bookStructurizer';
 import { resolveFaqWriteIndex } from '../../search/langIndex';
 import { callGeminiJudge } from '../../lib/gemini/client';
 import { getPool } from '../../lib/db';
 import { embedText } from '../llm/openaiEmbeddingClient';
+import { buildSearchTextFields } from '../psychology/principleSchemaMap';
 
 jest.mock('../../lib/gemini/client', () => ({ callGeminiJudge: jest.fn() }));
 jest.mock('../../lib/db', () => ({ getPool: jest.fn() }));
@@ -157,5 +158,63 @@ describe('bookStructurizer structurizeBook — metadata の継ぎ目 (2026-08-29
     expect(result.structuredCount).toBe(1);
     expect(result.skippedCount).toBe(0);
     expect(insertedMetadata().principle).toBe('希少性');
+  });
+});
+
+// T5: buildSearchText をスキーマ非依存にするリファクタ。
+// 経路2(structurizeBook)の出力は変えず、T6(チャンク編集の再埋め込み)で
+// psychology_book / sales_manual 双方に使えることを検証する。
+describe('buildSearchText — スキーマ非依存化 (T5)', () => {
+  it('ラベル付きフィールドを【label】value の形で連結する', () => {
+    const text = buildSearchText([
+      { label: '原則', value: 'アンカリング効果' },
+      { label: '状況', value: '価格提示の前' },
+    ]);
+    expect(text).toBe('【原則】アンカリング効果\n【状況】価格提示の前');
+  });
+
+  it('800字を超える場合は切り詰める', () => {
+    const text = buildSearchText([{ label: '原則', value: 'あ'.repeat(900) }]);
+    expect(text.length).toBe(800);
+  });
+
+  it('psychology_book スキーマの metadata から妥当な検索テキストが組み立つ', () => {
+    const fields = buildSearchTextFields('psychology_book', {
+      principle: 'アンカリング効果',
+      situation: '価格提示の前に基準値を示す',
+      example: '通常価格を先に見せる',
+      contraindication: '誇大広告は禁止',
+    });
+    const text = buildSearchText(fields);
+    expect(text).toContain('アンカリング効果');
+    expect(text).toContain('価格提示の前に基準値を示す');
+    expect(text).toContain('通常価格を先に見せる');
+    expect(text).toContain('誇大広告は禁止');
+  });
+
+  it('sales_manual スキーマの metadata から妥当な検索テキストが組み立つ(problem/solution/objection_handling)', () => {
+    const fields = buildSearchTextFields('sales_manual', {
+      target_customer: '中小企業の経営者',
+      problem: '商談の主導権をお客さまに握られてしまう',
+      solution: '営業マンがプロフェッショナルとして知識を提供し、お客さまを助ける',
+      benefit: '営業マンが売れる',
+      objection_handling: '価格が高いと言われたら価値を再説明する',
+    });
+    const text = buildSearchText(fields);
+    expect(text).toContain('商談の主導権をお客さまに握られてしまう');
+    expect(text).toContain('営業マンがプロフェッショナルとして知識を提供し、お客さまを助ける');
+    expect(text).toContain('価格が高いと言われたら価値を再説明する');
+    // benefit / target_customer は principleSchemaMap.ts の対応表で意図的に未使用
+    expect(text).not.toContain('営業マンが売れる');
+    expect(text).not.toContain('中小企業の経営者');
+  });
+
+  it('対応表に無いスキーマ(product_catalog等)は空配列になる', () => {
+    const fields = buildSearchTextFields('product_catalog', {
+      product_name: '商品A',
+      spec: '仕様',
+    });
+    expect(fields).toEqual([]);
+    expect(buildSearchText(fields)).toBe('');
   });
 });

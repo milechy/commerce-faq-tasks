@@ -123,3 +123,37 @@ export function resolvePrincipleFromMetadata(
   }
   return undefined;
 }
+
+/** PRINCIPLE_FIELDS の各要素を検索テキストに埋め込むときの日本語ラベル。 */
+const PRINCIPLE_FIELD_LABELS: Record<PrincipleField, string> = {
+  principle: "原則",
+  situation: "状況",
+  example: "例",
+  contraindication: "禁忌",
+};
+
+/**
+ * 指定スキーマの metadata から、bookStructurizer.ts の `buildSearchText` に渡す
+ * ラベル付きフィールドを組み立てる(T6: チャンク編集後の再埋め込みで使用)。
+ *
+ * 対応表に無いスキーマ(product_catalog 等、打ち手フィールドを持たない)は空配列を返す。
+ * 値が空文字/未設定のフィールドは省く(スキーマによっては対応キーが無いため)。
+ */
+export function buildSearchTextFields(
+  contentType: string,
+  metadata: Record<string, unknown>,
+): { label: string; value: string }[] {
+  const mapping = PRINCIPLE_SCHEMA_MAPPINGS.find((m) => m.contentType === contentType);
+  if (!mapping) return [];
+
+  const fields: { label: string; value: string }[] = [];
+  for (const field of PRINCIPLE_FIELDS) {
+    const key = mapping[field];
+    if (key === null) continue;
+    const value = metadata[key];
+    if (typeof value === "string" && value !== "") {
+      fields.push({ label: PRINCIPLE_FIELD_LABELS[field], value });
+    }
+  }
+  return fields;
+}

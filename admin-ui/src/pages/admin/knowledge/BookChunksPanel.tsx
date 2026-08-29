@@ -16,6 +16,16 @@ interface ChunkMetadata extends Record<string, unknown> {
   source?: string;
   book_id?: string | number;
   page_number?: number | null;
+  // T6: 反映状態(再埋め込みの成否)。値が無い = このチャンクの内容はAIの学習対象外
+  // (打ち手を表すフィールドを持たないスキーマ)。
+  embedding_status?: "pending" | "done" | "failed";
+  edit_history?: EditHistoryEntry[];
+}
+
+interface EditHistoryEntry {
+  at: string;
+  by: string | null;
+  changes: Record<string, { from: string | null; to: string | null }>;
 }
 
 interface BookChunk {
@@ -45,7 +55,13 @@ interface Props {
   bookId: number;
   bookTitle: string;
   bookStatus: string;
-  tenantId: string;
+  /**
+   * この書籍が属するテナントID(閲覧者のテナントではない)。
+   * T7で保存前の影響範囲表示に使う("global"なら赤嶺氏の書籍=全社影響)。
+   * 閲覧者(super_admin)のテナント文脈とは別物であり、混同すると
+   * 影響範囲メッセージが正反対に出る(2026-08-29 レビューで発覚)。
+   */
+  bookTenantId: string;
   onClose: () => void;
   onChunkDeleted?: () => void;
 }
@@ -77,6 +93,41 @@ const STATUS_COLOR: Record<string, string> = {
   embedded: "#4ade80",
   failed: "#f87171",
 };
+
+// T7: 反映状態の表示文言。読み手のITリテラシーを前提にしないため、
+// チャンク/ベクトル/埋め込み/反映済み・未反映等の専門語は使わない。
+const REFLECTION_LABEL: Record<"pending" | "done" | "failed", string> = {
+  pending: "🧠 AIが覚え直しています…",
+  done: "✅ AIが覚えました",
+  failed: "⚠️ AIが覚えるのに失敗しました（内容は保存されています）",
+};
+
+const REFLECTION_COLOR: Record<"pending" | "done" | "failed", string> = {
+  pending: "#60a5fa",
+  done: "#4ade80",
+  failed: "#f87171",
+};
+
+function reflectionState(metadata: ChunkMetadata): "pending" | "done" | "failed" | null {
+  const status = metadata.embedding_status;
+  if (status === "pending" || status === "done" || status === "failed") return status;
+  return null;
+}
+
+// PUTのエラーはサーバーの生メッセージをそのまま出さない
+// (403の「他のテナントのデータには…」のように画面禁止語を含みうるため)。
+function friendlySaveError(status: number): string {
+  switch (status) {
+    case 403:
+      return "この内容は編集できません。";
+    case 404:
+      return "この内容は見つかりませんでした。画面を更新してからもう一度お試しください。";
+    case 409:
+      return "AIが今ちょうど覚えている最中です。少し待ってからもう一度お試しください。";
+    default:
+      return "保存できませんでした。時間をおいてもう一度お試しください。";
+  }
+}
 
 // ─── スタイル定数 ────────────────────────────────────────────────────────────────
 
@@ -125,6 +176,7 @@ export default function BookChunksPanel({
   bookId,
   bookTitle,
   bookStatus,
+  bookTenantId,
   onClose,
   onChunkDeleted,
 }: Props) {
@@ -142,6 +194,9 @@ export default function BookChunksPanel({
   // 削除状態
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  // T7: 取り消し状態（直前の編集を元に戻す。専用の履歴画面は置かず、その場のボタンで完結させる）
+  const [undoingId, setUndoingId] = useState<number | null>(null);
 
   // トースト
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
@@ -206,6 +261,13 @@ export default function BookChunksPanel({
     setEditingId(null);
   };
 
+  const putChunk = (chunkId: number, body: Record<string, string | null>) =>
+    fetchWithAuth(`${API_BASE}/v1/admin/knowledge/book-pdf/chunks/${chunkId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
   const handleSave = async (chunkId: number) => {
     setSaving(true);
     try {
@@ -213,26 +275,56 @@ export default function BookChunksPanel({
       for (const f of activeSchema) {
         body[f.key] = editFields[f.key]?.trim() || null;
       }
-      const res = await fetchWithAuth(
-        `${API_BASE}/v1/admin/knowledge/book-pdf/chunks/${chunkId}`,
-        {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        }
-      );
+      const res = await putChunk(chunkId, body);
       if (!res.ok) {
-        const d = (await res.json()) as { error?: string };
-        showToast(d.error ?? "保存に失敗しました", false);
+        showToast(friendlySaveError(res.status), false);
         return;
       }
-      showToast("チャンクを更新しました", true);
+      const data = (await res.json()) as { metadata?: ChunkMetadata };
+      if (data.metadata?.embedding_status === "failed") {
+        showToast("内容は保存できましたが、AIが覚えるのに失敗しました", false);
+      } else {
+        showToast("保存しました", true);
+      }
       setEditingId(null);
       void loadChunks();
     } catch {
-      showToast("保存に失敗しました", false);
+      showToast("保存できませんでした", false);
     } finally {
       setSaving(false);
+    }
+  };
+
+  // T7: 直前の編集を取り消す。専用の取り消しAPIは作らず、編集履歴の最後の1件が
+  // 持つ「変更前の値」を通常の保存と同じPUTに投げ直すことで実現する。
+  const handleUndo = async (chunk: BookChunk) => {
+    const history = chunk.metadata.edit_history ?? [];
+    const last = history[history.length - 1];
+    if (!last) return;
+
+    const body: Record<string, string | null> = {};
+    for (const [field, diff] of Object.entries(last.changes)) {
+      body[field] = diff.from;
+    }
+
+    setUndoingId(chunk.id);
+    try {
+      const res = await putChunk(chunk.id, body);
+      if (!res.ok) {
+        showToast(friendlySaveError(res.status), false);
+        return;
+      }
+      const data = (await res.json()) as { metadata?: ChunkMetadata };
+      if (data.metadata?.embedding_status === "failed") {
+        showToast("元に戻しましたが、AIが覚えるのに失敗しました", false);
+      } else {
+        showToast("直前の変更を取り消しました", true);
+      }
+      void loadChunks();
+    } catch {
+      showToast("保存できませんでした", false);
+    } finally {
+      setUndoingId(null);
     }
   };
 
@@ -426,6 +518,8 @@ export default function BookChunksPanel({
                   saving={saving}
                   deletingId={deletingId}
                   deleting={deleting}
+                  undoingId={undoingId}
+                  isGlobal={bookTenantId === "global"}
                   onStartEdit={() => startEdit(chunk)}
                   onCancelEdit={cancelEdit}
                   onEditFieldChange={(key, val) =>
@@ -435,6 +529,7 @@ export default function BookChunksPanel({
                   onDeleteRequest={() => setDeletingId(chunk.id)}
                   onDeleteCancel={() => setDeletingId(null)}
                   onDeleteConfirm={() => void confirmDelete(chunk.id)}
+                  onUndo={() => void handleUndo(chunk)}
                 />
                 );
               })}
@@ -457,6 +552,8 @@ interface ChunkCardProps {
   saving: boolean;
   deletingId: number | null;
   deleting: boolean;
+  undoingId: number | null;
+  isGlobal: boolean;
   onStartEdit: () => void;
   onCancelEdit: () => void;
   onEditFieldChange: (key: string, val: string) => void;
@@ -464,6 +561,7 @@ interface ChunkCardProps {
   onDeleteRequest: () => void;
   onDeleteCancel: () => void;
   onDeleteConfirm: () => void;
+  onUndo: () => void;
 }
 
 function ChunkCard({
@@ -475,6 +573,8 @@ function ChunkCard({
   saving,
   deletingId,
   deleting,
+  undoingId,
+  isGlobal,
   onStartEdit,
   onCancelEdit,
   onEditFieldChange,
@@ -482,8 +582,12 @@ function ChunkCard({
   onDeleteRequest,
   onDeleteCancel,
   onDeleteConfirm,
+  onUndo,
 }: ChunkCardProps) {
   const isDeleting = deletingId === chunk.id;
+  const isUndoing = undoingId === chunk.id;
+  const canUndo = (chunk.metadata.edit_history?.length ?? 0) > 0;
+  const reflection = reflectionState(chunk.metadata);
 
   // 構造化ステータスを動的スキーマキーで判定
   const isStructured = activeSchema.some(
@@ -579,12 +683,48 @@ function ChunkCard({
             >
               {isStructured ? "✅ 構造化済み" : "⬜ 未構造化"}
             </span>
+            {reflection && (
+              <span
+                style={{
+                  padding: "2px 8px",
+                  borderRadius: 999,
+                  fontSize: 11,
+                  fontWeight: 600,
+                  background: `${REFLECTION_COLOR[reflection]}22`,
+                  border: `1px solid ${REFLECTION_COLOR[reflection]}55`,
+                  color: REFLECTION_COLOR[reflection],
+                }}
+              >
+                {REFLECTION_LABEL[reflection]}
+              </span>
+            )}
           </div>
         </div>
 
         {/* 操作ボタン（編集・削除中は非表示） */}
         {!isEditing && !isDeleting && (
           <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+            {canUndo && (
+              <button
+                onClick={onUndo}
+                disabled={isUndoing}
+                style={{
+                  padding: "8px 14px",
+                  minHeight: 44,
+                  borderRadius: 8,
+                  border: "1px solid var(--border)",
+                  background: "transparent",
+                  color: "var(--muted-foreground)",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: isUndoing ? "not-allowed" : "pointer",
+                  whiteSpace: "nowrap",
+                  opacity: isUndoing ? 0.6 : 1,
+                }}
+              >
+                {isUndoing ? "取り消し中…" : "↩ 元に戻す"}
+              </button>
+            )}
             <button
               onClick={onStartEdit}
               style={{
@@ -717,6 +857,23 @@ function ChunkCard({
             ))}
           </div>
 
+          {/* T7: 保存前に影響範囲を日常語で提示する（global=書籍を使う全社/テナント固有=自社のみ） */}
+          <div
+            style={{
+              fontSize: 12,
+              color: "var(--muted-foreground)",
+              marginBottom: 10,
+              padding: "8px 10px",
+              borderRadius: 8,
+              background: "rgba(96,165,250,0.06)",
+              border: "1px solid rgba(96,165,250,0.15)",
+            }}
+          >
+            {isGlobal
+              ? "この変更は、あなたの本を使っている全部の会社の回答が変わります"
+              : "この変更は、あなたの会社の中だけで有効です"}
+          </div>
+
           <div style={{ display: "flex", gap: 8 }}>
             <button
               onClick={onCancelEdit}
@@ -755,7 +912,7 @@ function ChunkCard({
                 opacity: !hasChanges && !saving ? 0.5 : 1,
               }}
             >
-              {saving ? "保存中..." : "保存"}
+              {saving ? "🧠 AIが覚え直しています…" : "保存"}
             </button>
           </div>
         </div>

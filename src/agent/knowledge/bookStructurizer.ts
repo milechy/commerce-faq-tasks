@@ -67,14 +67,17 @@ function truncateField(value: unknown): string {
   return String(value ?? '').slice(0, FIELD_MAX_CHARS);
 }
 
-function buildSearchText(p: StructuredPrinciple): string {
-  // Combine fields for embedding — each already truncated to FIELD_MAX_CHARS
-  return [
-    `【原則】${p.principle}`,
-    `【状況】${p.situation}`,
-    `【抵抗】${p.resistance}`,
-    `【例文】${p.example}`,
-  ]
+/**
+ * ラベル付きフィールドから検索用テキストを組み立てる(スキーマ非依存)。
+ *
+ * 従来 psychology_book 前提(【原則】【状況】【抵抗】【例文】)に決め打ちされていたが、
+ * T6(チャンク編集の再埋め込み)で sales_manual 等の別スキーマにも使うため、
+ * どのフィールドをどのラベルで埋め込むかは呼び出し側(principleSchemaMap.ts の
+ * `buildSearchTextFields` など)に委ねる形に汎用化した。
+ */
+export function buildSearchText(fields: { label: string; value: string }[]): string {
+  return fields
+    .map((f) => `【${f.label}】${f.value}`)
     .join('\n')
     .slice(0, 800); // 800字以内でベクトル化
 }
@@ -213,7 +216,14 @@ export async function structurizeBook(
 
     // 各原則をfaq_embeddingsに保存
     for (const principle of principles) {
-      const searchText = buildSearchText(principle);
+      // 経路2(bookStructurizer)は常にこの4フィールドで検索テキストを組み立てる
+      // (振る舞い不変: 従来の buildSearchText(p: StructuredPrinciple) と同じ出力)。
+      const searchText = buildSearchText([
+        { label: '原則', value: principle.principle },
+        { label: '状況', value: principle.situation },
+        { label: '抵抗', value: principle.resistance },
+        { label: '例文', value: principle.example },
+      ]);
 
       let vector: number[];
       try {

@@ -32,8 +32,16 @@ jest.mock("../../../lib/book-pipeline/pipelineQueue", () => ({
   pipelineQueue: { enqueue: jest.fn().mockResolvedValue(undefined) },
 }));
 
+// T6: チャンク編集時の再埋め込みを個別に制御するため embedText をモックする
+// (NODE_ENV=test のデフォルト挙動はランダムベクトルで常に成功するため、
+// 障害系のテストには使えない)。
+jest.mock("../../../agent/llm/openaiEmbeddingClient", () => ({
+  embedText: jest.fn().mockResolvedValue(Array.from({ length: 5 }, () => 0.1)),
+}));
+
 import { supabaseAdmin } from "../../../auth/supabaseClient";
 import { logger } from "../../../lib/logger";
+import { embedText } from "../../../agent/llm/openaiEmbeddingClient";
 
 // ── テスト用 Express アプリ生成 ───────────────────────────────────────────
 function makeApp(opts: {
@@ -397,6 +405,372 @@ describe("DELETE /v1/admin/knowledge/book-pdf/:id", () => {
     } finally {
       global.fetch = originalFetch;
       if (origEsUrl !== undefined) process.env.ES_URL = origEsUrl; else delete process.env.ES_URL;
+    }
+  });
+});
+
+// ─── PUT /chunks/:chunkId テスト(T6: 再埋め込み + 編集履歴) ────────────────
+
+describe("PUT /v1/admin/knowledge/book-pdf/chunks/:chunkId", () => {
+  /**
+   * チャンク編集のDBモック。SELECT/CAS-UPDATE/embedding確定UPDATE/失敗時UPDATEの
+   * 4種類のクエリ形を SQL 文字列で判別する。
+   */
+  function makeChunkDb(chunkRow: {
+    id: number;
+    metadata: Record<string, unknown>;
+    is_excluded_from_search: boolean;
+    tenant_id: string;
+  } | null) {
+    const calls: { sql: string; params: unknown[] }[] = [];
+    // Postgres の `metadata || $1::jsonb` を模して、UPDATEのたびに累積させる
+    // (実DBは毎回同じ行を上書きするため、途中UPDATEの結果を次のUPDATEが引き継ぐ)。
+    let currentMetadata = chunkRow ? { ...chunkRow.metadata } : {};
+    const db: any = {
+      query: jest.fn().mockImplementation((sql: string, params: unknown[] = []) => {
+        calls.push({ sql, params });
+
+        if (sql.includes("JOIN book_uploads bu")) {
+          return chunkRow
+            ? Promise.resolve({ rows: [{ ...chunkRow, metadata: currentMetadata }], rowCount: 1 })
+            : Promise.resolve({ rows: [], rowCount: 0 });
+        }
+
+        if (sql.includes("COALESCE(metadata->>'embedding_status'")) {
+          const meta = currentMetadata as Record<string, unknown>;
+          const staleCutoff = params[2] as string;
+          const updatedAt = meta["embedding_updated_at"] as string | undefined;
+          const stillFreshlyPending =
+            meta["embedding_status"] === "pending" &&
+            (updatedAt == null ? false : new Date(updatedAt) >= new Date(staleCutoff));
+          if (stillFreshlyPending) {
+            return Promise.resolve({ rows: [], rowCount: 0 });
+          }
+          const patch = JSON.parse(params[0] as string);
+          currentMetadata = { ...currentMetadata, ...patch };
+          return Promise.resolve({
+            rows: [{ id: chunkRow!.id, metadata: currentMetadata }],
+            rowCount: 1,
+          });
+        }
+
+        if (sql.includes("embedding = $1::vector")) {
+          const patch = JSON.parse(params[1] as string);
+          currentMetadata = { ...currentMetadata, ...patch };
+          return Promise.resolve({
+            rows: [{ id: chunkRow!.id, metadata: currentMetadata }],
+            rowCount: 1,
+          });
+        }
+
+        // 失敗時フォールバックUPDATE(embedding_status: 'failed')
+        const patch = JSON.parse(params[0] as string);
+        currentMetadata = { ...currentMetadata, ...patch };
+        return Promise.resolve({
+          rows: [{ id: chunkRow!.id, metadata: currentMetadata }],
+          rowCount: 1,
+        });
+      }),
+    };
+    return { db, calls };
+  }
+
+  function makeChunkApp(
+    chunkRow: { id: number; metadata: Record<string, unknown>; is_excluded_from_search: boolean; tenant_id: string } | null,
+    opts: { role?: string; tenantId?: string | null; userId?: string } = {}
+  ) {
+    const { role = "client_admin", tenantId = "tenant-a", userId = "user-1" } = opts;
+    const { db, calls } = makeChunkDb(chunkRow);
+    const app = express();
+    app.use(express.json());
+    const noopAuth = (req: any, _res: any, next: any) => {
+      req.user = { id: userId, role, tenantId, email: "" };
+      next();
+    };
+    registerBookPdfRoutes(app, db, noopAuth, (_r: any, _s: any, n: any) => n(), (_r: any, _s: any, n: any) => n());
+    return { app, db, calls };
+  }
+
+  beforeEach(() => {
+    (embedText as jest.Mock).mockReset().mockResolvedValue(Array.from({ length: 5 }, () => 0.1));
+    delete process.env.ES_URL;
+  });
+
+  it("psychology_book スキーマのフィールド編集で再埋め込みが行われ、embedding_status='done' になる", async () => {
+    const chunkRow = {
+      id: 10,
+      metadata: {
+        source: "book",
+        book_id: 1,
+        chunk_index: 2,
+        principle: "アンカリング効果",
+        situation: "旧・状況",
+        example: "旧・例",
+        contraindication: "旧・禁忌",
+      },
+      is_excluded_from_search: false,
+      tenant_id: "tenant-a",
+    };
+    const { app, calls } = makeChunkApp(chunkRow);
+
+    const res = await request(app)
+      .put("/v1/admin/knowledge/book-pdf/chunks/10")
+      .send({ situation: "新・状況" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.embedding_updated).toBe(true);
+    expect(res.body.metadata.embedding_status).toBe("done");
+    expect(res.body.metadata.embedding_updated_at).toBeDefined();
+    expect(res.body.metadata.edit_history).toHaveLength(1);
+    expect(res.body.metadata.edit_history[0].changes).toEqual({
+      situation: { from: "旧・状況", to: "新・状況" },
+    });
+
+    expect(embedText).toHaveBeenCalledTimes(1);
+    const [searchText] = (embedText as jest.Mock).mock.calls[0];
+    expect(searchText).toContain("新・状況");
+
+    // CASのUPDATEが先に embedding_status='pending' を書いていること
+    const casCall = calls.find((c) => c.sql.includes("COALESCE(metadata->>'embedding_status'"));
+    expect(casCall).toBeDefined();
+    expect(JSON.parse(casCall!.params[0] as string).embedding_status).toBe("pending");
+  });
+
+  it("sales_manual スキーマ(problem/solution/objection_handling)でも再埋め込みが行われる", async () => {
+    const chunkRow = {
+      id: 11,
+      metadata: {
+        source: "book",
+        book_id: 2,
+        chunk_index: 3,
+        target_customer: "中小企業の経営者",
+        problem: "商談の主導権を握られる",
+        solution: "旧・解決策",
+        benefit: "売れる",
+        objection_handling: "価格の反論に対処する",
+      },
+      is_excluded_from_search: false,
+      tenant_id: "tenant-a",
+    };
+    const { app } = makeChunkApp(chunkRow);
+
+    const res = await request(app)
+      .put("/v1/admin/knowledge/book-pdf/chunks/11")
+      .send({ solution: "新・解決策" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.embedding_updated).toBe(true);
+    const [searchText] = (embedText as jest.Mock).mock.calls[0];
+    expect(searchText).toContain("新・解決策");
+    expect(searchText).toContain("商談の主導権を握られる");
+  });
+
+  it("埋め込みAPI障害時も文言の保存自体は成功する(保存済みと反映済みを別状態で扱う)", async () => {
+    (embedText as jest.Mock).mockReset().mockRejectedValue(new Error("OpenAI API down"));
+    const chunkRow = {
+      id: 12,
+      metadata: { source: "book", book_id: 1, chunk_index: 0, principle: "希少性", situation: "旧" },
+      is_excluded_from_search: false,
+      tenant_id: "tenant-a",
+    };
+    const { app } = makeChunkApp(chunkRow);
+
+    const res = await request(app)
+      .put("/v1/admin/knowledge/book-pdf/chunks/12")
+      .send({ situation: "新" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.embedding_updated).toBe(false);
+    expect(res.body.metadata.situation).toBe("新");
+    expect(res.body.metadata.embedding_status).toBe("failed");
+  });
+
+  it("値が変わらないパッチは再埋め込みも履歴追加もスキップする(連打対策)", async () => {
+    const chunkRow = {
+      id: 13,
+      metadata: { source: "book", book_id: 1, chunk_index: 0, principle: "希少性", situation: "同じ状況" },
+      is_excluded_from_search: false,
+      tenant_id: "tenant-a",
+    };
+    const { app, calls } = makeChunkApp(chunkRow);
+
+    const res = await request(app)
+      .put("/v1/admin/knowledge/book-pdf/chunks/13")
+      .send({ situation: "同じ状況" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.embedding_updated).toBe(false);
+    expect(embedText).not.toHaveBeenCalled();
+    // SELECT以外のUPDATE系クエリが発行されていないこと
+    const updateCalls = calls.filter((c) => c.sql.includes("UPDATE faq_embeddings"));
+    expect(updateCalls).toHaveLength(0);
+  });
+
+  it("embedding_status='pending' が新しい間の二重送信は409で弾かれる(連打対策)", async () => {
+    const chunkRow = {
+      id: 14,
+      metadata: {
+        source: "book",
+        book_id: 1,
+        chunk_index: 0,
+        principle: "希少性",
+        situation: "状況",
+        embedding_status: "pending",
+        embedding_updated_at: new Date().toISOString(), // たった今 pending になった
+      },
+      is_excluded_from_search: false,
+      tenant_id: "tenant-a",
+    };
+    const { app } = makeChunkApp(chunkRow);
+
+    const res = await request(app)
+      .put("/v1/admin/knowledge/book-pdf/chunks/14")
+      .send({ situation: "別の状況" });
+
+    expect(res.status).toBe(409);
+    expect(embedText).not.toHaveBeenCalled();
+  });
+
+  // 2026-08-29 再レビュー: pending 書き込み後にプロセスが落ちると、CASの条件が
+  // 「pendingでない」だけだと永久に409を返し続け、運用者のDB直接操作でしか
+  // 復帰できなかった。book_pipeline_jobs の checkStuckJobs() と同じ考え方で、
+  // 一定時間より古い pending は期限切れとみなして奪えることを確認する。
+  it("embedding_status='pending' が古い(CHUNK_STALE_PENDING_MS超)場合は奪って再実行できる", async () => {
+    const chunkRow = {
+      id: 18,
+      metadata: {
+        source: "book",
+        book_id: 1,
+        chunk_index: 0,
+        principle: "希少性",
+        situation: "状況",
+        embedding_status: "pending",
+        embedding_updated_at: new Date(Date.now() - 10 * 60 * 1000).toISOString(), // 10分前=期限切れ
+      },
+      is_excluded_from_search: false,
+      tenant_id: "tenant-a",
+    };
+    const { app } = makeChunkApp(chunkRow);
+
+    const res = await request(app)
+      .put("/v1/admin/knowledge/book-pdf/chunks/18")
+      .send({ situation: "別の状況" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.embedding_updated).toBe(true);
+    expect(res.body.metadata.embedding_status).toBe("done");
+    expect(embedText).toHaveBeenCalledTimes(1);
+  });
+
+  it("embedding_status='pending' だが embedding_updated_at が無い(異常系)場合も奪って再実行できる", async () => {
+    const chunkRow = {
+      id: 19,
+      metadata: {
+        source: "book",
+        book_id: 1,
+        chunk_index: 0,
+        principle: "希少性",
+        situation: "状況",
+        embedding_status: "pending",
+        // embedding_updated_at が無い異常系(このコード以前に作られた行を想定)
+      },
+      is_excluded_from_search: false,
+      tenant_id: "tenant-a",
+    };
+    const { app } = makeChunkApp(chunkRow);
+
+    const res = await request(app)
+      .put("/v1/admin/knowledge/book-pdf/chunks/19")
+      .send({ situation: "別の状況" });
+
+    expect(res.status).toBe(200);
+    expect(embedText).toHaveBeenCalledTimes(1);
+  });
+
+  it("product_catalog等 principleSchemaMap に無いスキーマは保存されるが再埋め込みはしない", async () => {
+    const chunkRow = {
+      id: 15,
+      metadata: {
+        source: "book",
+        book_id: 3,
+        chunk_index: 0,
+        product_name: "商品A",
+        spec: "旧仕様",
+      },
+      is_excluded_from_search: false,
+      tenant_id: "tenant-a",
+    };
+    const { app } = makeChunkApp(chunkRow);
+
+    const res = await request(app)
+      .put("/v1/admin/knowledge/book-pdf/chunks/15")
+      .send({ spec: "新仕様" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.embedding_updated).toBe(false);
+    expect(res.body.metadata.spec).toBe("新仕様");
+    expect(res.body.metadata.edit_history).toHaveLength(1);
+    expect(embedText).not.toHaveBeenCalled();
+  });
+
+  it("client_admin が他テナントのチャンクを編集すると403、履歴にも残らない", async () => {
+    const chunkRow = {
+      id: 16,
+      metadata: { source: "book", book_id: 1, chunk_index: 0, principle: "希少性", situation: "状況" },
+      is_excluded_from_search: false,
+      tenant_id: "tenant-b", // 別テナント
+    };
+    const { app, calls } = makeChunkApp(chunkRow, { role: "client_admin", tenantId: "tenant-a" });
+
+    const res = await request(app)
+      .put("/v1/admin/knowledge/book-pdf/chunks/16")
+      .send({ situation: "改ざん" });
+
+    expect(res.status).toBe(403);
+    expect(embedText).not.toHaveBeenCalled();
+    const updateCalls = calls.filter((c) => c.sql.includes("UPDATE faq_embeddings"));
+    expect(updateCalls).toHaveLength(0);
+  });
+
+  it("再埋め込み成功時にES(upsertToEs)へ is_excluded_from_search を維持したまま同期する", async () => {
+    process.env.ES_URL = "http://es.test:9200";
+    const fetchCalls: Array<{ url: string; method: string; body?: string }> = [];
+    const originalFetch = global.fetch;
+    global.fetch = jest.fn(async (url: unknown, init?: { method?: string; body?: string }) => {
+      fetchCalls.push({ url: String(url), method: init?.method ?? "GET", body: init?.body });
+      return { ok: true, text: async () => "" } as unknown as Response;
+    }) as unknown as typeof fetch;
+
+    try {
+      const chunkRow = {
+        id: 17,
+        metadata: {
+          source: "book",
+          book_id: 5,
+          chunk_index: 2,
+          principle: "希少性",
+          situation: "旧状況",
+          example: "旧例",
+        },
+        is_excluded_from_search: true, // 既に検索除外中のチャンク
+        tenant_id: "tenant-a",
+      };
+      const { app } = makeChunkApp(chunkRow);
+
+      const res = await request(app)
+        .put("/v1/admin/knowledge/book-pdf/chunks/17")
+        .send({ situation: "新状況" });
+
+      expect(res.status).toBe(200);
+      const putCall = fetchCalls.find((c) => c.method === "PUT" && c.url.includes("book_5_chunk_2"));
+      expect(putCall).toBeDefined();
+      const doc = JSON.parse(putCall!.body!);
+      // 既存のフラグを落として黙って巻き戻さない(knowledge.md の既知不具合の再発防止)
+      expect(doc.is_excluded_from_search).toBe(true);
+      expect(doc.is_published).toBe(true);
+    } finally {
+      global.fetch = originalFetch;
+      delete process.env.ES_URL;
     }
   });
 });
