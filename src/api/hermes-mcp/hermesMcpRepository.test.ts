@@ -94,6 +94,7 @@ describe("searchConversations", () => {
         promptVariantId: "variant-b",
         promptVariantName: "B",
         converted: true,
+        conversions: [],
         evaluation: {
           score: 85,
           axes: { psychology_fit: 90 },
@@ -172,6 +173,40 @@ describe("searchConversations", () => {
     expect(args[args.length - 1]).toBe(200);
   });
 
+  it("[H-2] 候補セッション取得はLEFT JOINで、発話ゼロセッションが分母から落ちないようにする", async () => {
+    const query = mockQuerySequence({ rows: [] });
+    await searchConversations({ tenantId: "carnation" });
+
+    const [sql] = query.mock.calls[0];
+    expect(sql).toContain("LEFT JOIN chat_messages m ON m.session_id = s.id");
+  });
+
+  it("[H-2] 発話ゼロで離脱したセッションもmessages: []として含める(first/last_message_atはchat_sessions側にフォールバック)", async () => {
+    const emptySession = {
+      ...BASE_SESSION_ROW,
+      session_id: "sess-empty",
+      internal_id: "99999999-9999-9999-9999-999999999999",
+      converted: false,
+      // first/last_message_atはSQL側でCOALESCE(MIN/MAX(m.created_at), s.started_at/s.last_message_at)
+      // により、メッセージが無い場合はchat_sessions自身の値になる想定
+      first_message_at: "2026-07-02T00:00:00.000Z",
+      last_message_at: "2026-07-02T00:00:00.000Z",
+    };
+    mockQuerySequence(
+      { rows: [emptySession] },
+      { rows: [] }, // chat_messagesに該当行なし
+      { rows: [] },
+      { rows: [] },
+    );
+
+    const [result] = await searchConversations({ tenantId: "carnation" });
+
+    expect(result!.sessionId).toBe("sess-empty");
+    expect(result!.messages).toEqual([]);
+    expect(result!.converted).toBe(false);
+    expect(result!.conversions).toEqual([]);
+  });
+
   it("評価が無いセッションは evaluation: null", async () => {
     mockQuerySequence(
       { rows: [{ ...BASE_SESSION_ROW, converted: false }] },
@@ -216,17 +251,18 @@ describe("searchConversations", () => {
     ]);
   });
 
-  it("visitor_id未設定のセッションはページ行動クエリの対象から除外される(4回目のクエリを発行しない)", async () => {
+  it("visitor_id未設定のセッションはページ行動クエリの対象から除外される(ページ行動分は増えない)", async () => {
     const query = mockQuerySequence(
       { rows: [BASE_SESSION_ROW] }, // visitor_id: null
+      { rows: [] },
       { rows: [] },
       { rows: [] },
     );
 
     await searchConversations({ tenantId: "carnation" });
 
-    // 候補・メッセージ・評価の3回のみ(ページ行動クエリはvisitor_id無しのため呼ばれない)
-    expect(query).toHaveBeenCalledTimes(3);
+    // 候補・メッセージ・評価・CV内訳の4回のみ(ページ行動クエリはvisitor_id無しのため呼ばれない)
+    expect(query).toHaveBeenCalledTimes(4);
   });
 });
 
@@ -447,5 +483,113 @@ describe("searchConversations — 社外送出の境界", () => {
     // 現状は Math.min のみのため 0 がそのまま渡る。routes.ts 側が
     // parsed <= 0 を 400 で弾いており、ここへ到達しない前提。
     expect(params[params.length - 1]).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// [H-2] CVの内訳(金額・種別): converted booleanだけでは「¥50万の成約」と
+// 「メルマガ登録」が区別できない。conversion_attributionsの実カラムを
+// そのまま渡すことを固定する。
+// ---------------------------------------------------------------------------
+
+describe("searchConversations — CVの内訳(conversions)", () => {
+  it("conversion_attributionsの複数行を金額・種別付きでそのまま返す(1セッションに複数CVがありうる)", async () => {
+    // BASE_SESSION_ROW.visitor_id は null のため、pageContextクエリは発行されない
+    // (4回目の実クエリ = conversions)。
+    const query = mockQuerySequence(
+      { rows: [{ ...BASE_SESSION_ROW, converted: true }] },
+      { rows: [] },
+      { rows: [] },
+      {
+        rows: [
+          {
+            internal_id: BASE_SESSION_ROW.internal_id,
+            conversion_type: "inquiry",
+            conversion_value: null,
+            sales_stage_at_conversion: "consideration",
+          },
+          {
+            internal_id: BASE_SESSION_ROW.internal_id,
+            conversion_type: "purchase",
+            conversion_value: "500000",
+            sales_stage_at_conversion: "closed",
+          },
+        ],
+      },
+    );
+
+    const [result] = await searchConversations({ tenantId: "carnation" });
+
+    expect(result!.converted).toBe(true);
+    expect(result!.conversions).toEqual([
+      { conversionType: "inquiry", conversionValue: null, salesStageAtConversion: "consideration" },
+      { conversionType: "purchase", conversionValue: 500000, salesStageAtConversion: "closed" },
+    ]);
+
+    const [sql, params] = query.mock.calls[3] as [string, unknown[]];
+    expect(sql).toContain("FROM conversion_attributions");
+    expect(sql).toContain("session_id = ANY($1::uuid[])");
+    expect(params[0]).toEqual([BASE_SESSION_ROW.internal_id]);
+  });
+
+  it("NUMERIC(conversion_value)はpgドライバの文字列表現から数値へ変換して返す(型の嘘を外部へ出さない)", async () => {
+    mockQuerySequence(
+      { rows: [BASE_SESSION_ROW] },
+      { rows: [] },
+      { rows: [] },
+      {
+        rows: [
+          {
+            internal_id: BASE_SESSION_ROW.internal_id,
+            conversion_type: "purchase",
+            conversion_value: "1980.5",
+            sales_stage_at_conversion: null,
+          },
+        ],
+      },
+    );
+
+    const [result] = await searchConversations({ tenantId: "carnation" });
+    expect(result!.conversions[0]!.conversionValue).toBe(1980.5);
+    expect(typeof result!.conversions[0]!.conversionValue).toBe("number");
+  });
+
+  it("CVが無いセッションは conversions: [] (currencyカラムは未適用のため参照しない)", async () => {
+    mockQuerySequence(
+      { rows: [{ ...BASE_SESSION_ROW, converted: false }] },
+      { rows: [] },
+      { rows: [] },
+      { rows: [] },
+    );
+
+    const [result] = await searchConversations({ tenantId: "carnation" });
+    expect(result!.conversions).toEqual([]);
+  });
+
+  it("CVの結合はセッション単位(internal_id)で、他セッションのCVが混線しない", async () => {
+    mockQuerySequence(
+      {
+        rows: [
+          { ...BASE_SESSION_ROW, session_id: "s-a", internal_id: "11111111-1111-1111-1111-111111111111" },
+          { ...BASE_SESSION_ROW, session_id: "s-b", internal_id: "22222222-2222-2222-2222-222222222222" },
+        ],
+      },
+      { rows: [] },
+      { rows: [] },
+      {
+        rows: [
+          {
+            internal_id: "11111111-1111-1111-1111-111111111111",
+            conversion_type: "purchase",
+            conversion_value: "1000",
+            sales_stage_at_conversion: "closed",
+          },
+        ],
+      },
+    );
+
+    const results = await searchConversations({ tenantId: "carnation" });
+    expect(results.find((r) => r.sessionId === "s-a")!.conversions).toHaveLength(1);
+    expect(results.find((r) => r.sessionId === "s-b")!.conversions).toEqual([]);
   });
 });

@@ -9,6 +9,11 @@
 // (旧実装は newest-first LIMIT 200 のフラットなメッセージ列で、会話が途中で
 // 切れていた)。第2の取得経路を作らないため、この searchConversations の
 // 返却拡張のみで完結させる(新規MCPツールは増やさない)。
+//
+// [H-2]: 分母(発話ゼロで離脱したセッション)と分子(CVの金額・種別)を埋める。
+// 候補セッション取得は LEFT JOIN に変更済み(messages: [] で表現)、CVは
+// converted booleanに加えconversions配列(conversion_type/conversion_value/
+// sales_stage_at_conversion)で内訳を返す。
 
 import { getPool } from "../../lib/db";
 import { userSourceClause } from "../admin/analytics/summaryQueries";
@@ -38,6 +43,16 @@ export interface HermesEvaluation {
   notes: string | null;
 }
 
+// CVR分析の分子側の内訳。「converted: true」1個に潰すと「¥50万の成約」と
+// 「メルマガ登録」が区別できず提案根拠にならないため、conversion_attributions
+// の実カラム(conversion_type/conversion_value/sales_stage_at_conversion)を
+// そのまま渡す。1セッションに複数CVが記録されることがあるため配列で返す。
+export interface HermesConversionDetail {
+  conversionType: string;
+  conversionValue: number | null;
+  salesStageAtConversion: string | null;
+}
+
 export interface HermesConversationSession {
   sessionId: string; // chat_sessions.session_id (アプリ側の文字列ID)
   outcome: string | null;
@@ -45,7 +60,11 @@ export interface HermesConversationSession {
   promptVariantId: string | null;
   promptVariantName: string | null;
   converted: boolean;
+  // CVの内訳(金額・種別)。未コンバージョンのセッションは空配列。
+  conversions: HermesConversionDetail[];
   evaluation: HermesEvaluation | null;
+  // チャットを開いたが1件も発話しなかったセッションは空配列(以前はINNER JOINで
+  // セッションごと丸ごと欠落していた。CVR分析の分母に必要なため今は含める)。
   messages: HermesConversationMessage[];
   // R12: 会話に至るまでのページ行動(page_view/chat_open等)。visitor_id が
   // 未設定(event_tracking機能フラグoff等)のセッションは空配列。
@@ -141,6 +160,13 @@ async function fetchSessionCandidates(
   args.push(limit);
   const limitPlaceholder = `$${args.length}`;
 
+  // LEFT JOIN(旧実装はINNER JOINで、チャットを開いたが1件も発話しなかった
+  // セッションが丸ごと落ちていた。実測で全体の23%・325件がCVR分析の分母から
+  // 消えていたため、messages: [] のセッションとして含める)。
+  // first/last_message_at はメッセージが1件も無い場合 MIN/MAX が NULL になるため、
+  // chat_sessions 自体が持つ started_at/last_message_at にフォールバックする
+  // (これが無いと ORDER BY ... DESC で NULL が先頭に来る Postgres の既定挙動により、
+  // 発話無しセッションが limit を食い潰して直近の実会話を押し出してしまう)。
   const result = await db.query<SessionCandidateRow>(
     `SELECT
        s.id AS internal_id,
@@ -151,13 +177,13 @@ async function fetchSessionCandidates(
        s.prompt_variant_id,
        s.prompt_variant_name,
        EXISTS (SELECT 1 FROM conversion_attributions ca WHERE ca.session_id = s.id) AS converted,
-       MIN(m.created_at) AS first_message_at,
-       MAX(m.created_at) AS last_message_at
+       COALESCE(MIN(m.created_at), s.started_at) AS first_message_at,
+       COALESCE(MAX(m.created_at), s.last_message_at) AS last_message_at
      FROM chat_sessions s
-     JOIN chat_messages m ON m.session_id = s.id
+     LEFT JOIN chat_messages m ON m.session_id = s.id
      WHERE ${conditions.join(" AND ")}
      GROUP BY s.id
-     ORDER BY MAX(m.created_at) DESC
+     ORDER BY COALESCE(MAX(m.created_at), s.last_message_at) DESC
      LIMIT ${limitPlaceholder}`,
     args,
   );
@@ -198,6 +224,49 @@ async function fetchMessagesBySessionIds(
       ragHitCount: typeof meta["rag_hit_count"] === "number" ? (meta["rag_hit_count"] as number) : null,
       ragTopScore: typeof meta["rag_top_score"] === "number" ? (meta["rag_top_score"] as number) : null,
       knowledgeGap: typeof meta["knowledge_gap"] === "boolean" ? (meta["knowledge_gap"] as boolean) : null,
+    });
+    byInternalId.set(row.internal_id, list);
+  }
+
+  return byInternalId;
+}
+
+interface ConversionDetailRow {
+  internal_id: string; // conversion_attributions.session_id (UUID、chat_sessions.id と一致)
+  conversion_type: string;
+  conversion_value: string | null; // NUMERIC はpgドライバから文字列で返る
+  sales_stage_at_conversion: string | null;
+}
+
+/**
+ * セッションに紐づくCVの内訳(金額・種別)を取得する。
+ * conversion_attributions.session_id に UNIQUE は無いため(migration_conversion_attributions.sql)、
+ * 1セッションに複数件(例: 問い合わせ→購入)が紐づきうる。すべて返す。
+ *
+ * conversion_attributions.currency は未適用のmigration待ち(Asana A-1)のため、
+ * 実在しないカラムとして参照しない(存在するカラムはschemaHealth.tsのallowlist参照)。
+ */
+async function fetchConversionsBySessionIds(
+  db: ReturnType<typeof getPool>,
+  internalIds: string[],
+): Promise<Map<string, HermesConversionDetail[]>> {
+  const byInternalId = new Map<string, HermesConversionDetail[]>();
+  if (internalIds.length === 0) return byInternalId;
+
+  const result = await db.query<ConversionDetailRow>(
+    `SELECT session_id AS internal_id, conversion_type, conversion_value, sales_stage_at_conversion
+       FROM conversion_attributions
+      WHERE session_id = ANY($1::uuid[])
+      ORDER BY created_at ASC`,
+    [internalIds],
+  );
+
+  for (const row of result.rows) {
+    const list = byInternalId.get(row.internal_id) ?? [];
+    list.push({
+      conversionType: row.conversion_type,
+      conversionValue: row.conversion_value !== null ? Number(row.conversion_value) : null,
+      salesStageAtConversion: row.sales_stage_at_conversion,
     });
     byInternalId.set(row.internal_id, list);
   }
@@ -316,11 +385,13 @@ export async function searchConversations(
   const sessions = await fetchSessionCandidates(db, params);
   if (sessions.length === 0) return [];
 
-  const [messagesByInternalId, evaluationsBySessionId, pageContextBySessionId] = await Promise.all([
-    fetchMessagesBySessionIds(db, sessions.map((s) => s.internal_id)),
-    fetchEvaluationsBySessionIds(db, params.tenantId, sessions.map((s) => s.session_id)),
-    fetchPageContextBySessionIds(db, params.tenantId, sessions),
-  ]);
+  const [messagesByInternalId, evaluationsBySessionId, pageContextBySessionId, conversionsByInternalId] =
+    await Promise.all([
+      fetchMessagesBySessionIds(db, sessions.map((s) => s.internal_id)),
+      fetchEvaluationsBySessionIds(db, params.tenantId, sessions.map((s) => s.session_id)),
+      fetchPageContextBySessionIds(db, params.tenantId, sessions),
+      fetchConversionsBySessionIds(db, sessions.map((s) => s.internal_id)),
+    ]);
 
   return sessions.map((s) => ({
     sessionId: s.session_id,
@@ -329,6 +400,7 @@ export async function searchConversations(
     promptVariantId: s.prompt_variant_id,
     promptVariantName: s.prompt_variant_name,
     converted: s.converted,
+    conversions: conversionsByInternalId.get(s.internal_id) ?? [],
     evaluation: evaluationsBySessionId.get(s.session_id) ?? null,
     messages: messagesByInternalId.get(s.internal_id) ?? [],
     pageContext: pageContextBySessionId.get(s.session_id) ?? [],
