@@ -81,3 +81,5 @@ export const API_BASE_URL = apiBaseUrl;
 // 組み立てていた重複を解消するための派生定数。
 export const DEMO_BASE_URL = `${API_BASE_URL}/carnation-demo`;
 export const DEMO_INDEX_URL = `${DEMO_BASE_URL}/index.html`;
+
+// E2E baseline 計測用の一時コメント（main の状態で E2E を走らせるためだけの差分。計測後に PR ごと破棄する）
