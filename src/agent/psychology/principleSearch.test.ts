@@ -1,9 +1,18 @@
 // src/agent/psychology/principleSearch.test.ts
 // id=48: principleSearch.ts の global tenant 対応（他RAG経路と一貫性）回帰テスト
+// 2026-08-29: 原則名の完全一致からベクトル近傍検索へ変更したことに追随。
+
+jest.mock('../llm/openaiEmbeddingClient', () => ({
+  embedText: jest.fn(),
+}));
 
 import { Pool } from 'pg';
 import { searchPrincipleChunks } from './principleSearch';
+import { embedText } from '../llm/openaiEmbeddingClient';
 import type { StructuredPrinciple } from '../knowledge/bookStructurizer';
+
+const mockEmbedText = embedText as jest.MockedFunction<typeof embedText>;
+const DUMMY_VECTOR = [0.1, 0.2, 0.3];
 
 // pg Pool を db 引数注入でモック（外部依存はモックする方針）
 function makePoolMock(rows: Array<Record<string, string | null>>) {
@@ -35,20 +44,45 @@ const SAMPLE_PRINCIPLE: StructuredPrinciple = {
   failure_example: '過大なアンカーは不信感を招く',
 };
 
+beforeEach(() => {
+  mockEmbedText.mockReset();
+  mockEmbedText.mockResolvedValue(DUMMY_VECTOR);
+});
+
 describe('searchPrincipleChunks', () => {
   it('SQL は tenant_id = $1 OR tenant_id = \'global\' で共有テナントも対象にする', async () => {
     const { pool, query } = makePoolMock([]);
-    await searchPrincipleChunks('tenant-A', ['アンカリング効果'], pool);
+    await searchPrincipleChunks('tenant-A', '受付で断られてしまいます', pool);
 
     const sql = query.mock.calls[0][0] as string;
     expect(sql).toMatch(/tenant_id = \$1\s+OR\s+tenant_id = 'global'/);
-    // パラメータは [tenantId, principles] のまま（global はリテラル）
-    expect(query.mock.calls[0][1]).toEqual(['tenant-A', ['アンカリング効果']]);
+    // パラメータは [tenantId, ベクトルリテラル, topK]（global はリテラル）
+    const params = query.mock.calls[0][1] as unknown[];
+    expect(params[0]).toBe('tenant-A');
+    expect(params[1]).toBe(`[${DUMMY_VECTOR.join(',')}]`);
+  });
+
+  it('ベクトル近傍検索で引く（原則名の完全一致に戻らない）', async () => {
+    const { pool, query } = makePoolMock([]);
+    await searchPrincipleChunks('tenant-A', '受付で断られてしまいます', pool);
+
+    const sql = query.mock.calls[0][0] as string;
+    // 本番91件の principle は統制語彙と1件も一致しないため、完全一致に戻すと永久に0件になる
+    expect(sql).not.toMatch(/= ANY\(/);
+    expect(sql).toMatch(/ORDER BY embedding <-> \$2::vector/);
+    expect(sql).toMatch(/metadata->>'principle' IS NOT NULL/);
+  });
+
+  it('検索対象から is_excluded_from_search の行を除外する', async () => {
+    const { pool, query } = makePoolMock([]);
+    await searchPrincipleChunks('tenant-A', 'x', pool);
+    const sql = query.mock.calls[0][0] as string;
+    expect(sql).toMatch(/is_excluded_from_search IS NULL OR is_excluded_from_search = false/);
   });
 
   it('global テナントの book チャンクを返却できる', async () => {
     const { pool } = makePoolMock([bookRowFixture(SAMPLE_PRINCIPLE)]);
-    const result = await searchPrincipleChunks('tenant-A', ['アンカリング効果'], pool);
+    const result = await searchPrincipleChunks('tenant-A', '値段が高いと言われた', pool);
     expect(result).toHaveLength(1);
     expect(result[0].principle).toBe('アンカリング効果');
     // bookStructurizer が書く example がそのまま読めていることの確認
@@ -66,15 +100,24 @@ describe('searchPrincipleChunks', () => {
       contraindication: long,
     };
     const { pool } = makePoolMock([bookRowFixture(longPrinciple)]);
-    const result = await searchPrincipleChunks('tenant-A', ['x'], pool);
+    const result = await searchPrincipleChunks('tenant-A', 'x', pool);
     expect(result[0].situation.length).toBe(200);
     expect(result[0].example.length).toBe(200);
     expect(result[0].contraindication.length).toBe(200);
   });
 
-  it('principles が空なら DB を叩かず空配列を返す', async () => {
+  it('queryText が空なら DB も埋め込みも叩かず空配列を返す', async () => {
     const { pool, query } = makePoolMock([]);
-    const result = await searchPrincipleChunks('tenant-A', [], pool);
+    const result = await searchPrincipleChunks('tenant-A', '   ', pool);
+    expect(result).toEqual([]);
+    expect(query).not.toHaveBeenCalled();
+    expect(mockEmbedText).not.toHaveBeenCalled();
+  });
+
+  it('埋め込み失敗時は空配列を返す（回答生成を止めない）', async () => {
+    mockEmbedText.mockRejectedValue(new Error('openai down'));
+    const { pool, query } = makePoolMock([]);
+    const result = await searchPrincipleChunks('tenant-A', 'x', pool);
     expect(result).toEqual([]);
     expect(query).not.toHaveBeenCalled();
   });
@@ -82,7 +125,7 @@ describe('searchPrincipleChunks', () => {
   it('DB エラー時は空配列を返す（書籍内容をログに出さない）', async () => {
     const query = jest.fn().mockRejectedValue(new Error('db down'));
     const pool = { query } as unknown as InstanceType<typeof Pool>;
-    const result = await searchPrincipleChunks('tenant-A', ['x'], pool);
+    const result = await searchPrincipleChunks('tenant-A', 'x', pool);
     expect(result).toEqual([]);
   });
 });

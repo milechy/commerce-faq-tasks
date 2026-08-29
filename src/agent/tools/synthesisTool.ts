@@ -213,8 +213,6 @@ const NEUTRAL_ROLE_PROMPT = `あなたはこの店舗のAIコンシェルジュ�
  * tenantId が指定された場合、アクティブなチューニングルールをシステムプロンプトに注入する。
  * APIキー未設定・エラー時は箇条書きフォールバックを返す。
  */
-const PRINCIPLE_STAGES = new Set(["propose", "recommend", "close"]);
-
 export async function synthesizeAnswer(input: SynthesisInput): Promise<SynthesisOutput> {
   const {
     query,
@@ -280,9 +278,19 @@ export async function synthesizeAnswer(input: SynthesisInput): Promise<Synthesis
     return { answer: truncate(NO_MATCH_MESSAGE, maxChars), gapSignal };
   }
 
-  // Phase44: SalesFlow ステージが propose/recommend/close の場合のみ原則注入を準備
-  const shouldInjectPrinciples =
-    salesStage !== undefined && PRINCIPLE_STAGES.has(salesStage) && principleChunks.length > 0;
+  // 心理学原則の注入判定。
+  //
+  // ★2026-08-29: salesStage による段階ゲートを撤去した★
+  // 旧実装は `salesStage !== undefined && PRINCIPLE_STAGES.has(salesStage)` を要求していたが、
+  // (1) searchAgent.ts の synthesizeAnswer 呼び出しに salesStage 引数が無く常に undefined、
+  // (2) そもそも salesStageMachine は previousStage===null のとき必ず clarify を返すため
+  //     propose/recommend/close へ1ターン内で到達する経路が存在しない、
+  // という二重の理由で本番では一度も成立していなかった(Asana LB-1)。
+  // 加えて心理学は「何を答えるかの知識」ではなく「どう答えるかの態度」であり、
+  // 段階で構造的にゲートするより、会話内容との関連度で引く方が設計として正しい。
+  // 関連度の判定は principleSearch.ts のベクトル近傍検索が担うため、
+  // ここでは「引けたかどうか」だけを見る。
+  const shouldInjectPrinciples = principleChunks.length > 0;
 
   // Groq APIキーがなければ即フォールバック（FAQ ヒットありの場合のみ）
   if (!process.env.GROQ_API_KEY) {
