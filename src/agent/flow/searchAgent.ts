@@ -249,6 +249,11 @@ export async function runSearchAgent(
   // 'book:pdf:qwen-ocr'(OCR由来)も startsWith で拾う。厳密一致だと OCR チャンクが
   // 'faq' に誤ラベルされ、ragSources・ナレッジCV帰属で実態と異なる集計になっていた
   // (2026-08-25 是正)。
+  // T3(Asana LB-1): principleChunks(心理学原則として注入した分)は通常RAGとは
+  // 別の検索(principleSearch.ts のベクトル近傍検索)からヒットするため、
+  // rerankResult.items に含まれるとは限らない。含まれる場合は行を2つにせず
+  // injected フラグを立てるだけにする(既存の usage_count の意味を変えないため)。
+  const principleChunkIds = new Set(principleChunks.map((p) => p.chunkId));
   const ragSources: RagSource[] = rerankResult.items.map((it) => {
     const meta = (it as { metadata?: Record<string, unknown> }).metadata;
     const rawSource = meta?.["source"];
@@ -262,8 +267,25 @@ export async function runSearchAgent(
       score: typeof it.score === "number" ? it.score : 0,
     };
     if (principle) source.principle = principle;
+    if (principleChunkIds.has(Number(it.id))) source.injected = true;
     return source;
   });
+
+  // 通常RAG(rerankResult.items)に乗らなかった注入分を追加する。
+  // score は rerank のクロスエンコーダスコアを持たない(principleSearch.ts は
+  // ベクトル距離のみで rerank を経由しない)ため 0 とする。
+  const rerankedChunkIds = new Set(rerankResult.items.map((it) => it.id));
+  for (const chunk of principleChunks) {
+    const chunkId = String(chunk.chunkId);
+    if (rerankedChunkIds.has(chunkId)) continue;
+    ragSources.push({
+      chunk_id: chunkId,
+      source: "book",
+      score: 0,
+      principle: chunk.principle,
+      injected: true,
+    });
+  }
 
   return {
     answer: synth.answer,

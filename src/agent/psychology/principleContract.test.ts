@@ -157,3 +157,34 @@ describe("bookStructurizer.ts と bookPdfRoutes.ts はページ情報のキー�
     expect(writtenKeys).toContain(sortKey);
   });
 });
+
+// T3(Asana LB-1): 原則注入を rag_sources に記録し、貢献度集計で注入軸を分ける。
+// 生産者(searchAgent.ts が rag_sources に書く injected フラグ)と消費者
+// (summaryQueries.ts が rag_sources から読む injected フラグ)が別のキー名を
+// 独立に持つと、注入は起きているのに貢献度画面には一生出ない継ぎ目バグになる
+// (この種のバグは単体テストのモックでは検出できない。冒頭の説明参照)。
+describe("原則注入の記録(injected)は生産者(searchAgent.ts)と消費者(summaryQueries.ts)でキー名が一致する", () => {
+  it("RagSource 型(types.ts)に injected フィールドが定義されている", () => {
+    const typesSrc = READ("src/agent/types.ts");
+    const ragSourceMatch = typesSrc.match(/export interface RagSource \{([\s\S]*?)\n\}/);
+    expect(ragSourceMatch).not.toBeNull();
+    expect(ragSourceMatch![1]).toMatch(/injected\?:\s*boolean/);
+  });
+
+  it("searchAgent.ts が RagSource に 'injected' キーで注入フラグを書く", () => {
+    const producer = READ("src/agent/flow/searchAgent.ts");
+    // 通常RAGとも重複ヒットした分: 既存の行に注入フラグだけを立てる(行を2つにしない)
+    expect(producer).toMatch(/source\.injected\s*=\s*true/);
+    // 通常RAGに乗らなかった注入分: 新規の行として追加する
+    expect(producer).toMatch(/ragSources\.push\(\{[\s\S]*?injected:\s*true[\s\S]*?\}\)/);
+  });
+
+  it("summaryQueries.ts が同じ 'injected' キーで rag_sources から読み、usage_count とは別列に集計する", () => {
+    const consumer = READ("src/api/admin/analytics/summaryQueries.ts");
+    // 生産側と同じ JSONB キー名('injected')を読んでいること
+    expect(consumer).toContain(`(src->>'injected')::boolean AS injected`);
+    // 既存 usage_count の意味(検索でヒットした回数)を変えず、注入回数は別列で持つ
+    expect(consumer).toMatch(/COUNT\(\*\) FILTER \(WHERE injected\)::int AS injected_count/);
+    expect(consumer).toContain("injected_count: row.injected_count");
+  });
+});

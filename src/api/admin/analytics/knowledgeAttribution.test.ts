@@ -51,6 +51,7 @@ type AttrRow = {
   src_type: 'faq' | 'book' | null;
   principle: string | null;
   usage_count: number;
+  injected_count: number;
   conversation_count: number;
   conversion_count: number;
   conversion_rate: number;
@@ -75,6 +76,7 @@ describe('GET /v1/admin/analytics/knowledge-attribution', () => {
         src_type: 'faq',
         principle: null,
         usage_count: 40,
+        injected_count: 0,
         conversation_count: 38,
         conversion_count: 12,
         conversion_rate: 12 / 38,
@@ -88,6 +90,7 @@ describe('GET /v1/admin/analytics/knowledge-attribution', () => {
         src_type: 'book',
         principle: 'reciprocity',
         usage_count: 15,
+        injected_count: 9, // 心理学原則として注入された回数(usage_countの内数)
         conversation_count: 14,
         conversion_count: 7,
         conversion_rate: 0.5,
@@ -121,6 +124,9 @@ describe('GET /v1/admin/analytics/knowledge-attribution', () => {
     expect(bookItem.principle).toBe('reciprocity');
     expect(bookItem.title).toContain('影響力の武器');
     expect(bookItem.trend).toBe('stable'); // |0.5 - 0.5| < 0.02
+    // T3: 注入軸(usage_countとは別枠。injected_countはusage_countの内数)
+    expect(bookItem.injected_count).toBe(9);
+    expect(faqItem.injected_count).toBe(0);
 
     // summary
     expect(res.body.summary.total_chunks_used).toBe(2);
@@ -135,6 +141,7 @@ describe('GET /v1/admin/analytics/knowledge-attribution', () => {
         src_type: 'faq',
         principle: null,
         usage_count: 5,
+        injected_count: 0,
         conversation_count: 5,
         conversion_count: 3,
         conversion_rate: 0.6,

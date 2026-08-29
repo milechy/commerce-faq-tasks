@@ -805,6 +805,11 @@ export type KnowledgeAttributionItem = {
   title: string;
   principle?: string;
   usage_count: number;
+  /**
+   * T3(Asana LB-1): usage_count のうち、心理学原則として注入された(rag_sources[].injected)
+   * 回数。既存 usage_count(検索でヒットした回数)の意味は変えず、注入軸は別列で持つ。
+   */
+  injected_count: number;
   conversation_count: number;
   conversion_count: number;
   conversion_rate: number;
@@ -842,6 +847,7 @@ export async function fetchKnowledgeAttribution(
         (src->>'chunk_id') AS chunk_id,
         (src->>'source') AS src_type,
         (src->>'principle') AS principle,
+        (src->>'injected')::boolean AS injected,
         cs.id AS session_uuid,
         cs.session_id AS session_text_id,
         ca.id IS NOT NULL AS converted,
@@ -881,6 +887,7 @@ export async function fetchKnowledgeAttribution(
         MAX(src_type) AS src_type,
         MAX(principle) AS principle,
         COUNT(*)::int AS usage_count,
+        COUNT(*) FILTER (WHERE injected)::int AS injected_count,
         COUNT(DISTINCT session_uuid)::int AS conversation_count,
         COUNT(DISTINCT CASE WHEN converted THEN session_uuid END)::int AS conversion_count,
         AVG(judge_score)::float AS avg_judge_score
@@ -906,6 +913,7 @@ export async function fetchKnowledgeAttribution(
         c.src_type,
         c.principle,
         c.usage_count,
+        c.injected_count,
         c.conversation_count,
         c.conversion_count,
         CASE
@@ -937,6 +945,7 @@ export async function fetchKnowledgeAttribution(
     src_type: "faq" | "book" | null;
     principle: string | null;
     usage_count: number;
+    injected_count: number;
     conversation_count: number;
     conversion_count: number;
     conversion_rate: number;
@@ -970,6 +979,7 @@ export async function fetchKnowledgeAttribution(
       title: displayTitle,
       principle: row.principle ?? undefined,
       usage_count: row.usage_count,
+      injected_count: row.injected_count,
       conversation_count: row.conversation_count,
       conversion_count: row.conversion_count,
       conversion_rate: Number(currentRate.toFixed(4)),

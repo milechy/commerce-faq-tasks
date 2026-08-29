@@ -69,6 +69,12 @@ export interface RagSource {
   score: number;
   /** 書籍チャンクに関連づけられた心理原則（書籍チャンクのみ） */
   principle?: string;
+  /**
+   * 心理学原則として注入されたか(searchPrincipleChunks 経由)。
+   * 通常RAG(rerank結果)としてもヒットしていた場合は行を分けず、
+   * このフラグを立てるだけにする(usage_count の意味を変えないため)。
+   */
+  injected?: boolean;
 }
 
 export interface AgentSearchResponse {
