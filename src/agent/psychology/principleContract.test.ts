@@ -72,6 +72,26 @@ describe("bookStructurizer.ts が書く metadata は principleSearch.ts が読�
   });
 });
 
+describe("bookStructurizer.ts が書く metadata は bookPdfRoutes.ts の構造化フィールドを包含する", () => {
+  it("STRUCTURED_FIELDS(チャンク編集UIが扱う6フィールド)が全て metadata に書かれている", () => {
+    const producer = READ("src/agent/knowledge/bookStructurizer.ts");
+    const consumer = READ("src/api/admin/knowledge/bookPdfRoutes.ts");
+
+    // 消費側: `const STRUCTURED_FIELDS = [...] as const;` の要素を抽出
+    const fieldsBlockMatch = consumer.match(/const STRUCTURED_FIELDS = \[([\s\S]*?)\] as const;/);
+    expect(fieldsBlockMatch).not.toBeNull();
+    const expectedFields = [...fieldsBlockMatch![1]!.matchAll(/"(\w+)"/g)].map((m) => m[1]!);
+    expect(expectedFields.length).toBeGreaterThan(0);
+
+    const metadataBlockMatch = producer.match(/const metadata = \{([\s\S]*?)\};/);
+    const writtenKeys = [...metadataBlockMatch![1]!.matchAll(/^\s*(\w+):/gm)].map((m) => m[1]!);
+
+    for (const field of expectedFields) {
+      expect(writtenKeys).toContain(field);
+    }
+  });
+});
+
 describe("bookStructurizer.ts と bookPdfRoutes.ts はページ情報のキー名が一致する", () => {
   it("bookStructurizer が metadata に書くページ情報キーが、一覧取得の ORDER BY と同じ名前である", () => {
     const producer = READ("src/agent/knowledge/bookStructurizer.ts");

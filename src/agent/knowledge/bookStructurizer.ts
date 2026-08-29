@@ -235,6 +235,10 @@ export async function structurizeBook(
         page_number: chunk.pageHint ?? null,
         principle: principle.principle,
         situation: principle.situation,
+        // 継ぎ目バグ: bookPdfRoutes.ts の STRUCTURED_FIELDS(チャンク編集UIが扱う
+        // 構造化6フィールド)は resistance も含むが、従来ここに書かれておらず
+        // 編集画面で常に空だった。StructuredPrinciple の6フィールドを全て保存する。
+        resistance: principle.resistance,
         contraindication: principle.contraindication,
         // 継ぎ目バグ: principleSearch.ts は metadata->>'example' を読むが、
         // 従来ここに example が無く常に空文字になっていた。
