@@ -82,11 +82,22 @@ export function registerAbTestRoutes(app: Express, db: Pool | null): void {
 
     try {
       const params: unknown[] = [];
-      const where = tenantId ? `WHERE tenant_id = $${params.push(tenantId)}` : '';
+      const where = tenantId ? `WHERE e.tenant_id = $${params.push(tenantId)}` : '';
+      // total_exposed: ab_results の突合済み件数(computeAbExperimentResults と同じ定義)。
+      // ダッシュボード側が「実施中0件」と「実施中だがサンプル不足」を区別できるよう、
+      // 一覧の時点でも current/required の材料を渡す(CLAUDE.md 禁止34: 母数を隠さない)。
       const result = await db.query(
-        `SELECT id, tenant_id, name, variant_a, variant_b, traffic_split, status, min_sample_size, created_at
-         FROM ab_experiments ${where}
-         ORDER BY created_at DESC`,
+        `SELECT e.id, e.tenant_id, e.name, e.variant_a, e.variant_b, e.traffic_split, e.status,
+                e.min_sample_size, e.created_at,
+                COALESCE(r.total_exposed, 0) AS total_exposed
+         FROM ab_experiments e
+         LEFT JOIN (
+           SELECT experiment_id, COUNT(*) AS total_exposed
+           FROM ab_results
+           GROUP BY experiment_id
+         ) r ON r.experiment_id = e.id
+         ${where}
+         ORDER BY e.created_at DESC`,
         params,
       );
       return res.json({ experiments: result.rows });
