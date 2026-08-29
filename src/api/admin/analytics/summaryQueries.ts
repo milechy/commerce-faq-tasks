@@ -806,8 +806,10 @@ export type KnowledgeAttributionItem = {
   principle?: string;
   usage_count: number;
   /**
-   * T3(Asana LB-1): usage_count のうち、心理学原則として注入された(rag_sources[].injected)
-   * 回数。既存 usage_count(検索でヒットした回数)の意味は変えず、注入軸は別列で持つ。
+   * T3(Asana LB-1): 心理学原則として注入された(rag_sources[].injected)回数。
+   * usage_count とは独立した別軸(部分集合ではない)。同じチャンクが通常RAGヒット
+   * と注入の両方に該当することもあれば、注入のみ(通常RAGには乗らない)のことも
+   * あるため、injected_count は usage_count 以下になるとは限らない。
    */
   injected_count: number;
   conversation_count: number;
@@ -848,6 +850,7 @@ export async function fetchKnowledgeAttribution(
         (src->>'source') AS src_type,
         (src->>'principle') AS principle,
         (src->>'injected')::boolean AS injected,
+        (src->>'retrieved')::boolean AS retrieved,
         cs.id AS session_uuid,
         cs.session_id AS session_text_id,
         ca.id IS NOT NULL AS converted,
@@ -886,7 +889,15 @@ export async function fetchKnowledgeAttribution(
         chunk_id,
         MAX(src_type) AS src_type,
         MAX(principle) AS principle,
-        COUNT(*)::int AS usage_count,
+        -- usage_count は「検索でヒットした回数」のみを数える。COALESCE(retrieved, true)
+        -- は、この列を追加する前の rag_sources 行(retrieved キーを持たずNULL)を
+        -- true 扱いにするための後方互換: 当時は注入という概念自体が無く、全行が
+        -- 検索ヒットだったため、NULL=true と読み替えても過去の usage_count と
+        -- 一致する(過去データとの比較可能性を壊さない)。
+        -- searchAgent.ts が書く注入専用行(通常RAGに乗らない分)は retrieved: false を
+        -- 明示しているため NULL にならず、この FILTER で正しく除外される
+        -- (省略すると旧形式の行と区別が付かず usage_count が水増しされる)。
+        COUNT(*) FILTER (WHERE COALESCE(retrieved, true))::int AS usage_count,
         COUNT(*) FILTER (WHERE injected)::int AS injected_count,
         COUNT(DISTINCT session_uuid)::int AS conversation_count,
         COUNT(DISTINCT CASE WHEN converted THEN session_uuid END)::int AS conversion_count,

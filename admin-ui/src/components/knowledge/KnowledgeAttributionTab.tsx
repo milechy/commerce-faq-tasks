@@ -33,8 +33,13 @@ interface AttributionItem {
   source: "faq" | "book";
   title: string;
   principle?: string;
+  /** 通常の検索(RAG)でヒットした回数。心理学原則として注入された分は含まない。 */
   usage_count: number;
-  /** T4: この本の一節を、心理学の教えとして踏まえて答えに使った回数(usage_countの内数)。 */
+  /**
+   * T4: この本の一節を、心理学の教えとして踏まえて答えに使った回数。
+   * usage_count とは独立した別軸(部分集合ではない)。通常の検索ではヒットせず
+   * 注入だけで使われたチャンクもあるため、usage_count より大きくなることもある。
+   */
   injected_count: number;
   conversation_count: number;
   conversion_count: number;

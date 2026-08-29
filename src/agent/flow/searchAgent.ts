@@ -252,7 +252,10 @@ export async function runSearchAgent(
   // T3(Asana LB-1): principleChunks(心理学原則として注入した分)は通常RAGとは
   // 別の検索(principleSearch.ts のベクトル近傍検索)からヒットするため、
   // rerankResult.items に含まれるとは限らない。含まれる場合は行を2つにせず
-  // injected フラグを立てるだけにする(既存の usage_count の意味を変えないため)。
+  // retrieved(通常RAGヒット)・injected(注入)の2つの独立したフラグで表現する
+  // (usage_count は retrieved のみを数え、injected_count とは別軸で集計する。
+  // summaryQueries.ts / .claude/rules/knowledge.md「生産者と消費者が別のリテラルを
+  // 持たない」参照)。
   const principleChunkIds = new Set(principleChunks.map((p) => p.chunkId));
   const ragSources: RagSource[] = rerankResult.items.map((it) => {
     const meta = (it as { metadata?: Record<string, unknown> }).metadata;
@@ -265,6 +268,7 @@ export async function runSearchAgent(
       chunk_id: String(it.id),
       source: sourceType,
       score: typeof it.score === "number" ? it.score : 0,
+      retrieved: true,
     };
     if (principle) source.principle = principle;
     if (principleChunkIds.has(Number(it.id))) source.injected = true;
@@ -274,6 +278,9 @@ export async function runSearchAgent(
   // 通常RAG(rerankResult.items)に乗らなかった注入分を追加する。
   // score は rerank のクロスエンコーダスコアを持たない(principleSearch.ts は
   // ベクトル距離のみで rerank を経由しない)ため 0 とする。
+  // retrieved: false を明示する(キーを省略しない)。省略すると summaryQueries.ts の
+  // COALESCE(retrieved, true) が retrieved 未導入時代の旧行(NULL=true扱いが正しい)
+  // と区別できず、この注入専用行まで usage_count に数えてしまう。
   const rerankedChunkIds = new Set(rerankResult.items.map((it) => it.id));
   for (const chunk of principleChunks) {
     const chunkId = String(chunk.chunkId);
@@ -283,6 +290,7 @@ export async function runSearchAgent(
       source: "book",
       score: 0,
       principle: chunk.principle,
+      retrieved: false,
       injected: true,
     });
   }
