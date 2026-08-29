@@ -27,8 +27,12 @@ function makeApp(opts: {
   dbRows?: object[];
   dbError?: Error;
   dbNull?: boolean;
+  // [H-7] planゲート追加により、client_adminはqueryTenantPlanの結果で403になり得る。
+  // このテストファイルの本来の関心事(role/tenant/period/group_by等)を検証し続けられるよう、
+  // 既定でゲートを通過できるplanを返す(super_adminはバイパスされるため影響しない)。
+  plan?: string;
 }) {
-  const { role = 'client_admin', tenantId = 'tenant-a', dbRows = [], dbError } = opts;
+  const { role = 'client_admin', tenantId = 'tenant-a', dbRows = [], dbError, plan = 'growth' } = opts;
 
   const app = express();
   app.use(express.json());
@@ -45,8 +49,13 @@ function makeApp(opts: {
   const mockPool: any = opts.dbNull
     ? null
     : {
-        query: jest.fn().mockImplementation(() => {
+        query: jest.fn().mockImplementation((sql: string) => {
           if (dbError) return Promise.reject(dbError);
+          // [H-7] queryTenantPlan(`SELECT plan FROM tenants ...`)は行動イベント本体の
+          // クエリ(behavioral_events)とは別物なので、SQLで判別して答える。
+          if (/SELECT\s+plan\s+FROM\s+tenants/i.test(sql)) {
+            return Promise.resolve({ rows: [{ plan }] });
+          }
           return Promise.resolve({ rows: dbRows });
         }),
       };
@@ -138,6 +147,47 @@ describe('GET /v1/admin/analytics/events', () => {
         .query({ tenant_id: 'tenant-a' });
 
       expect(res.status).toBe(200);
+    });
+  });
+
+  // [H-7] GID 1217969364194602: 行動イベント分析は「基本の会話分析」(analytics)の一部として
+  // Standard〜で開放する。plan=starter未満は403、standard以上は通過することの回帰テスト。
+  describe('plan ゲート', () => {
+    it('client_admin + plan=starter → 403 plan_upgrade_required', async () => {
+      const { app, mockPool } = makeApp({
+        role: 'client_admin',
+        tenantId: 'tenant-a',
+        plan: 'starter',
+      });
+
+      const res = await request(app).get('/v1/admin/analytics/events');
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toBe('plan_upgrade_required');
+      expect(mockPool.query).toHaveBeenCalledTimes(1); // plan確認のみ、行動イベントのクエリは実行されない
+    });
+
+    it('client_admin + plan=standard → 200 (ゲートを通過する)', async () => {
+      const { app } = makeApp({
+        role: 'client_admin',
+        tenantId: 'tenant-a',
+        plan: 'standard',
+        dbRows: [],
+      });
+
+      const res = await request(app).get('/v1/admin/analytics/events');
+
+      expect(res.status).toBe(200);
+    });
+
+    it('super_adminはplanゲートをバイパスする(plan確認クエリが実行されない)', async () => {
+      const { app, mockPool } = makeApp({ role: 'super_admin', dbRows: [] });
+
+      const res = await request(app).get('/v1/admin/analytics/events');
+
+      expect(res.status).toBe(200);
+      const firstCallSql = mockPool.query.mock.calls[0]?.[0] ?? '';
+      expect(firstCallSql).not.toMatch(/SELECT plan FROM tenants/);
     });
   });
 
