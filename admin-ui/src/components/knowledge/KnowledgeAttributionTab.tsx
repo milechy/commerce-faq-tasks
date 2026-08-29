@@ -14,6 +14,9 @@ import {
 } from "chart.js";
 import { Bar } from "react-chartjs-2";
 import { authFetch, API_BASE } from "../../lib/api";
+// 回答の出来ばえ(judge_score)の色分けは旧UI(analytics)と同じ閾値(80/60)を使う
+// (admin-ui/CLAUDE.md「同じ値が面によって違って見えてはならない」)。
+import { scoreColor } from "../../pages/admin/analytics/utils";
 
 // react-chartjs-2 の <Bar> 描画に必要な Chart.js コンポーネントを登録（idempotent）。
 // 登録は analytics ページ側のモジュールでしか実行されておらず、analytics を先に開いて
@@ -31,6 +34,8 @@ interface AttributionItem {
   title: string;
   principle?: string;
   usage_count: number;
+  /** T4: この本の一節を、心理学の教えとして踏まえて答えに使った回数(usage_countの内数)。 */
+  injected_count: number;
   conversation_count: number;
   conversion_count: number;
   conversion_rate: number;
@@ -92,6 +97,35 @@ const TD: CSSProperties = {
 
 function formatRate(r: number): string {
   return `${(r * 100).toFixed(1)}%`;
+}
+
+// 赤嶺氏らテナント管理者はITリテラシーが高くない前提の画面のため、母数が少ない
+// うちから「効果0%」のような架空の数字を出さない(ゼロ埋め禁止)。
+// 会話数がこの件数に満たない間は割合を出さず、あと何件で判定できるかを伝える。
+// 5 は src/api/admin/analytics/ruleEffect.ts の母数ゲート(MIN_SAMPLE_SIZE)と
+// 同じ基準に合わせた(admin-ui は別パッケージのため定数の直接importはせず値を揃える)。
+const MIN_SAMPLE_SIZE_FOR_DISPLAY = 5;
+
+/**
+ * 「問い合わせにつながった割合」の表示文言を組み立てる。
+ * 母数が十分なら実数(N人中M人)と割合を、不十分ならその旨とあと何件必要かを返す。
+ */
+function conversionDisplay(item: {
+  conversation_count: number;
+  conversion_count: number;
+  conversion_rate: number;
+}): { sufficient: boolean; text: string } {
+  if (item.conversation_count < MIN_SAMPLE_SIZE_FOR_DISPLAY) {
+    const remaining = MIN_SAMPLE_SIZE_FOR_DISPLAY - item.conversation_count;
+    return {
+      sufficient: false,
+      text: `まだ判断できる会話数がありません（現在${item.conversation_count}件。あと${remaining}件で見られます）`,
+    };
+  }
+  return {
+    sufficient: true,
+    text: `${item.conversation_count}人中${item.conversion_count}人（${formatRate(item.conversion_rate)}）`,
+  };
 }
 
 function trendLabel(trend: AttributionItem["trend"]): { label: string; color: string } {
@@ -168,7 +202,7 @@ export default function KnowledgeAttributionTab({ tenantId }: { tenantId: string
       ),
       datasets: [
         {
-          label: "CV率 (%)",
+          label: "問い合わせにつながった割合 (%)",
           data: top10.map((x) => Number((x.conversion_rate * 100).toFixed(1))),
           backgroundColor: top10.map((x) =>
             x.source === "book" ? "rgba(251,191,36,0.7)" : "rgba(96,165,250,0.7)",
@@ -189,7 +223,7 @@ export default function KnowledgeAttributionTab({ tenantId }: { tenantId: string
       legend: { display: false },
       title: {
         display: true,
-        text: "Top10 ナレッジ CV率比較",
+        text: "Top10 ナレッジ 問い合わせにつながった割合の比較",
         color: "#e5e7eb",
       },
     },
@@ -260,9 +294,9 @@ export default function KnowledgeAttributionTab({ tenantId }: { tenantId: string
             onChange={(e) => setSortBy(e.target.value as SortBy)}
             style={SELECT}
           >
-            <option value="conversion_rate">CV率</option>
+            <option value="conversion_rate">問い合わせにつながった割合</option>
             <option value="usage_count">利用回数</option>
-            <option value="judge_score">Judgeスコア</option>
+            <option value="judge_score">回答の出来ばえ</option>
           </select>
         </div>
       </div>
@@ -299,17 +333,24 @@ export default function KnowledgeAttributionTab({ tenantId }: { tenantId: string
               </p>
             </div>
             <div style={CARD}>
-              <p style={{ margin: 0, fontSize: 12, color: "#9ca3af" }}>平均CV率</p>
-              <p
-                style={{
-                  margin: "6px 0 0",
-                  fontSize: 28,
-                  fontWeight: 700,
-                  color: "#4ade80",
-                }}
-              >
-                {formatRate(data.summary.avg_conversion_rate)}
-              </p>
+              <p style={{ margin: 0, fontSize: 12, color: "#9ca3af" }}>問い合わせにつながった割合（平均）</p>
+              {data.summary.total_chunks_used > 0 ? (
+                <p
+                  style={{
+                    margin: "6px 0 0",
+                    fontSize: 28,
+                    fontWeight: 700,
+                    color: "#4ade80",
+                  }}
+                >
+                  {formatRate(data.summary.avg_conversion_rate)}
+                </p>
+              ) : (
+                // 母数ゼロを「効果0%」と表示しない(まだ使われたナレッジが無いだけ)
+                <p style={{ margin: "6px 0 0", fontSize: 14, color: "#6b7280" }}>
+                  まだ判断できる会話数がありません
+                </p>
+              )}
             </div>
             <div style={CARD}>
               <p style={{ margin: 0, fontSize: 12, color: "#9ca3af" }}>
@@ -327,16 +368,21 @@ export default function KnowledgeAttributionTab({ tenantId }: { tenantId: string
                   >
                     {data.summary.top_performer.title}
                   </p>
-                  <p
-                    style={{
-                      margin: 0,
-                      fontSize: 13,
-                      fontWeight: 700,
-                      color: "#4ade80",
-                    }}
-                  >
-                    CV率 {formatRate(data.summary.top_performer.conversion_rate)}
-                  </p>
+                  {(() => {
+                    const conv = conversionDisplay(data.summary.top_performer!);
+                    return (
+                      <p
+                        style={{
+                          margin: 0,
+                          fontSize: 13,
+                          fontWeight: conv.sufficient ? 700 : 400,
+                          color: conv.sufficient ? "#4ade80" : "#6b7280",
+                        }}
+                      >
+                        {conv.text}
+                      </p>
+                    );
+                  })()}
                 </>
               ) : (
                 <p style={{ margin: "6px 0 0", fontSize: 14, color: "#6b7280" }}>
@@ -379,20 +425,22 @@ export default function KnowledgeAttributionTab({ tenantId }: { tenantId: string
                   >
                     利用回数
                   </th>
-                  <th style={TH}>CV回数</th>
+                  <th style={TH} title="この本の一節を、心理学の教えとして踏まえて答えに使った回数">
+                    教えとして使われた回数
+                  </th>
                   <th
                     style={TH}
                     onClick={() => setSortBy("conversion_rate")}
-                    title="クリックでCV率順"
+                    title="クリックで並び替え"
                   >
-                    CV率
+                    問い合わせにつながった割合
                   </th>
                   <th
                     style={TH}
                     onClick={() => setSortBy("judge_score")}
-                    title="クリックでJudgeスコア順"
+                    title="クリックで並び替え"
                   >
-                    Judgeスコア
+                    回答の出来ばえ
                   </th>
                   <th style={TH}>トレンド</th>
                 </tr>
@@ -401,7 +449,7 @@ export default function KnowledgeAttributionTab({ tenantId }: { tenantId: string
                 {data.items.length === 0 && (
                   <tr>
                     <td style={{ ...TD, textAlign: "center", color: "#6b7280" }} colSpan={7}>
-                      データがまだありません。RAGソース記録は Phase68 デプロイ以降の会話から蓄積されます。
+                      まだ判断できる会話数がありません（現在0件）。もう少し会話がたまると、ここに結果が表示されます。
                     </td>
                   </tr>
                 )}
@@ -414,11 +462,12 @@ export default function KnowledgeAttributionTab({ tenantId }: { tenantId: string
                         <div style={{ fontWeight: 600, color: "#f9fafb" }}>
                           {item.title}
                         </div>
-                        {item.principle && (
+                        {item.injected_count > 0 && (
                           <div
                             style={{ fontSize: 11, color: "#fbbf24", marginTop: 2 }}
+                            title="この本の一節を、心理学の教えとして踏まえて答えました"
                           >
-                            原則: {item.principle}
+                            この教えを踏まえて答えました
                           </div>
                         )}
                       </td>
@@ -439,13 +488,26 @@ export default function KnowledgeAttributionTab({ tenantId }: { tenantId: string
                         </span>
                       </td>
                       <td style={TD}>{item.usage_count}</td>
-                      <td style={TD}>{item.conversion_count}</td>
-                      <td style={{ ...TD, fontWeight: 700, color: "#4ade80" }}>
-                        {formatRate(item.conversion_rate)}
-                      </td>
                       <td style={TD}>
+                        {item.source === "book" ? `${item.injected_count}回` : "—"}
+                      </td>
+                      {(() => {
+                        const conv = conversionDisplay(item);
+                        return (
+                          <td
+                            style={{
+                              ...TD,
+                              fontWeight: conv.sufficient ? 700 : 400,
+                              color: conv.sufficient ? "#4ade80" : "#6b7280",
+                            }}
+                          >
+                            {conv.text}
+                          </td>
+                        );
+                      })()}
+                      <td style={{ ...TD, color: scoreColor(item.avg_judge_score) }}>
                         {item.avg_judge_score != null
-                          ? item.avg_judge_score.toFixed(1)
+                          ? `${item.avg_judge_score.toFixed(1)}点`
                           : "—"}
                       </td>
                       <td style={{ ...TD, color: tLabel.color, fontWeight: 600 }}>
