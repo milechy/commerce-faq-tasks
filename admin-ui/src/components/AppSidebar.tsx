@@ -23,6 +23,7 @@ import {
   HelpCircle,
   Sparkles,
   Menu,
+  BookOpenCheck,
 } from "lucide-react";
 import { useAuth } from "../auth/useAuth";
 import { NotificationBell } from "./common/NotificationBell";
@@ -97,6 +98,9 @@ const SUPER_ADMIN_SECTION: NavSection = {
   superAdminOnly: true,
   items: [
     { label: "テナント管理", path: "/admin/tenants", icon: Building2 },
+    // GID 1217968284736841 (T9): 著者(赤嶺氏)専用画面。super_admin全体には無関係の
+    // 機能だが、対象ユーザーがsuper_adminのため配置場所は他と揃える
+    { label: "あなたの教えの実践", path: "/admin/author-loop", icon: BookOpenCheck },
     { label: "お客様の声", path: "/admin/feedback", icon: MessageCircleHeart },
     { label: "代行作業管理", path: "/admin/options", icon: FileText },
     { label: "システム稼働状況", path: "/admin/monitoring", icon: BellRing },

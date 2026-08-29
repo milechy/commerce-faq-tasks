@@ -32,6 +32,7 @@ import AvatarStudioPage from "./pages/admin/avatar/studio";
 import AvatarWizardPage from "./pages/admin/avatar/wizard";
 import AvatarDefaultsPage from "./pages/admin/avatar-defaults/index";
 import KnowledgeAnalyticsPage from "./pages/admin/knowledge/analytics";
+import AuthorLoopPage from "./pages/admin/author-loop/index";
 import AnalyticsDashboardPage from "./pages/admin/analytics/index";
 import CvStatusPage from "./pages/admin/analytics/cv-status";
 import FlowAnalyticsPage from "./pages/admin/analytics/FlowAnalyticsPage";
@@ -173,6 +174,9 @@ export const ADMIN_ROUTES = (
 
         {/* AI学習・貢献分析 — super_admin 専用（OpenClaw 横断分析） */}
         <Route path="/admin/knowledge-analytics" element={<SuperAdminRoute><KnowledgeAnalyticsPage /></SuperAdminRoute>} />
+
+        {/* GID 1217968284736841 (T9): 著者(赤嶺氏)専用 — super_admin 専用 */}
+        <Route path="/admin/author-loop" element={<SuperAdminRoute><AuthorLoopPage /></SuperAdminRoute>} />
 
         {/* Phase45: AI評価 — 廃止: /admin/chat-history にリダイレクト */}
         <Route path="/admin/evaluations" element={<Navigate to="/admin/chat-history" replace />} />
