@@ -81,5 +81,3 @@ export const API_BASE_URL = apiBaseUrl;
 // 組み立てていた重複を解消するための派生定数。
 export const DEMO_BASE_URL = `${API_BASE_URL}/carnation-demo`;
 export const DEMO_INDEX_URL = `${DEMO_BASE_URL}/index.html`;
-
-// E2E 失敗時アーティファクト回収のための一時コメント（PR #1046 の効果を確認し、失敗の一次証拠を取得する目的。計測後に破棄する）
