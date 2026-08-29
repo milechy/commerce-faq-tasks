@@ -7,12 +7,20 @@ import { registerHermesMcpRoutes } from "./routes";
 jest.mock("../../lib/hermesConsent", () => ({
   isHermesDataConsentGranted: jest.fn(),
   listHermesConsentingTenantIds: jest.fn(),
+  // GET /proposalsが「生SQLで判定を再実装していない」ことを検証できるよう、
+  // 引数(features列を指す式)をそのままマーカー文字列に埋め込むダミー実装にする。
+  shareConsentSqlPredicate: jest.fn((featuresExpr: string) => `SHARE_PREDICATE(${featuresExpr})`),
 }));
 jest.mock("./hermesMcpRepository", () => ({
   searchConversations: jest.fn(),
 }));
 jest.mock("../../lib/notifications", () => ({
   createNotification: jest.fn(),
+}));
+// [H-1] GET /proposalsの効果測定は既存のDiD集計(getRuleEffect)を再利用する。
+// ルート層のテストではDBを介した実計算まで検証しないため、ここではモックする。
+jest.mock("../admin/analytics/ruleEffect", () => ({
+  getRuleEffect: jest.fn(),
 }));
 
 // R6: 提案は hermes_strategy_proposals ではなく tuning_rules に着地する
@@ -26,11 +34,13 @@ jest.mock("../../lib/db", () => ({
 import { isHermesDataConsentGranted, listHermesConsentingTenantIds } from "../../lib/hermesConsent";
 import { searchConversations } from "./hermesMcpRepository";
 import { createNotification } from "../../lib/notifications";
+import { getRuleEffect } from "../admin/analytics/ruleEffect";
 
 const mockIsConsentGranted = isHermesDataConsentGranted as jest.Mock;
 const mockListConsenting = listHermesConsentingTenantIds as jest.Mock;
 const mockSearchConversations = searchConversations as jest.Mock;
 const mockCreateNotification = createNotification as jest.Mock;
+const mockGetRuleEffect = getRuleEffect as jest.Mock;
 
 const API_KEY = "test-hermes-mcp-key";
 
@@ -73,6 +83,7 @@ beforeEach(() => {
   mockSearchConversations.mockReset();
   mockCreateNotification.mockReset().mockResolvedValue(undefined);
   mockQuery.mockReset().mockResolvedValue({ rows: [{ id: 1 }] });
+  mockGetRuleEffect.mockReset();
 });
 
 afterEach(() => {
@@ -87,6 +98,11 @@ describe("認証ガード", () => {
 
   it("Bearerトークンなしは401(conversations)", async () => {
     const res = await request(makeApp()).get("/v1/hermes-mcp/conversations?tenant_id=carnation");
+    expect(res.status).toBe(401);
+  });
+
+  it("Bearerトークンなしは401(proposals)", async () => {
+    const res = await request(makeApp()).get("/v1/hermes-mcp/proposals");
     expect(res.status).toBe(401);
   });
 });
@@ -243,5 +259,131 @@ describe("POST /v1/hermes-mcp/proposals", () => {
     const { dedup_key: _drop, ...rest } = VALID_GLOBAL_PROPOSAL;
     const res = await authedPost("/v1/hermes-mcp/proposals", rest);
     expect(res.status).toBe(400);
+  });
+});
+
+describe("GET /v1/hermes-mcp/proposals", () => {
+  const PENDING_TENANT_ROW = {
+    id: 1,
+    tenant_id: "carnation",
+    trigger_pattern: "保証訴求の改善",
+    status: "pending",
+    dedup_key: "tenant:carnation:warranty-pitch",
+    approved_at: null,
+    rejected_at: null,
+    created_at: "2026-08-20T00:00:00.000Z",
+  };
+
+  const REJECTED_GLOBAL_ROW = {
+    id: 2,
+    tenant_id: "global",
+    trigger_pattern: "心理原則scarcityの全体採用を検討",
+    status: "rejected",
+    dedup_key: "global:scarcity-pattern",
+    approved_at: null,
+    rejected_at: "2026-08-21T00:00:00.000Z",
+    created_at: "2026-08-19T00:00:00.000Z",
+  };
+
+  const ACTIVE_TENANT_ROW = {
+    id: 3,
+    tenant_id: "carnation",
+    trigger_pattern: "初回応答の見直し",
+    status: "active",
+    dedup_key: "tenant:carnation:first-response",
+    approved_at: "2026-08-22T00:00:00.000Z",
+    rejected_at: null,
+    created_at: "2026-08-18T00:00:00.000Z",
+  };
+
+  it("R6: tuning_rules(source='hermes')を読み、越境防止はshareConsentSqlPredicate()を経由する(生SQLで再実装しない)", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    const res = await authedGet("/v1/hermes-mcp/proposals");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ proposals: [] });
+
+    const [sql, args] = mockQuery.mock.calls[0]!;
+    expect(sql).toContain("tr.source = 'hermes'");
+    expect(sql).toContain("tr.tenant_id = 'global'");
+    // 生SQLで判定を再実装せず shareConsentSqlPredicate() を経由していること
+    // (モックはマーカー文字列を返すダミー実装なので、その出現で呼び出しを検証する)
+    expect(sql).toContain("SHARE_PREDICATE(t.features)");
+    expect(sql).toContain("ORDER BY tr.created_at DESC");
+    expect(args).toEqual([50]); // 既定limit(hermesMcpRepository.tsのDEFAULT_LIMITに合わせる)
+  });
+
+  it("pending/rejectedの提案をtitle/status/dedup_key/decided_at付きで返す(未承認・却下は効果測定を呼ばない)", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [PENDING_TENANT_ROW, REJECTED_GLOBAL_ROW] });
+    const res = await authedGet("/v1/hermes-mcp/proposals");
+
+    expect(res.status).toBe(200);
+    expect(res.body.proposals).toEqual([
+      {
+        proposal_id: "1",
+        scope: "tenant",
+        tenant_id: "carnation",
+        title: "保証訴求の改善",
+        status: "pending",
+        dedup_key: "tenant:carnation:warranty-pitch",
+        decided_at: null,
+        created_at: "2026-08-20T00:00:00.000Z",
+        effect: null,
+      },
+      {
+        proposal_id: "2",
+        scope: "global",
+        title: "心理原則scarcityの全体採用を検討",
+        status: "rejected",
+        dedup_key: "global:scarcity-pattern",
+        decided_at: "2026-08-21T00:00:00.000Z",
+        created_at: "2026-08-19T00:00:00.000Z",
+        effect: null,
+      },
+    ]);
+    expect(mockGetRuleEffect).not.toHaveBeenCalled();
+  });
+
+  it("status='active'の提案のみ既存のDiD効果測定(getRuleEffect)を再利用して結果を含める", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [ACTIVE_TENANT_ROW, PENDING_TENANT_ROW] });
+    mockGetRuleEffect.mockResolvedValue({ status: "insufficient_data", minSampleSize: 5, progress: [] });
+
+    const res = await authedGet("/v1/hermes-mcp/proposals");
+
+    expect(res.status).toBe(200);
+    expect(mockGetRuleEffect).toHaveBeenCalledTimes(1);
+    expect(mockGetRuleEffect).toHaveBeenCalledWith(expect.anything(), 3);
+
+    const active = res.body.proposals.find((p: { proposal_id: string }) => p.proposal_id === "3");
+    expect(active.status).toBe("active");
+    expect(active.decided_at).toBe("2026-08-22T00:00:00.000Z");
+    expect(active.effect).toEqual({ status: "insufficient_data", minSampleSize: 5, progress: [] });
+
+    const pending = res.body.proposals.find((p: { proposal_id: string }) => p.proposal_id === "1");
+    expect(pending.effect).toBeNull();
+  });
+
+  it("limit未指定は既定50、200を超える指定は400でクエリを発行しない", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    const okRes = await authedGet("/v1/hermes-mcp/proposals?limit=10");
+    expect(okRes.status).toBe(200);
+    expect(mockQuery.mock.calls[0]![1]).toEqual([10]);
+
+    mockQuery.mockClear();
+    const badRes = await authedGet("/v1/hermes-mcp/proposals?limit=9999");
+    expect(badRes.status).toBe(400);
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  it("limitが整数でない場合も400", async () => {
+    const res = await authedGet("/v1/hermes-mcp/proposals?limit=abc");
+    expect(res.status).toBe(400);
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  it("DBエラー時は500", async () => {
+    mockQuery.mockRejectedValueOnce(new Error("db down"));
+    const res = await authedGet("/v1/hermes-mcp/proposals");
+    expect(res.status).toBe(500);
   });
 });

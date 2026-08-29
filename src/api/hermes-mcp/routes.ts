@@ -12,14 +12,24 @@
 
 import type { Express, Request, Response } from "express";
 import { hermesMcpAuthMiddleware } from "./hermesMcpAuth";
-import { isHermesDataConsentGranted, listHermesConsentingTenantIds } from "../../lib/hermesConsent";
+import {
+  isHermesDataConsentGranted,
+  listHermesConsentingTenantIds,
+  shareConsentSqlPredicate,
+} from "../../lib/hermesConsent";
 import { searchConversations } from "./hermesMcpRepository";
+import { getRuleEffect } from "../admin/analytics/ruleEffect";
 import { getPool } from "../../lib/db";
 import { createNotification } from "../../lib/notifications";
 import { logger } from "../../lib/logger";
 
 const MAX_QUERY_LEN = 200;
 const MAX_TEXT_LEN = 2000;
+
+// GET /proposals のページング。既存 GET /conversations の作法(hermesMcpRepository.ts の
+// MAX_LIMIT/DEFAULT_LIMIT)に合わせる。
+const PROPOSALS_MAX_LIMIT = 200;
+const PROPOSALS_DEFAULT_LIMIT = 50;
 
 type HermesProposalScope = "global" | "tenant";
 const VALID_PROPOSAL_SCOPES: readonly HermesProposalScope[] = ["global", "tenant"];
@@ -209,6 +219,90 @@ export function registerHermesMcpRoutes(app: Express): void {
       return res.status(201).json({ proposal_id: String(insertedId), duplicate: false });
     } catch (err) {
       logger.warn({ err }, "[hermes-mcp] insert proposal failed");
+      return res.status(500).json({ error: "internal_error" });
+    }
+  });
+
+  // ----------------------------------------------------------------
+  // GET /v1/hermes-mcp/proposals
+  // Hermesが過去に投稿した自分の提案の判断結果(pending/active/rejected)を
+  // 読み戻すための学習ループの口。R6により提案は hermes_strategy_proposals
+  // ではなく tuning_rules(source='hermes') に着地しているため、ここでも
+  // tuning_rules を読む(受け皿を1つに保つ。第2の永続化経路を作らない)。
+  //
+  // 越境防止: scope='tenant' の行(tenant_id != 'global')は同意済みテナントの
+  // ものだけ返す。同意判定は必ず shareConsentSqlPredicate() を使い、生SQLで
+  // 判定ロジックを再実装しない(過去にJSとSQLの判定が食い違いタダ乗りが成立した
+  // 経緯があるため。詳細は hermesConsent.ts の shareConsentSqlPredicate 参照)。
+  // scope='global' の行(tenant_id='global')は同意済みテナントの会話を横断
+  // 分析した結果に基づく(migration_phase74_hermes_strategy_proposals.sql の
+  // 設計コメント参照)ため、無条件に返してよい。
+  // ----------------------------------------------------------------
+  app.get("/v1/hermes-mcp/proposals", async (req: Request, res: Response) => {
+    const rawLimit = req.query["limit"];
+    let limit = PROPOSALS_DEFAULT_LIMIT;
+    if (typeof rawLimit === "string" && rawLimit.trim() !== "") {
+      const parsed = Number(rawLimit);
+      if (!Number.isInteger(parsed) || parsed <= 0 || parsed > PROPOSALS_MAX_LIMIT) {
+        return res.status(400).json({ error: "invalid_limit" });
+      }
+      limit = parsed;
+    }
+
+    try {
+      const pool = getPool();
+      const result = await pool.query<{
+        id: number;
+        tenant_id: string;
+        trigger_pattern: string;
+        status: string;
+        dedup_key: string | null;
+        approved_at: string | null;
+        rejected_at: string | null;
+        created_at: string;
+      }>(
+        `SELECT id, tenant_id, trigger_pattern, status, dedup_key, approved_at, rejected_at, created_at
+           FROM tuning_rules tr
+          WHERE tr.source = 'hermes'
+            AND (
+              tr.tenant_id = 'global'
+              OR EXISTS (
+                SELECT 1 FROM tenants t
+                 WHERE t.id = tr.tenant_id
+                   AND ${shareConsentSqlPredicate("t.features")}
+              )
+            )
+          ORDER BY tr.created_at DESC
+          LIMIT $1`,
+        [limit],
+      );
+
+      // 採用後の効果測定: 既存の DiD 効果集計(getRuleEffect、
+      // /v1/admin/analytics/rule-effect/:ruleId と同じロジック)を再利用する
+      // (実装を2箇所に持たない)。status='active'(承認済み)の提案のみ
+      // before/afterのafter区間が存在するため対象にする。
+      const proposals = await Promise.all(
+        result.rows.map(async (row) => {
+          const scope: HermesProposalScope = row.tenant_id === "global" ? "global" : "tenant";
+          const effect = row.status === "active" ? await getRuleEffect(pool, row.id) : null;
+
+          return {
+            proposal_id: String(row.id),
+            scope,
+            tenant_id: scope === "tenant" ? row.tenant_id : undefined,
+            title: row.trigger_pattern,
+            status: row.status,
+            dedup_key: row.dedup_key,
+            decided_at: row.approved_at ?? row.rejected_at ?? null,
+            created_at: row.created_at,
+            effect,
+          };
+        }),
+      );
+
+      return res.json({ proposals });
+    } catch (err) {
+      logger.warn({ err }, "[hermes-mcp] list proposals failed");
       return res.status(500).json({ error: "internal_error" });
     }
   });
