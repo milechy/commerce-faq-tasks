@@ -39,6 +39,11 @@ const ZIP_MIMETYPES = new Set([
 const MAX_ZIP_PDF_COUNT = 20;                  // ZIP内PDFファイル数上限
 const MAX_ZIP_EXPANDED_BYTES = 200 * 1024 * 1024; // 展開後合計サイズ上限(200MB)
 const CHUNK_EDIT_HISTORY_LIMIT = 20; // metadata.edit_history に保持する件数上限
+// T6再レビュー(2026-08-29): embedding_status='pending' 書き込み後にプロセスが落ちると
+// 従来はチャンクが永久に編集不能(409固定)になっていた。book_pipeline_jobs の
+// checkStuckJobs()(started_at 1h超で検出)と同じ考え方で、一定時間より古い pending は
+// 期限切れとみなしCASで奪えるようにする。同期実装の再埋め込みは数秒で終わるため5分で十分。
+const CHUNK_STALE_PENDING_MS = 5 * 60 * 1000;
 
 // ── Multer: メモリバッファ、50MB上限、PDF + ZIP ────────────────────────────
 const upload = multer({
@@ -857,17 +862,27 @@ export function registerBookPdfRoutes(
         const patchForDb: Record<string, unknown> = { ...patch, edit_history: editHistory };
         if (embeddingEligible) {
           patchForDb['embedding_status'] = 'pending';
+          // 「状態が最後に変わった時刻」として使う(=CASの期限切れ判定の基準)。
+          patchForDb['embedding_updated_at'] = new Date().toISOString();
         }
 
         // 保存ボタン連打対策: embedding_status='pending' の間は次の書き込みを CAS で弾く
-        // (DBの状態で判定するため、プロセスが複数でも安全)。
+        // (DBの状態で判定するため、プロセスが複数でも安全)。ただし pending のまま
+        // CHUNK_STALE_PENDING_MS より古ければ「プロセスが落ちて放置された」とみなし、
+        // 奪って再実行できるようにする(でないと運用者のDB直接操作でしか復帰できず、
+        // 画面には「AIが覚え直しています」が出たまま永久に編集不能になる)。
+        const staleCutoff = new Date(Date.now() - CHUNK_STALE_PENDING_MS).toISOString();
         const casResult = await db.query(
           `UPDATE faq_embeddings
            SET metadata = metadata || $1::jsonb
            WHERE id = $2
-             AND COALESCE(metadata->>'embedding_status', '') <> 'pending'
+             AND (
+               COALESCE(metadata->>'embedding_status', '') <> 'pending'
+               OR metadata->>'embedding_updated_at' IS NULL
+               OR (metadata->>'embedding_updated_at')::timestamptz < $3::timestamptz
+             )
            RETURNING id, metadata`,
-          [JSON.stringify(patchForDb), chunkId]
+          [JSON.stringify(patchForDb), chunkId, staleCutoff]
         );
         if (casResult.rows.length === 0) {
           return res

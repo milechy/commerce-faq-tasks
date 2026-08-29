@@ -437,7 +437,13 @@ describe("PUT /v1/admin/knowledge/book-pdf/chunks/:chunkId", () => {
         }
 
         if (sql.includes("COALESCE(metadata->>'embedding_status'")) {
-          if ((currentMetadata as Record<string, unknown>)["embedding_status"] === "pending") {
+          const meta = currentMetadata as Record<string, unknown>;
+          const staleCutoff = params[2] as string;
+          const updatedAt = meta["embedding_updated_at"] as string | undefined;
+          const stillFreshlyPending =
+            meta["embedding_status"] === "pending" &&
+            (updatedAt == null ? false : new Date(updatedAt) >= new Date(staleCutoff));
+          if (stillFreshlyPending) {
             return Promise.resolve({ rows: [], rowCount: 0 });
           }
           const patch = JSON.parse(params[0] as string);
@@ -600,7 +606,7 @@ describe("PUT /v1/admin/knowledge/book-pdf/chunks/:chunkId", () => {
     expect(updateCalls).toHaveLength(0);
   });
 
-  it("embedding_status='pending' の間の二重送信は409で弾かれる(連打対策)", async () => {
+  it("embedding_status='pending' が新しい間の二重送信は409で弾かれる(連打対策)", async () => {
     const chunkRow = {
       id: 14,
       metadata: {
@@ -610,6 +616,7 @@ describe("PUT /v1/admin/knowledge/book-pdf/chunks/:chunkId", () => {
         principle: "希少性",
         situation: "状況",
         embedding_status: "pending",
+        embedding_updated_at: new Date().toISOString(), // たった今 pending になった
       },
       is_excluded_from_search: false,
       tenant_id: "tenant-a",
@@ -622,6 +629,62 @@ describe("PUT /v1/admin/knowledge/book-pdf/chunks/:chunkId", () => {
 
     expect(res.status).toBe(409);
     expect(embedText).not.toHaveBeenCalled();
+  });
+
+  // 2026-08-29 再レビュー: pending 書き込み後にプロセスが落ちると、CASの条件が
+  // 「pendingでない」だけだと永久に409を返し続け、運用者のDB直接操作でしか
+  // 復帰できなかった。book_pipeline_jobs の checkStuckJobs() と同じ考え方で、
+  // 一定時間より古い pending は期限切れとみなして奪えることを確認する。
+  it("embedding_status='pending' が古い(CHUNK_STALE_PENDING_MS超)場合は奪って再実行できる", async () => {
+    const chunkRow = {
+      id: 18,
+      metadata: {
+        source: "book",
+        book_id: 1,
+        chunk_index: 0,
+        principle: "希少性",
+        situation: "状況",
+        embedding_status: "pending",
+        embedding_updated_at: new Date(Date.now() - 10 * 60 * 1000).toISOString(), // 10分前=期限切れ
+      },
+      is_excluded_from_search: false,
+      tenant_id: "tenant-a",
+    };
+    const { app } = makeChunkApp(chunkRow);
+
+    const res = await request(app)
+      .put("/v1/admin/knowledge/book-pdf/chunks/18")
+      .send({ situation: "別の状況" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.embedding_updated).toBe(true);
+    expect(res.body.metadata.embedding_status).toBe("done");
+    expect(embedText).toHaveBeenCalledTimes(1);
+  });
+
+  it("embedding_status='pending' だが embedding_updated_at が無い(異常系)場合も奪って再実行できる", async () => {
+    const chunkRow = {
+      id: 19,
+      metadata: {
+        source: "book",
+        book_id: 1,
+        chunk_index: 0,
+        principle: "希少性",
+        situation: "状況",
+        embedding_status: "pending",
+        // embedding_updated_at が無い異常系(このコード以前に作られた行を想定)
+      },
+      is_excluded_from_search: false,
+      tenant_id: "tenant-a",
+    };
+    const { app } = makeChunkApp(chunkRow);
+
+    const res = await request(app)
+      .put("/v1/admin/knowledge/book-pdf/chunks/19")
+      .send({ situation: "別の状況" });
+
+    expect(res.status).toBe(200);
+    expect(embedText).toHaveBeenCalledTimes(1);
   });
 
   it("product_catalog等 principleSchemaMap に無いスキーマは保存されるが再埋め込みはしない", async () => {
