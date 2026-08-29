@@ -32,3 +32,60 @@ jobs:
               -H 'Content-type: application/json' \
               --data "{\"text\":\"${MSG}\"}" || true
           fi
+
+  # admin-ui は Cloudflare Pages 配信で main へのマージ = 即本番。VPS の
+  # deploy-vps.sh を経由しないため SCRIPTS/post-deploy-widget-smoke.sh が走らず、
+  # 「デプロイ直後に実挙動を見る」層が admin-ui だけ欠けていた(Asana GID 1217972223236801)。
+  # Gate 8 とは所要時間が違う(Pages の公開待ちが入る)ため別ジョブにする。
+  admin-ui-boot-smoke:
+    name: admin-ui 起動スモーク (post-merge)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # post-merge-admin-ui-smoke.sh が HEAD^ との差分で admin-ui の変更有無を
+          # 判定するため、親コミットまで取得する
+          fetch-depth: 2
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright (chromium only)
+        run: npx playwright install --with-deps chromium
+
+      - name: Run admin-ui boot smoke
+        env:
+          SMOKE_USE_BUNDLED_CHROMIUM: '1'
+        run: bash SCRIPTS/post-merge-admin-ui-smoke.sh
+
+      - name: Slack alert on failure
+        if: failure()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL_R2C }}
+        run: |
+          COMMIT_SHA="${{ github.sha }}"
+          SHORT_SHA="${COMMIT_SHA:0:7}"
+          MSG="⛔ *admin-ui 起動スモーク FAIL* (post-merge)\ncommit: \`${SHORT_SHA}\`\n管理画面が白画面 / JS例外の疑い。直近マージの revert を検討してください。\nhttps://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          if [[ -n "${SLACK_WEBHOOK_URL:-}" ]]; then
+            curl -s -X POST "${SLACK_WEBHOOK_URL}" \
+              -H 'Content-type: application/json' \
+              --data "{\"text\":\"${MSG}\"}" || true
+          fi
+
+      - name: Upload smoke artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: admin-ui-boot-smoke-${{ github.run_id }}
+          path: test-results/
+          retention-days: 7
+          if-no-files-found: ignore

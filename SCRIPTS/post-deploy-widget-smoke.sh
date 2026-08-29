@@ -49,7 +49,10 @@ if ! node -e "
   exit 0
 fi
 
-if SMOKE_API_URL="$API_URL" pnpm exec playwright test --config=playwright.smoke.config.ts; then
+# 対象を明示する。tests/smoke には admin-ui 用のスモークもあり、そちらは
+# Cloudflare Pages 配信で VPS デプロイとは無関係なため、ここでは走らせない。
+if SMOKE_API_URL="$API_URL" pnpm exec playwright test --config=playwright.smoke.config.ts \
+     tests/smoke/widgetChatSmoke.spec.ts; then
   echo "   ✅ 本番のウィジェットで会話が成立した"
   exit 0
 fi
