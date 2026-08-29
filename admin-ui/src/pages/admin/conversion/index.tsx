@@ -33,6 +33,8 @@ interface ABExperiment {
   status: 'draft' | 'running' | 'completed' | 'cancelled';
   traffic_split: number;
   min_sample_size: number;
+  /** ab_results との突合済み件数。母数不足の間は判定に使わない(CLAUDE.md 禁止34)。 */
+  total_exposed: number;
   created_at: string;
 }
 
@@ -246,7 +248,12 @@ export default function ConversionDashboardPage() {
       <div style={CARD}>
         <div style={SECTION_TITLE}>🧠 {t("conversion.effectiveness")}</div>
         {rankings.length === 0 ? (
-          <p style={{ color: "var(--muted-foreground)", fontSize: 14 }}>{t("conversion.no_data")}</p>
+          // summary.total===0 (成約自体がまだ無い)と、成約はあるがランキングが空
+          // (原則タグ付けの不備等)は原因が違うため、判定できる情報だけを出す
+          // (CLAUDE.md 禁止34: 母数不足のときに誤った自信を与えない)。
+          <p style={{ color: "var(--muted-foreground)", fontSize: 14 }}>
+            {summary && summary.total === 0 ? t("conversion.effectiveness_awaiting") : t("conversion.no_data")}
+          </p>
         ) : (
           <BarChart items={chartData} />
         )}
@@ -258,31 +265,54 @@ export default function ConversionDashboardPage() {
           <div style={SECTION_TITLE}>🔬 {t("conversion.ab_tests")}</div>
         </div>
         {experiments.length === 0 ? (
-          <p style={{ color: "var(--muted-foreground)", fontSize: 14 }}>{t("conversion.no_data")}</p>
+          <p style={{ color: "var(--muted-foreground)", fontSize: 14 }}>{t("conversion.ab_no_experiments")}</p>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            {experiments.slice(0, 5).map((exp) => (
-              <div key={exp.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: "var(--muted)", borderRadius: 8 }}>
-                <span
-                  style={{
-                    padding: "3px 8px",
-                    borderRadius: 999,
-                    background: `${STATUS_COLORS[exp.status]}22`,
-                    border: `1px solid ${STATUS_COLORS[exp.status]}55`,
-                    color: STATUS_COLORS[exp.status],
-                    fontSize: 11,
-                    fontWeight: 700,
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {statusLabel(exp.status)}
-                </span>
-                <span style={{ flex: 1, fontSize: 14, color: "var(--foreground)" }}>{exp.name}</span>
-                <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>
-                  最小サンプル: {exp.min_sample_size}件
-                </span>
-              </div>
-            ))}
+            {experiments.slice(0, 5).map((exp) => {
+              // reliable の定義は computeAbExperimentResults(集計本体)と揃える。
+              // ここでは判定(勝敗)は出さず、到達条件(現在N/必要N)だけを示す。
+              const reliable = exp.total_exposed >= exp.min_sample_size;
+              return (
+                <div key={exp.id} style={{ display: "flex", flexDirection: "column", gap: 6, padding: "10px 14px", background: "var(--muted)", borderRadius: 8 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                    <span
+                      style={{
+                        padding: "3px 8px",
+                        borderRadius: 999,
+                        background: `${STATUS_COLORS[exp.status]}22`,
+                        border: `1px solid ${STATUS_COLORS[exp.status]}55`,
+                        color: STATUS_COLORS[exp.status],
+                        fontSize: 11,
+                        fontWeight: 700,
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {statusLabel(exp.status)}
+                    </span>
+                    <span style={{ flex: 1, fontSize: 14, color: "var(--foreground)" }}>{exp.name}</span>
+                  </div>
+                  {exp.status === 'running' && (
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <div style={{ flex: 1, height: 6, borderRadius: 999, background: "var(--border)", overflow: "hidden" }}>
+                        <div
+                          style={{
+                            height: "100%",
+                            width: `${Math.min(100, Math.round((exp.total_exposed / Math.max(1, exp.min_sample_size)) * 100))}%`,
+                            background: reliable ? "#22c55e" : "#f59e0b",
+                            transition: "width 0.3s ease",
+                          }}
+                        />
+                      </div>
+                      <span style={{ fontSize: 12, color: "var(--muted-foreground)", whiteSpace: "nowrap" }}>
+                        {reliable
+                          ? t("conversion.ab_ready", { current: exp.total_exposed })
+                          : t("conversion.ab_progress", { current: exp.total_exposed, required: exp.min_sample_size })}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </div>

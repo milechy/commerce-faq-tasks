@@ -289,4 +289,59 @@ describe("fetchMeasurementHealth — chatOpenDropoff", () => {
     expect(r.chatOpenDropoff.visitorsOpened).toBe(0);
     expect(r.chatOpenDropoff.dropoffRate).toBeNull();
   });
+
+  // LB-9: 先回り声がけ(AI起点の自動開封)と能動クリック開封は応答率の意味が違うのに
+  // 従来の visitorsOpened/dropoffRate は合算していた。トリガー種別ごとに出し分ける。
+  describe("proactive/manual の出し分け", () => {
+    it("新フィールド(opened_proactive等)が無い応答でも0にフォールバックする(後方互換)", async () => {
+      const db = makeDb([
+        ...BASE,
+        { rows: [{ since: "2026-08-24T01:13:30Z", with_vid: "25", total: "39" }] },
+        { rows: [{ opened: "10", conversed: "5" }] },
+      ]);
+      const r = await fetchMeasurementHealth(db, null, "30d");
+      expect(r.chatOpenDropoff.proactive).toEqual({ visitorsOpened: 0, visitorsConversed: 0, dropoffRate: null });
+      expect(r.chatOpenDropoff.manual).toEqual({ visitorsOpened: 0, visitorsConversed: 0, dropoffRate: null });
+    });
+
+    it("proactiveとmanualをそれぞれ独立に集計し、母数が閾値以上なら率を出す", async () => {
+      const db = makeDb([
+        ...BASE,
+        { rows: [{ since: "2026-08-01T00:00:00Z", with_vid: "500", total: "500" }] },
+        {
+          rows: [{
+            opened: "400", conversed: "50",
+            opened_proactive: "300", conversed_proactive: "15", // 先回り: 300開いて15会話 = 離脱95%
+            opened_manual: "100", conversed_manual: "35",       // 能動: 100開いて35会話 = 離脱65%
+          }],
+        },
+      ]);
+      const r = await fetchMeasurementHealth(db, null, "30d");
+
+      expect(r.chatOpenDropoff.proactive).toEqual({ visitorsOpened: 300, visitorsConversed: 15, dropoffRate: 95 });
+      expect(r.chatOpenDropoff.manual).toEqual({ visitorsOpened: 100, visitorsConversed: 35, dropoffRate: 65 });
+      // 全体の visitorsOpened(400) と proactive+manual(300+100=400) は一致しうるが、
+      // 両方の開き方をした訪問者がいれば全体の方が小さくなる(重複を1人と数えるため)。
+      // このテストでは一致するケースを検証するに留め、不一致自体は不変条件としない。
+      expect(r.chatOpenDropoff.visitorsOpened).toBe(400);
+    });
+
+    it("proactiveの母数が閾値未満ならproactiveのdropoffRateだけnullになる(manualは出る)", async () => {
+      const db = makeDb([
+        ...BASE,
+        { rows: [{ since: "2026-08-01T00:00:00Z", with_vid: "100", total: "100" }] },
+        {
+          rows: [{
+            opened: "100", conversed: "60",
+            opened_proactive: "5", conversed_proactive: "1",    // 母数不足(MIN_VISITORS_FOR_RATE=30未満)
+            opened_manual: "95", conversed_manual: "59",
+          }],
+        },
+      ]);
+      const r = await fetchMeasurementHealth(db, null, "30d");
+
+      expect(r.chatOpenDropoff.proactive.dropoffRate).toBeNull();
+      expect(r.chatOpenDropoff.manual.dropoffRate).not.toBeNull();
+    });
+  });
 });

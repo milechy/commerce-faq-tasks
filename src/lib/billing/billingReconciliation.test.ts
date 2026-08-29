@@ -186,13 +186,32 @@ describe('reconcileTenantPeriod（込み枠プラン: 次元ごとに突合す�
     const db = makeDb({
       'SELECT plan FROM tenants': () => ({ rows: [{ plan: 'starter' }] }),
       'billed_units_weighted': AGG(100, 0),
+      // LB-3: Starterは480(¥9,600)で頭打ちになるため、加重合計(99999)ではなく
+      // 480を「実際に送った数量」として置く(突合の一致自体を検証したいテストなので、
+      // ここではキャップ後の期待値と揃える。キャップ導入前後の不一致検知は
+      // 別テストで扱う)。
       "status = 'sent'": (sql: string) => {
         expect(sql).not.toMatch(/dimension/);
-        return { rows: [{ billed_quantity: 99999 }] };
+        return { rows: [{ billed_quantity: 480 }] };
       },
     });
     const result = await reconcileTenantPeriod(db as any, mockLogger, 't1', '202603');
     expect(result.matches).toBe(true);
+  });
+
+  // LB-3導入時点で、月内に既に480を超えて送信済みのStarterテナントがいた場合、
+  // 静かに追認せず不一致として検知すること(過去に送った数量をStripe側で
+  // 勝手に減らすことはできないため、人手での確認・クレジット調整が必要になる)。
+  it('LB-3: 上限導入前に480超を送信済みのStarterは不一致として検知する(静かに帳尻を合わせない)', async () => {
+    const db = makeDb({
+      'SELECT plan FROM tenants': () => ({ rows: [{ plan: 'starter' }] }),
+      'billed_units_weighted': AGG(100, 0), // AGGのtextUnits引数はbilled_units_weighted(常に'99999')には影響しない
+      "status = 'sent'": () => ({ rows: [{ billed_quantity: 600 }] }), // 上限導入前に480超を送信済みという想定
+    });
+    const result = await reconcileTenantPeriod(db as any, mockLogger, 't1', '202603');
+    expect(result.expectedBilledQuantity).toBe(480);
+    expect(result.lastReportedQuantity).toBe(600);
+    expect(result.matches).toBe(false);
   });
 });
 

@@ -17,7 +17,12 @@ interface MinimalLogger {
 // 焼き付けるため、Stripe連携モジュールへの依存を持たせたくない）。
 // re-export は置かない。PLAN_MULTIPLIERS/planMultiplier が要る側は
 // './planPricing' から直接importすること（二重の出どころを作らない）。
-import { planMultiplier, getSubscriptionItemPrices } from './planPricing';
+import {
+  planMultiplier,
+  getSubscriptionItemPrices,
+  STARTER_MONTHLY_BILLED_QUANTITY_CAP,
+  GROWTH_TEXT_UNITS_ENTERPRISE_NUDGE_THRESHOLD,
+} from './planPricing';
 // 込み枠(基本料に含まれる利用量)の定義は planQuota.ts が唯一の出どころ。
 // 1000/30/3000/150 をここへ書き写さないこと(禁止6)。
 import { computeQuotaOverage, type QuotaOverage } from './planQuota';
@@ -611,7 +616,14 @@ export async function computeExpectedBilling(
   // 行ごとの倍率で重み付けした合計を最後に1回だけ切り上げる
   // （行ごとに切り上げると小数倍率のテナントで請求が膨らむ）。
   // pg は numeric を文字列で返すため Number() を通す。
-  const billedQuantity = Math.ceil(Number(aggResult.rows[0].billed_units_weighted));
+  const rawBilledQuantity = Math.ceil(Number(aggResult.rows[0].billed_units_weighted));
+  // LB-3: Starter は480単位(¥9,600)で頭打ちにする。理由は STARTER_MONTHLY_BILLED_QUANTITY_CAP
+  // のコメント参照。サービス自体は止めない(上限後の会話も usage_logs には記録され続けるが、
+  // Stripe へ報告する数量だけをここで丸める)。
+  const billedQuantity =
+    currentPlan === 'starter'
+      ? Math.min(rawBilledQuantity, STARTER_MONTHLY_BILLED_QUANTITY_CAP)
+      : rawBilledQuantity;
 
   // 込み枠プラン(standard/growth)で使う次元別の生の数量。
   // 旧スキーマ相当のモックDBが列を返さない場合に NaN を撒かないよう 0 に倒す。
@@ -641,6 +653,60 @@ export async function computeExpectedBilling(
 
 /** stripe_usage_reports の dimension 値。'total' は従来の単一数量行。 */
 type ReportDimension = 'total' | 'text' | 'avatar';
+
+/**
+ * LB-4: Growthテナントの月間テキスト会話数が GROWTH_TEXT_UNITS_ENTERPRISE_NUDGE_THRESHOLD
+ * (実効単価がStarterの¥20/会話を上回る点)に達したら、Enterprise個別見積りへの
+ * 案内通知を1テナント・1期間につき1回だけ出す。請求そのものは一切変えない
+ * (合意なくプラン・単価を変更しない)。
+ *
+ * ★lib/notifications.ts の createNotification/notificationExists を直接使わない理由★
+ * それらは内部で getPool() を呼び、この関数に注入された db(テストでは jest.fn() の
+ * モック)を経由しない。呼ぶと本物のDB接続を試みてテストが壊れる
+ * (stripeSync.test.ts は 'stripe' 以外は素の db.query モックで完結させる設計)。
+ * ここでは同じテーブル・同じ重複防止パターン(notifications.metadataのキー一致)を
+ * 注入済みの db 経由で直接書く。
+ */
+async function _maybeNotifyGrowthEnterpriseNudge(
+  db: any,
+  logger: pino.Logger,
+  tenantId: string,
+  periodYyyyMm: string,
+  textUnits: number,
+): Promise<void> {
+  if (textUnits < GROWTH_TEXT_UNITS_ENTERPRISE_NUDGE_THRESHOLD) return;
+
+  const notificationType = 'growth_enterprise_nudge';
+  const dedupeKey = `${tenantId}_${periodYyyyMm}`;
+
+  try {
+    const existing = await db.query(
+      `SELECT 1 FROM notifications
+        WHERE type = $1 AND jsonb_extract_path_text(metadata, 'tenant_period') = $2
+        LIMIT 1`,
+      [notificationType, dedupeKey],
+    );
+    if (existing.rows.length > 0) return;
+
+    await db.query(
+      `INSERT INTO notifications (recipient_role, recipient_tenant_id, type, title, message, link, metadata)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [
+        'client_admin',
+        tenantId,
+        notificationType,
+        '今月のご利用量がGrowthプランの目安を超えています',
+        `今月のテキスト会話数が${textUnits}件に達しました。この規模では個別見積りのEnterpriseプランの方が` +
+          '実質的な単価を抑えられる可能性があります。詳細はサポートまでお問い合わせください。',
+        null,
+        JSON.stringify({ tenant_period: dedupeKey, text_units: textUnits, period: periodYyyyMm }),
+      ],
+    );
+  } catch (err) {
+    // best-effort。通知の失敗で実際の請求処理(呼び出し元)を止めない。
+    logger.warn({ tenantId, periodYyyyMm, textUnits, err }, '[stripeSync] growth enterprise nudge notification failed');
+  }
+}
 
 /**
  * 「送信を試みる数量」を stripe_usage_reports へ先に記録する(冪等)。
@@ -954,6 +1020,12 @@ async function _reportTenantUsage(
   // starter / free_ad / enterprise / 未知プランは null が返り、従来経路のまま。
   const overage = computeQuotaOverage(plan, expected.textUnits, expected.avatarMinutes);
   if (overage) {
+    // LB-4: Growthの月間テキスト会話数が実効単価逆転点(GROWTH_TEXT_UNITS_ENTERPRISE_NUDGE_THRESHOLD)を
+    // 超えたら、請求は変えずEnterprise個別見積りへの案内通知だけ出す。best-effortなので
+    // 失敗しても実際の請求処理(_reportQuotaOverageUsage)は止めない。
+    if (plan === 'growth') {
+      await _maybeNotifyGrowthEnterpriseNudge(db, logger, tenantId, periodYyyyMm, expected.textUnits);
+    }
     await _reportQuotaOverageUsage(
       db, stripe, logger, tenantId, periodYyyyMm, startDate, endDate, plan, expected, overage
     );

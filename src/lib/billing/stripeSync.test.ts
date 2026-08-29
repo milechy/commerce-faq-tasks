@@ -1212,8 +1212,10 @@ describe('込み枠プラン(Standard/Growth): テキスト超過とアバター
     textUnits: number;
     avatarMinutes: number;
     sentKeys?: Set<string>;
+    /** LB-4: 既にEnterprise誘導通知が送信済みという想定にする(重複防止の検証用)。 */
+    nudgeAlreadyNotified?: boolean;
   }) {
-    const { plan = 'standard', textUnits, avatarMinutes, sentKeys = new Set<string>() } = opts;
+    const { plan = 'standard', textUnits, avatarMinutes, sentKeys = new Set<string>(), nudgeAlreadyNotified = false } = opts;
     const inserted: Array<{ key: string; quantity: number; dimension: string }> = [];
 
     const query = jest.fn().mockImplementation(async (sql: string, params: unknown[] = []) => {
@@ -1235,6 +1237,11 @@ describe('込み枠プラン(Standard/Growth): テキスト超過とアバター
           avatar_minutes: avatarMinutes,
         }] };
       }
+      // LB-4の重複防止チェック(notifications SELECT)。stripe_usage_reportsの
+      // 'SELECT status' とは別パターンなので先に判定する。
+      if (sql.includes('FROM notifications')) {
+        return { rows: nudgeAlreadyNotified ? [{ '?column?': 1 }] : [] };
+      }
       if (sql.includes('SELECT status FROM stripe_usage_reports')) {
         const [key] = params as [string];
         return { rows: sentKeys.has(key) ? [{ status: 'sent' }] : [] };
@@ -1252,6 +1259,75 @@ describe('込み枠プラン(Standard/Growth): テキスト超過とアバター
 
     return { query, inserted };
   }
+
+  /** query.mock.calls から INSERT INTO notifications の呼び出しだけを取り出す。 */
+  function notificationInserts(query: jest.Mock): Array<{ type: string; tenantId: string; metadata: any }> {
+    return query.mock.calls
+      .filter(([sql]: [string]) => sql.includes('INSERT INTO notifications'))
+      .map(([, params]: [string, unknown[]]) => ({
+        tenantId: params[1] as string,
+        type: params[2] as string,
+        metadata: JSON.parse(params[6] as string),
+      }));
+  }
+
+  describe('LB-4: Growth超過が実効単価逆転点を超えたテナントへEnterprise誘導通知を出す', () => {
+    it('GROWTH_TEXT_UNITS_ENTERPRISE_NUDGE_THRESHOLD(6020)以上のGrowthテナントへ通知する(請求自体は変えない)', async () => {
+      const db = makeQuotaDb({ plan: 'growth', textUnits: 6020, avatarMinutes: 0 });
+      await reportUsageToStripe(db as any, qLogger, { periodYyyyMm: '202603' });
+
+      const inserts = notificationInserts(db.query);
+      expect(inserts).toHaveLength(1);
+      expect(inserts[0]).toMatchObject({
+        tenantId: 't1',
+        type: 'growth_enterprise_nudge',
+        metadata: { tenant_period: 't1_202603', text_units: 6020, period: '202603' },
+      });
+    });
+
+    it('閾値未満(6019)なら通知しない', async () => {
+      const db = makeQuotaDb({ plan: 'growth', textUnits: 6019, avatarMinutes: 0 });
+      await reportUsageToStripe(db as any, qLogger, { periodYyyyMm: '202603' });
+      expect(notificationInserts(db.query)).toHaveLength(0);
+    });
+
+    it('Standardは対象外(Growth専用の閾値のため、同じtextUnitsでも通知しない)', async () => {
+      const db = makeQuotaDb({ plan: 'standard', textUnits: 6020, avatarMinutes: 0 });
+      await reportUsageToStripe(db as any, qLogger, { periodYyyyMm: '202603' });
+      expect(notificationInserts(db.query)).toHaveLength(0);
+    });
+
+    it('同一テナント・同一期間に既に通知済みなら再送しない(重複防止)', async () => {
+      const db = makeQuotaDb({ plan: 'growth', textUnits: 6020, avatarMinutes: 0, nudgeAlreadyNotified: true });
+      await reportUsageToStripe(db as any, qLogger, { periodYyyyMm: '202603' });
+      expect(notificationInserts(db.query)).toHaveLength(0);
+    });
+
+    it('通知SELECTが例外を投げても、実際の請求送信(_reportQuotaOverageUsage)は止めない', async () => {
+      // このdescribeのdefault beforeEachはStandard向けprice(price_std_*)のsubscription itemsを
+      // 積んでいるため、Growthを検証するこのテストではGrowth向け(price_gro_*)に上書きする
+      // (「Growth で ×1.5」テストと同じパターン)。
+      mockSubscriptionsRetrieve.mockResolvedValue({
+        customer: 'cus_1',
+        items: {
+          data: [
+            { id: 'si_base',   price: { id: 'price_gro_base' } },
+            { id: 'si_text',   price: { id: 'price_gro_text' } },
+            { id: 'si_avatar', price: { id: 'price_gro_avatar' } },
+          ],
+        },
+      });
+      const inner = makeQuotaDb({ plan: 'growth', textUnits: 6020, avatarMinutes: 0 });
+      const query = jest.fn().mockImplementation((sql: string, params: unknown[] = []) => {
+        if (sql.includes('FROM notifications')) return Promise.reject(new Error('db down'));
+        return inner.query(sql, params);
+      });
+      await reportUsageToStripe({ query } as any, qLogger, { periodYyyyMm: '202603' });
+
+      // 通知は失敗しても、超過分は通常どおりStripeへ送られる。
+      expect(mockCreateUsageRecord).toHaveBeenCalled();
+    });
+  });
 
   /** createUsageRecord の呼び出しを (itemId → quantity) で引けるようにする。 */
   function sentByItem(): Record<string, number> {
@@ -1440,11 +1516,13 @@ describe('込み枠プラン(Standard/Growth): テキスト超過とアバター
     const db = makeQuotaDb({ plan: 'starter', textUnits: 5000, avatarMinutes: 500 });
     await reportUsageToStripe(db as any, qLogger, { periodYyyyMm: '202603' });
 
-    // 込み枠の差し引きをせず、加重合計(モックの99999)がそのまま1本で送られる
-    expect(sentByItem()).toEqual({ si_only: 99999 });
+    // 込み枠の差し引きをせず単一itemへ送られること自体は変わらないが、
+    // LB-3(STARTER_MONTHLY_BILLED_QUANTITY_CAP)によりStarterの加重合計(モックの99999)は
+    // 480(¥9,600、Standardの¥9,800を下回る上限)で頭打ちになる。
+    expect(sentByItem()).toEqual({ si_only: 480 });
     expect(mockCreateUsageRecord).toHaveBeenCalledWith(
       'si_only', expect.anything(),
-      expect.objectContaining({ idempotencyKey: 'billing:t1:202603:99999' })
+      expect.objectContaining({ idempotencyKey: 'billing:t1:202603:480' })
     );
   });
 

@@ -188,3 +188,83 @@ describe('ConversionDashboardPage — 改善提案セクション', () => {
     });
   });
 });
+
+// 母数不足の間、「データがありません」で機能が壊れて見えないようにする回帰テスト
+// (Growth顧客が初週に開くと効果ランキング・A/Bの3枚とも空表示になっていた実害への対処)。
+describe('ConversionDashboardPage — 母数不足時の到達条件表示', () => {
+  beforeEach(() => {
+    vi.mocked(useAuth).mockReturnValue(SUPER_ADMIN_PREVIEWING);
+    vi.mocked(authFetch).mockReset();
+  });
+
+  it('実験が1件も無いときは「まだ作成されていません」を出す(実施中0件と区別する)', async () => {
+    vi.mocked(authFetch).mockImplementation((url) => {
+      const u = String(url);
+      if (u.includes('/v1/admin/notifications')) return mockStatus(200, { items: [] });
+      if (u.includes('/v1/admin/ab/experiments')) return mockStatus(200, { experiments: [] });
+      if (u.includes('/v1/admin/conversion/attributions')) {
+        return mockStatus(200, { summary: { total: 0, by_type: {}, by_principle: {}, avg_temp_score: 0 } });
+      }
+      return mockStatus(200, { rankings: [] });
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('まだA/Bテストが作成されていません。')).toBeTruthy();
+    });
+  });
+
+  it('実施中の実験がサンプル不足のとき、現在数と必要数を出す(勝敗は出さない)', async () => {
+    vi.mocked(authFetch).mockImplementation((url) => {
+      const u = String(url);
+      if (u.includes('/v1/admin/notifications')) return mockStatus(200, { items: [] });
+      if (u.includes('/v1/admin/ab/experiments')) {
+        return mockStatus(200, {
+          experiments: [
+            {
+              id: 1,
+              name: '挨拶パターンA/B',
+              status: 'running',
+              traffic_split: 0.5,
+              min_sample_size: 100,
+              total_exposed: 12,
+              created_at: '2026-08-01T00:00:00Z',
+            },
+          ],
+        });
+      }
+      if (u.includes('/v1/admin/conversion/attributions')) {
+        return mockStatus(200, { summary: { total: 0, by_type: {}, by_principle: {}, avg_temp_score: 0 } });
+      }
+      return mockStatus(200, { rankings: [] });
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('サンプル収集中（12 / 100件）')).toBeTruthy();
+    });
+    expect(screen.queryByText(/判定に十分なサンプル/)).toBeNull();
+  });
+
+  it('成約がまだ無いときの効果ランキングは、成約が無い旨を出す(検索原因を混同しない)', async () => {
+    vi.mocked(authFetch).mockImplementation((url) => {
+      const u = String(url);
+      if (u.includes('/v1/admin/notifications')) return mockStatus(200, { items: [] });
+      if (u.includes('/v1/admin/ab/experiments')) return mockStatus(200, { experiments: [] });
+      if (u.includes('/v1/admin/conversion/attributions')) {
+        return mockStatus(200, { summary: { total: 0, by_type: {}, by_principle: {}, avg_temp_score: 0 } });
+      }
+      return mockStatus(200, { rankings: [] });
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('まだコンバージョンが記録されていません。接客が成約に繋がると、ここに効果の高いアプローチが表示されます。'),
+      ).toBeTruthy();
+    });
+  });
+});

@@ -288,6 +288,53 @@ d("computeExpectedBilling（実 Postgres に対する集計SQL実行）", () => 
     expect(result.billedQuantity).toBe(1);
   });
 
+  it("LB-3: Starterの billedQuantity は480(¥9,600)で頭打ちになるが、billableUnitsは実数のまま残る", async () => {
+    // 600会話 = ¥12,000相当だが、Standard(¥9,800)を上回らないよう480で丸める。
+    // サービス自体は止まらないことの確認として billableUnits は実数(600)のままにする。
+    await db.query(`
+      INSERT INTO chat_sessions (tenant_id, session_id, message_count)
+      SELECT 't1', 's-' || g, 2 FROM generate_series(1, 600) AS g
+    `);
+    await db.query(`
+      INSERT INTO usage_logs (tenant_id, request_id, session_id, feature_used, plan_multiplier, created_at)
+      SELECT 't1', 'r-' || g, 's-' || g, 'chat', 1.0, '2026-03-05' FROM generate_series(1, 600) AS g
+    `);
+
+    const result = await computeExpectedBilling(db, "t1", "2026-03-01", "2026-04-01", "starter");
+    expect(result.billableUnits).toBe(600);
+    expect(result.billedQuantity).toBe(480);
+  });
+
+  it("LB-3: Starterでも480会話未満なら丸めずそのまま請求する(境界の直前)", async () => {
+    await db.query(`
+      INSERT INTO chat_sessions (tenant_id, session_id, message_count)
+      SELECT 't1', 's-' || g, 2 FROM generate_series(1, 479) AS g
+    `);
+    await db.query(`
+      INSERT INTO usage_logs (tenant_id, request_id, session_id, feature_used, plan_multiplier, created_at)
+      SELECT 't1', 'r-' || g, 's-' || g, 'chat', 1.0, '2026-03-05' FROM generate_series(1, 479) AS g
+    `);
+
+    const result = await computeExpectedBilling(db, "t1", "2026-03-01", "2026-04-01", "starter");
+    expect(result.billableUnits).toBe(479);
+    expect(result.billedQuantity).toBe(479);
+  });
+
+  it("LB-3: 上限はStarter専用。Growthは同じ会話数でも丸めない(込み枠プランの超過を静かに握りつぶさない)", async () => {
+    await db.query(`
+      INSERT INTO chat_sessions (tenant_id, session_id, message_count)
+      SELECT 't1', 's-' || g, 2 FROM generate_series(1, 600) AS g
+    `);
+    await db.query(`
+      INSERT INTO usage_logs (tenant_id, request_id, session_id, feature_used, plan_multiplier, created_at)
+      SELECT 't1', 'r-' || g, 's-' || g, 'chat', 1.5, '2026-03-05' FROM generate_series(1, 600) AS g
+    `);
+
+    const result = await computeExpectedBilling(db, "t1", "2026-03-01", "2026-04-01", "growth");
+    expect(result.billableUnits).toBe(600);
+    expect(result.billedQuantity).toBe(900); // 600 * 1.5、480での丸めなし
+  });
+
   it("会話の削除で billedQuantity が減らない(削除前後で同額)", async () => {
     await insertSession("t1", "s-1", 4);
     await db.query(`
