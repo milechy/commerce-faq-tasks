@@ -17,6 +17,7 @@ import {
   recordOutcome,
 } from '../admin/chat-history/chatHistoryRepository';
 import { detectGap } from '../../agent/gap/gapDetector';
+import { resolveTrafficSource, TRAFFIC_SOURCE_HEADER } from '../../lib/traffic/trafficSource';
 
 const VALID_EVENT_TYPES = [
   'page_view', 'scroll_depth', 'idle_time', 'product_view',
@@ -100,6 +101,15 @@ export function registerEventRoutes(
 
     const { visitor_id, session_id, chat_session_id, events } = parsed.data;
 
+    // LB-8: chat_sessions.metadata.source と同じ判定基準・同じallowlistを流用する
+    // (2つ目の基準を作らない)。バッチ内の全イベントは同一リクエストなので同一値になる。
+    const trafficSource = resolveTrafficSource({
+      headerValue: req.header(TRAFFIC_SOURCE_HEADER),
+      userAgent: req.header('user-agent'),
+      referer: req.header('referer'),
+      isChatTestToken: (req as any).isChatTestToken === true,
+    });
+
     try {
       // バッチINSERT（パラメータ化クエリ）
       const valuePlaceholders: string[] = [];
@@ -108,7 +118,7 @@ export function registerEventRoutes(
 
       for (const e of events) {
         valuePlaceholders.push(
-          `($${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++})`
+          `($${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++})`
         );
         values.push(
           tenantId,
@@ -118,15 +128,48 @@ export function registerEventRoutes(
           JSON.stringify(e.event_data ?? {}),
           e.page_url ?? null,
           e.referrer ?? null,
+          trafficSource,
         );
       }
 
-      await db.query(
-        `INSERT INTO behavioral_events
-           (tenant_id, session_id, visitor_id, event_type, event_data, page_url, referrer)
-         VALUES ${valuePlaceholders.join(', ')}`,
-        values,
-      );
+      // ★migration未適用でもイベント受信を止めないこと★
+      // ここが42703以外の理由で例外を投げると全イベントが記録されず、コード側だけ先に
+      // デプロイされた時間帯にトラフィック計測が丸ごと止まる。stripeSync.tsの
+      // _insertUsageReportRowと同じパターンで、source列が無いときだけ1回だけ
+      // 旧カラム構成にフォールバックする。
+      try {
+        await db.query(
+          `INSERT INTO behavioral_events
+             (tenant_id, session_id, visitor_id, event_type, event_data, page_url, referrer, source)
+           VALUES ${valuePlaceholders.join(', ')}`,
+          values,
+        );
+      } catch (err) {
+        if ((err as { code?: string })?.code !== '42703') throw err;
+        logger.error(
+          { tenantId },
+          '[events] behavioral_events に source 列が無い — migration_behavioral_events_source.sql が未適用。' +
+          '旧カラムで継続するが、この期間のイベントはtraffic source(e2e/demo等)を除外できない。至急 migration を適用すること',
+        );
+        const legacyPlaceholders: string[] = [];
+        const legacyValues: unknown[] = [];
+        let legacyIdx = 1;
+        for (const e of events) {
+          legacyPlaceholders.push(
+            `($${legacyIdx++}, $${legacyIdx++}, $${legacyIdx++}, $${legacyIdx++}, $${legacyIdx++}, $${legacyIdx++}, $${legacyIdx++})`
+          );
+          legacyValues.push(
+            tenantId, session_id, visitor_id, e.event_type,
+            JSON.stringify(e.event_data ?? {}), e.page_url ?? null, e.referrer ?? null,
+          );
+        }
+        await db.query(
+          `INSERT INTO behavioral_events
+             (tenant_id, session_id, visitor_id, event_type, event_data, page_url, referrer)
+           VALUES ${legacyPlaceholders.join(', ')}`,
+          legacyValues,
+        );
+      }
 
       // Phase65: chat_conversion イベントを conversion_attributions にブリッジ (best-effort)
       await bridgeConversionEvents(db, tenantId, { chatSessionId: chat_session_id, visitorId: visitor_id }, events);
