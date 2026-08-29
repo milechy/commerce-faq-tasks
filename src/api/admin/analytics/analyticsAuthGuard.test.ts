@@ -3,9 +3,17 @@
 // Codex adversarial-review Round 2 findings: analytics endpoints did not reject
 // non-admin roles or client_admin with missing app_metadata.tenant_id.
 
+// GID 1217969364194602 [H-7]: 通常はpool=null固定(role/tenantガードのみ検証する
+// このファイルの既存方針)だが、planゲートの回帰テストだけpoolにquery可能な
+// モックを差し込みたいので、mockPlanPool経由で切り替え可能にする
+// (未設定時はnullのまま=既存テストの挙動を変えない)。
+let mockPlanPool: { query: jest.Mock } | null = null;
+
 jest.mock('../../../lib/db', () => ({
-  pool: null,
-  getPool: () => null,
+  get pool() {
+    return mockPlanPool;
+  },
+  getPool: () => mockPlanPool,
 }));
 jest.mock('../../../lib/logger', () => ({
   logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn() },
@@ -60,6 +68,7 @@ const ALL_ROUTES = [
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockPlanPool = null; // 既定はpool=null(既存テストの前提を変えない)
 });
 
 // ---------------------------------------------------------------------------
@@ -254,5 +263,50 @@ describe('analytics routes — allow-path: client_admin with tenant_id passes AL
     const app = makeApp({ role: 'client_admin', tenant_id: 'tenant-a' });
     const res = await request(app).get('/v1/admin/analytics/events?tenant_id=tenant-a');
     expect(res.status).toBe(503);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GID 1217969364194602 [H-7]: /v1/admin/analytics/events にplanゲートが一切無かった
+// (routes.ts の summary/trends/evaluations と同じ「基本の会話分析」(analytics)の
+// 一部なのに、Standard未満でも叩けてしまっていた)。回帰テスト。
+// pool可用性チェックの後段でplanを見るため、mockPlanPoolにquery可能なモックを
+// 差し込む(このdescribeの中だけ。他のテストはpool=nullのまま)。
+// ---------------------------------------------------------------------------
+describe('analytics routes — /v1/admin/analytics/events plan ゲート', () => {
+  it('client_admin + plan=starter → 403 plan_upgrade_required、以降のクエリは実行されない', async () => {
+    const mockQuery = jest.fn().mockResolvedValueOnce({ rows: [{ plan: 'starter' }] });
+    mockPlanPool = { query: mockQuery };
+
+    const app = makeApp({ role: 'client_admin', tenant_id: 'tenant-a' });
+    const res = await request(app).get('/v1/admin/analytics/events');
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('plan_upgrade_required');
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it('client_admin + plan=standard → planゲートを通過する(403にならない)', async () => {
+    const mockQuery = jest.fn()
+      .mockResolvedValueOnce({ rows: [{ plan: 'standard' }] }) // plan確認
+      .mockResolvedValue({ rows: [] }); // 以降の集計クエリ用フォールバック
+    mockPlanPool = { query: mockQuery };
+
+    const app = makeApp({ role: 'client_admin', tenant_id: 'tenant-a' });
+    const res = await request(app).get('/v1/admin/analytics/events');
+
+    expect(res.status).not.toBe(403);
+  });
+
+  it('super_adminはplanゲートをバイパスする(plan確認クエリが実行されない)', async () => {
+    const mockQuery = jest.fn().mockResolvedValue({ rows: [] });
+    mockPlanPool = { query: mockQuery };
+
+    const app = makeApp({ role: 'super_admin' });
+    const res = await request(app).get('/v1/admin/analytics/events');
+
+    expect(res.status).not.toBe(403);
+    const firstCallSql = mockQuery.mock.calls[0]?.[0] ?? '';
+    expect(firstCallSql).not.toMatch(/SELECT plan FROM tenants/);
   });
 });

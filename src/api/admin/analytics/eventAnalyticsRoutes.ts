@@ -10,6 +10,7 @@ import { supabaseAuthMiddleware } from '../../../admin/http/supabaseAuthMiddlewa
 import { pool } from '../../../lib/db';
 import { logger } from '../../../lib/logger';
 import { isAllowedAdminRole } from "../../middleware/roleAuth";
+import { planHasFeature, queryTenantPlan } from "../../../lib/billing/planFeatures";
 
 // whitelist: SQL injection防止のため group_by は固定列名のみ許可
 const ALLOWED_GROUP_BY = new Set(['event_type', 'page_url', 'visitor_id']);
@@ -119,6 +120,20 @@ export function registerEventAnalyticsRoutes(app: Express): void {
 
       if (!pool) {
         return res.status(503).json({ error: 'database_unavailable' });
+      }
+
+      // GID 1217969364194602 [H-7]: 行動イベント分析(event_type/page_url/visitor_id別)は
+      // 「基本の会話分析」(analytics)の一部。routes.ts の summary/trends/evaluations と
+      // 同じくStandard〜で開放する(成果分析=conversionとは別ゲート。
+      // src/lib/billing/planFeatures.ts 参照)。super_adminはバイパス。
+      if (!isSuperAdmin) {
+        const plan = await queryTenantPlan(pool, jwtTenantId);
+        if (!planHasFeature(plan, "analytics")) {
+          return res.status(403).json({
+            error: "plan_upgrade_required",
+            message: "会話分析はStandardプラン以上でご利用いただけます",
+          });
+        }
       }
 
       try {
