@@ -4,7 +4,7 @@
 // 画面に出さない方針(.claude/rules 参照)もあわせて検証する。
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 import BookChunksPanel from "./BookChunksPanel";
 
 vi.mock("../../../components/knowledge/shared", () => ({
@@ -238,5 +238,126 @@ describe("BookChunksPanel — 取り消し", () => {
 
     fireEvent.click(undoBtn);
     expect(await screen.findByText("直前の変更を取り消しました")).toBeTruthy();
+  });
+});
+
+describe("BookChunksPanel — 2つの画面で同時編集した場合の挙動(現状固定)", () => {
+  // このパネルはURLに紐付かない単なるモーダルで、他の編集者がいることをこの画面自身は
+  // 知らない(サーバー側の409は「反映処理中」の一瞬だけを検知する仕組みで、既に保存済みの
+  // 他人の変更とはすれ違いを検知しない)。同じチャンクを2つのブラウザタブで開いて
+  // 両方成功してしまうケースで何が起きるかをここで固定する。
+  it("先に保存した側の変更を、後から保存した側が気づかず(警告なしで)上書きする", async () => {
+    mockChunksAndDetail([baseChunk()]); // situation: "旧状況", principle: "アンカリング効果"
+
+    const { container: containerA } = render(
+      <BookChunksPanel bookId={1} bookTitle="書籍" bookStatus="embedded" bookTenantId="tenant-a" onClose={() => {}} />
+    );
+    const { container: containerB } = render(
+      <BookChunksPanel bookId={1} bookTitle="書籍" bookStatus="embedded" bookTenantId="tenant-a" onClose={() => {}} />
+    );
+
+    // 2つのタブ(=2つのパネルインスタンス)がどちらも同じ内容で編集を開始する
+    fireEvent.click(await within(containerA).findByText("編集"));
+    fireEvent.click(await within(containerB).findByText("編集"));
+
+    // タブA: 状況だけ変更して先に保存する
+    const situationA = within(containerA).getByPlaceholderText("この知識が適用される状況");
+    fireEvent.change(situationA, { target: { value: "新状況A" } });
+
+    const bodiesA: Record<string, unknown>[] = [];
+    mockFetch.mockImplementationOnce((_url: string, init?: { method?: string; body?: string }) => {
+      expect(init?.method).toBe("PUT");
+      bodiesA.push(JSON.parse(init!.body as string));
+      return Promise.resolve(okRes({ id: 1, metadata: { embedding_status: "done" } }));
+    });
+    mockFetch.mockImplementationOnce(() =>
+      Promise.resolve(okRes({ chunks: [baseChunk({ situation: "新状況A", embedding_status: "done" })] }))
+    );
+    mockFetch.mockImplementationOnce(() => Promise.resolve(okRes({})));
+
+    fireEvent.click(within(containerA).getByText("保存"));
+    await within(containerA).findByText("保存しました");
+    expect(bodiesA[0]?.situation).toBe("新状況A");
+
+    // タブB: タブAの保存を知らないまま(旧状況のまま)、原則だけ変更して保存する
+    const principleB = within(containerB).getByPlaceholderText("適用すべき心理学原則");
+    fireEvent.change(principleB, { target: { value: "新原則B" } });
+
+    const bodiesB: Record<string, unknown>[] = [];
+    mockFetch.mockImplementationOnce((_url: string, init?: { method?: string; body?: string }) => {
+      expect(init?.method).toBe("PUT");
+      bodiesB.push(JSON.parse(init!.body as string));
+      return Promise.resolve(okRes({ id: 1, metadata: { embedding_status: "done" } }));
+    });
+    mockFetch.mockImplementationOnce(() =>
+      Promise.resolve(okRes({ chunks: [baseChunk({ principle: "新原則B", embedding_status: "done" })] }))
+    );
+    mockFetch.mockImplementationOnce(() => Promise.resolve(okRes({})));
+
+    fireEvent.click(within(containerB).getByText("保存"));
+    await within(containerB).findByText("保存しました");
+
+    // タブBは全フィールドを自分の(古い)値で送るため、Aの変更(situation)を静かに元に戻してしまう
+    expect(bodiesB[0]?.situation).toBe("旧状況");
+    expect(bodiesB[0]?.principle).toBe("新原則B");
+
+    // 上書きされたことについての警告・通知は一切出ない(トーストは「保存しました」のみ)
+    expect(within(containerB).queryByText(/他の変更/)).not.toBeTruthy();
+    expect(within(containerB).queryByText(/上書き/)).not.toBeTruthy();
+    expect(within(containerB).queryByText(/最新の内容ではありません/)).not.toBeTruthy();
+  });
+});
+
+describe("BookChunksPanel — ブラウザの戻る(再マウント)時の挙動(現状固定)", () => {
+  // このモーダルは親コンポーネントのstateだけでopen/closeされ、URL/履歴に紐付かない。
+  // そのため「戻る」操作の多くはこのコンポーネント自体のアンマウントを伴う。ここでは
+  // それを直接再現し、未保存の下書きが古い内容のまま無言で保存されてしまわないかを確認する。
+  it("編集中に離脱(再マウント)すると未保存の下書きは残らず、再度開くと最新のサーバー内容から始まる", async () => {
+    mockChunksAndDetail([baseChunk()]); // situation: "旧状況"
+    const { unmount } = render(
+      <BookChunksPanel bookId={1} bookTitle="書籍" bookStatus="embedded" bookTenantId="tenant-a" onClose={() => {}} />
+    );
+    fireEvent.click(await screen.findByText("編集"));
+    const situation = screen.getByPlaceholderText("この知識が適用される状況");
+    fireEvent.change(situation, { target: { value: "未保存の下書き" } });
+
+    // ブラウザの戻るに相当する離脱(このパネルはURLに紐付かないため、実態は再マウント)
+    unmount();
+
+    // サーバー側では別の変更が既に入っている想定
+    mockChunksAndDetail([baseChunk({ situation: "サーバー最新状況" })]);
+    render(
+      <BookChunksPanel bookId={1} bookTitle="書籍" bookStatus="embedded" bookTenantId="tenant-a" onClose={() => {}} />
+    );
+
+    // 未保存の下書きはどこにも残らない(画面上にもPUTにも出ない)
+    await screen.findByText("編集"); // 表示モード(編集していない状態)から始まる
+    expect(screen.queryByText(/未保存の下書き/)).not.toBeTruthy();
+    expect(mockFetch.mock.calls.some(([, init]) => (init as { method?: string } | undefined)?.method === "PUT")).toBe(
+      false
+    );
+  });
+});
+
+describe("BookChunksPanel — 反映中(pending)表示の一貫性", () => {
+  it("画面を閉じて何度開き直しても、反映中の文言は同じ表現のまま(別の言い回しに変わらない)", async () => {
+    mockChunksAndDetail([baseChunk({ embedding_status: "pending" })]);
+
+    const { unmount: unmount1 } = render(
+      <BookChunksPanel bookId={1} bookTitle="書籍" bookStatus="embedded" bookTenantId="tenant-a" onClose={() => {}} />
+    );
+    expect(await screen.findByText("🧠 AIが覚え直しています…")).toBeTruthy();
+    unmount1();
+
+    const { unmount: unmount2 } = render(
+      <BookChunksPanel bookId={1} bookTitle="書籍" bookStatus="embedded" bookTenantId="tenant-a" onClose={() => {}} />
+    );
+    expect(await screen.findByText("🧠 AIが覚え直しています…")).toBeTruthy();
+    unmount2();
+
+    render(
+      <BookChunksPanel bookId={1} bookTitle="書籍" bookStatus="embedded" bookTenantId="tenant-a" onClose={() => {}} />
+    );
+    expect(await screen.findByText("🧠 AIが覚え直しています…")).toBeTruthy();
   });
 });

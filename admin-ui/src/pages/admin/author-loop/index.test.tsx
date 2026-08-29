@@ -208,4 +208,92 @@ describe("AuthorLoopPage", () => {
 
     expect(mockNavigate).toHaveBeenCalledWith("/admin/knowledge/global?tab=pdf");
   });
+
+  it("たまっている会話を全て確認済みにすると、空欄ではなく「すべて確認済み」の案内が出る", async () => {
+    const items = Array.from({ length: MIN_CONVERSATIONS_FOR_REVIEW }, (_, i) => ({
+      session: session(`s-all-${i}`, { last_message_at: `2026-08-2${i}T00:00:00Z` }),
+      messages: [injectedAssistantMessage(`回答${i}`, `原理${i}`)],
+    }));
+    mockConversations(items);
+
+    render(<AuthorLoopPage />);
+
+    await screen.findByText("はい、この使い方でよい");
+    for (let i = 0; i < MIN_CONVERSATIONS_FOR_REVIEW; i++) {
+      fireEvent.click(screen.getByText("はい、この使い方でよい"));
+    }
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("たまっている会話はすべて確認済みです。新しい会話が増えたらまたお知らせします。"),
+      ).toBeTruthy();
+    });
+  });
+
+  it("「あとで」を繰り返し押しても画面が壊れない(未確認が溜まったままでも表示が破綻しない)", async () => {
+    const items = [
+      { session: session("s-later-a", { last_message_at: "2026-08-25T00:00:00Z" }), messages: [injectedAssistantMessage("回答A", "原理A")] },
+      { session: session("s-later-b", { last_message_at: "2026-08-24T00:00:00Z" }), messages: [injectedAssistantMessage("回答B", "原理B")] },
+      ...fillerSessions(MIN_CONVERSATIONS_FOR_REVIEW, 300),
+    ];
+    mockConversations(items);
+
+    render(<AuthorLoopPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/確認: \d+ \/ \d+件/)).toBeTruthy();
+    });
+
+    for (let i = 0; i < 50; i++) {
+      fireEvent.click(screen.getByText("あとで"));
+    }
+
+    // 50回スキップしても画面は壊れず、引き続き確認カウンタが表示される
+    expect(screen.getByText(/確認: \d+ \/ \d+件/)).toBeTruthy();
+  });
+
+  it("injected:true でも principle が空文字/未設定の行はレビュー対象に出さない", async () => {
+    const target = {
+      session: session("s-empty-principle", { last_message_at: "2026-08-26T00:00:00Z" }),
+      messages: [
+        {
+          id: 1,
+          role: "assistant",
+          content: "空の教え応答",
+          created_at: "2026-08-26T00:01:00Z",
+          rag_sources: [
+            { chunk_id: "e1", source: "book", score: 0.9, injected: true, principle: "" },
+            { chunk_id: "e2", source: "book", score: 0.8, injected: true },
+          ],
+        },
+      ],
+    };
+    mockConversations([target, ...fillerSessions(MIN_CONVERSATIONS_FOR_REVIEW, 400)]);
+
+    render(<AuthorLoopPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/確認: \d+ \/ \d+件/)).toBeTruthy();
+    });
+    expect(screen.queryByText("空の教え応答")).not.toBeTruthy();
+  });
+
+  it("assistant以外のメッセージや rag_sources が無いセッションが混ざっても落ちない", async () => {
+    const noisy = {
+      session: session("s-noisy", { last_message_at: "2026-08-27T00:00:00Z" }),
+      messages: [
+        { id: 1, role: "user", content: "質問", created_at: "2026-08-27T00:00:00Z" },
+        { id: 2, role: "operator", content: "スタッフ対応", created_at: "2026-08-27T00:01:00Z" },
+        { id: 3, role: "assistant", content: "rag_sourcesなし応答", created_at: "2026-08-27T00:02:00Z" },
+      ],
+    };
+    mockConversations([noisy, ...fillerSessions(MIN_CONVERSATIONS_FOR_REVIEW, 500)]);
+
+    render(<AuthorLoopPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/確認: \d+ \/ \d+件/)).toBeTruthy();
+    });
+    expect(screen.queryByText("rag_sourcesなし応答")).not.toBeTruthy();
+  });
 });
