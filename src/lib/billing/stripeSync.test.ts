@@ -1440,11 +1440,13 @@ describe('込み枠プラン(Standard/Growth): テキスト超過とアバター
     const db = makeQuotaDb({ plan: 'starter', textUnits: 5000, avatarMinutes: 500 });
     await reportUsageToStripe(db as any, qLogger, { periodYyyyMm: '202603' });
 
-    // 込み枠の差し引きをせず、加重合計(モックの99999)がそのまま1本で送られる
-    expect(sentByItem()).toEqual({ si_only: 99999 });
+    // 込み枠の差し引きをせず単一itemへ送られること自体は変わらないが、
+    // LB-3(STARTER_MONTHLY_BILLED_QUANTITY_CAP)によりStarterの加重合計(モックの99999)は
+    // 480(¥9,600、Standardの¥9,800を下回る上限)で頭打ちになる。
+    expect(sentByItem()).toEqual({ si_only: 480 });
     expect(mockCreateUsageRecord).toHaveBeenCalledWith(
       'si_only', expect.anything(),
-      expect.objectContaining({ idempotencyKey: 'billing:t1:202603:99999' })
+      expect.objectContaining({ idempotencyKey: 'billing:t1:202603:480' })
     );
   });
 

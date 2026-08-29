@@ -40,6 +40,30 @@ export const PLAN_MULTIPLIERS: Record<string, number> = {
 };
 
 /**
+ * Starter(純従量 ¥20/会話)の月間請求数量の上限。
+ *
+ * ★理由は「請求を止める」ことではなく「価格表の見え方」★
+ * LPは「¥20/対話」と「〜500対話/月」を並記しており、読者は 20×500=¥10,000 を
+ * 暗算して Standard(¥9,800・テキスト1,000会話+アバター30分込み)と比較する。
+ * 実際に Starter が Standard を上回るのは490〜500会話の帯だけだが、
+ * 価格表の見え方は100%「Starterの方が高くて枠が半分」に見える
+ * (strictly dominatedではないが、暗算した瞬間そう見える設計)。
+ *
+ * 480会話 × ¥20 = ¥9,600 は Standard の ¥9,800 を必ず下回る。上限到達後の会話は
+ * サービスを止めず、単に Stripe への usage report をこれ以上増やさない
+ * (原価 ¥0.11/会話に対し十分小さい持ち出し。free_ad の月200会話上限と同じ考え方)。
+ *
+ * ★既知の限界(スコープ外)★
+ * 月内でプランが変わったテナントは、conversation_units の行ごとに異なる
+ * plan_multiplier が焼き付いている場合がある(.claude/rules/billing.md §7)。
+ * この上限は「現在のプランが starter であること」だけを見て billedQuantity
+ * (加重後・切り上げ後の最終値)に適用するため、月の一部を他プランで過ごした
+ * テナントでは会話の実数と上限の対応がわずかにずれる。プラン変更の
+ * Stripe追随自体が別タスク([UX-A])のスコープであり、ここでは扱わない。
+ */
+export const STARTER_MONTHLY_BILLED_QUANTITY_CAP = 480;
+
+/**
  * プラン名から倍率を引く。
  *
  * `?? 'starter'` は null/undefined のみを捕捉するため 0 はそのまま通る
