@@ -37,8 +37,10 @@ describe('structurizeBook: tenantId の callGeminiJudge / embedText への伝播
 
   it('callGeminiJudge と embedText の両方に実 tenantId を渡す', async () => {
     mockCallGeminiJudge.mockResolvedValue(
+      // principle は principleVocabulary.ts の語彙から選ぶ必要がある
+      // (2026-08-29: 語彙に無い原則名は保存前にスキップされるようになった)。
       JSON.stringify([{
-        situation: 'S', resistance: 'R', principle: 'P',
+        situation: 'S', resistance: 'R', principle: '返報性',
         contraindication: 'C', example: 'E', failure_example: 'F',
       }])
     );

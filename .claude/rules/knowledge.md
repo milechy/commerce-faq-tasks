@@ -17,6 +17,8 @@ paths:
   - "src/agent/knowledge/**"
   - "src/agent/memory/**"
   - "src/agent/config/ragLimits.ts"
+  - "src/agent/psychology/**"
+  - "config/bookStructurizerPrompt.md"
 ---
 
 # ナレッジ配線ルール
@@ -58,6 +60,23 @@ CLAUDE.md の禁止6 が挙げる4系統(`faqCrudRoutes` / レガシー `faqAdmi
 **5系統目・11系統目を増やさない。** 新しい書き込みが必要になったときは、
 既存のどれかに機能を足すか、正典ヘルパ(下記)を呼ぶ形にする。
 
+### 書籍だけで2系統(7と8)ある。metadata の形が違う
+
+同じ1冊のPDFに対して **7 と 8 は直列に使う**。片方だけ見ると必ず誤解する
+(2026-08-29 に実際に誤解が起きた)。
+
+| | 7. `embedAndStore.ts` | 8. `bookStructurizer.ts` |
+|---|---|---|
+| 起動 | アップロード時に自動(`runBookPipeline`) | 手動 `POST /v1/admin/knowledge/structurize-trigger`(super_admin) |
+| metadata | `source, book_id, chunk_index, page_number, category, keywords, confidence` | 左に加えて `principle, situation, resistance, contraindication, example, failure_example` |
+| 前提 | なし | `BOOK_STRUCTURIZE_ENABLED=true`(**`.env.example` に記載が無い**。未設定だと無言で即 return) |
+| 対象 | 全チャンク | `status='embedded'` かつ `principle` を持つ行がまだ無い書籍 |
+
+`searchPrincipleChunks`(`metadata->>'principle' = ANY($2)`)は **8 の行にしかヒットしない**。
+管理画面に「N件の分割テキスト登録完了」と出ていても、それは 7 の完了であって
+心理学原則が使える状態を意味しない。8 は**追加生成**であり 7 の上書きではないので、
+7 のデータを消して入れ直す必要はない。
+
 ## 索引同期の正典は faqIndexSync.ts
 
 `src/lib/knowledge/faqIndexSync.ts` が embedding + ES 同期の唯一の共有実装。
@@ -96,3 +115,24 @@ lemonslice 経由のアバターは `/api/chat` の回答を TTS するだけで
 `JUDGE_SWEEP_TENANTS`(既定 `r2c_default`)と `LEARNED_MEMORY_TENANTS` は独立した allowlist。
 両方が「有効」と表示されていても、対象テナントの交差が空なら learned_memory は永久に0件になる。
 点火状態を確認するときは、個別のフラグではなく交差を見る。
+
+## 生産者と消費者が別のリテラルを持たない
+
+2026-08-29、心理学原則の注入経路で3件の継ぎ目バグが見つかった。いずれも「書く側」と
+「読む側」が同じ値・同じキー名を独立に持っており、一方だけ変更されて他方が追随して
+いなかった:
+
+- `principleDetector.ts` の語彙(`KEYWORD_MAP`)と `bookStructurizerPrompt.md` の
+  few-shot例が独立に原則名を持ち、「返報性」と「返報性の原理」のように揺れていた
+  (`principleSearch.ts` は完全一致検索のため永久にヒットしない)
+- `bookStructurizer.ts` が metadata に書くキーと `principleSearch.ts` が読むキーが
+  一致していなかった(`example` が書かれず常に空文字)
+- `bookStructurizer.ts` の `page_hint` と `bookPdfRoutes.ts` の `page_number` が
+  同じ値を指す別名で、結合できていなかった
+
+各ファイルの単体テストは自分で「理想の行」を用意しており、生産側が実際に何を書くかを
+見ないため、この種のバグを検出できない。**原則名の語彙は `principleVocabulary.ts`
+1箇所を出どころにし**(`principleDetector.ts`・`bookStructurizer.ts`・
+`bookStructurizerPrompt.md` の3箇所はすべてここを参照する)、**metadataのキー名は
+`principleContract.test.ts` がソース走査で生産側・消費側を突き合わせる**。
+新しい生産者・消費者ペアを追加するときは、ここにモックではなくソース走査の契約テストを足す。

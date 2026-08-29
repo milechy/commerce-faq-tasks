@@ -114,11 +114,15 @@ describe('structurizeBook', () => {
 
   it('6. truncates each principle field to 200 chars', async () => {
     const longValue = 'A'.repeat(300);
+    // principle だけは principleVocabulary.ts の語彙から選ぶ必要がある
+    // (2026-08-29: 語彙に無い名前は保存前に弾かれるようになったため、
+    //  300字の原則名は result.principles に残らない。語彙外が弾かれること自体は
+    //  src/agent/knowledge/bookStructurizer.test.ts で別途検証している)。
     const longPrinciple = JSON.stringify([
       {
         situation: longValue,
         resistance: longValue,
-        principle: longValue,
+        principle: 'アンカリング効果',
         contraindication: longValue,
         example: longValue,
         failure_example: longValue,
@@ -132,7 +136,6 @@ describe('structurizeBook', () => {
     expect(p).toBeDefined();
     expect(p!.situation).toHaveLength(200);
     expect(p!.resistance).toHaveLength(200);
-    expect(p!.principle).toHaveLength(200);
     expect(p!.contraindication).toHaveLength(200);
     expect(p!.example).toHaveLength(200);
     expect(p!.failure_example).toHaveLength(200);

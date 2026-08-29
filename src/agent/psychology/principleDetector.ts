@@ -4,8 +4,12 @@
 
 import { GPT_OSS_120B } from '../../config/groqModels';
 import { groqClient } from '../llm/groqClient';
+import { PRINCIPLE_NAMES, type PrincipleName } from './principleVocabulary';
 
-const KEYWORD_MAP: Record<string, string[]> = {
+// Record<PrincipleName, ...> により、principleVocabulary.ts の語彙と
+// キーが1対1で一致することをコンパイル時に強制する(キーの過不足はビルドエラーになる)。
+// export: principleContract.test.ts が語彙との完全一致を実行時にも検証するため。
+export const KEYWORD_MAP: Record<PrincipleName, string[]> = {
   "アンカリング効果":      ["高い", "値段", "価格", "費用", "コスト", "予算"],
   "損失回避":             ["損", "リスク", "失う", "もったいない", "後悔"],
   "社会的証明":           ["他社", "他の", "みんな", "人気", "評判", "口コミ"],
@@ -77,7 +81,7 @@ async function detectWithLlm(
   // セキュリティ: 書籍内容漏洩防止のため500文字でトリミング
   const trimmedContent = userMessages.slice(0, 500);
 
-  const principleNames = Object.keys(KEYWORD_MAP).join("、");
+  const principleNames = PRINCIPLE_NAMES.join("、");
   const stageContext = salesStage ? `\n現在の営業ステージ: ${salesStage}` : "";
 
   try {
@@ -106,9 +110,8 @@ async function detectWithLlm(
     if (!Array.isArray(parsed)) return [];
 
     // 既知の原則名のみを返す（インジェクション防止）
-    const validPrinciples = Object.keys(KEYWORD_MAP);
     return parsed
-      .filter((p): p is string => typeof p === "string" && validPrinciples.includes(p))
+      .filter((p): p is string => typeof p === "string" && (PRINCIPLE_NAMES as readonly string[]).includes(p))
       .slice(0, 3);
   } catch {
     return [];
