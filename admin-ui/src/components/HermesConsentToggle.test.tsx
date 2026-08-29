@@ -3,12 +3,12 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { HermesConsentToggle } from "./HermesConsentToggle";
 
-vi.mock("../../../lib/api", () => ({
+vi.mock("../lib/api", () => ({
   authFetch: vi.fn(),
   API_BASE: "http://localhost:3100",
 }));
 
-import { authFetch } from "../../../lib/api";
+import { authFetch } from "../lib/api";
 
 const mockOk = (data: unknown): Promise<Response> =>
   Promise.resolve({

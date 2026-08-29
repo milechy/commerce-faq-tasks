@@ -4,6 +4,7 @@ import { useLang } from "../../../i18n/LangContext";
 import LangSwitcher from "../../../components/LangSwitcher";
 import { useAuth } from "../../../auth/useAuth";
 import { authFetch, API_BASE } from "../../../lib/api";
+import { HermesConsentToggle } from "../../../components/HermesConsentToggle";
 import TuningRuleModal, {
   type TuningRule,
   type SourceConversation,
@@ -337,6 +338,14 @@ export default function TuningRulesPage() {
         </div>
         <LangSwitcher />
       </header>
+
+      {/* [H-4]: 外部(共有学習プール)へのデータ提供同意（Client Adminのみ / プレビュー中含む）。
+          元は /admin/avatar 最下部にあったが、アバターはStandard以上限定機能で
+          未契約テナントが開く動機が無く同意ゼロが続いたため、プランゲートの無い
+          このページへ移設した。 */}
+      {!isSuperAdmin && tenantId && (
+        <HermesConsentToggle overrideTenantId={previewMode ? tenantId : undefined} />
+      )}
 
       {/* GID 1216275447729242: 自然文からのルール自動生成 */}
       <div

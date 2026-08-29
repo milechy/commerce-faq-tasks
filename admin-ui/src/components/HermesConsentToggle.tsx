@@ -1,12 +1,17 @@
-// admin-ui/src/pages/admin/avatar/HermesConsentToggle.tsx
+// admin-ui/src/components/HermesConsentToggle.tsx
 // Phase75 → GID 1216978677372391(PR-16, D1): 外部Hermes VPSへの生データ提供同意 ON/OFF トグル
 // （Client Adminのみ、自己完結型。ExcludeSearchToggleの楽観的更新+ロールバックパターンを踏襲）
 //
 // D1: データ利用同意は2階層。
 //   ①自テナント内学習(learned_memory等) = 常時ON・同意不要(このトグルの対象外)
 //   ②社外Hermes VPSへの生データ提供 = 明示同意必須(このトグルが操作するのはこちらのみ)
-// このページ(/admin/avatar)は2026-10-13まで閉鎖観察中(docs/LEGACY_UI_SUNSET.md)。
-// 閉鎖後は copilot-preview の set_hermes_consent ツールが唯一の操作経路になる。
+//
+// [H-4]: 元は /admin/avatar 最下部に配置していたが、アバターはStandard以上限定機能のため
+// 未契約テナントがこのページを開く動機が無く、51晩連続で同意ゼロという結果を招いた
+// (docs/LEARNING_LOOP_REQUIREMENTS.md:497)。プランゲートが無く全プランから到達できる
+// /admin/tuning(AIへの指示ルール画面)へ移設した。
+// 旧UI閉鎖(docs/LEGACY_UI_SUNSET.md)後は copilot-preview の set_hermes_consent ツールが
+// 唯一の操作経路になる予定。
 //
 // S5(共有学習プールの参加モデル・決定案「D1・D5決定案」): features.learning.{learn,share}
 // の2軸に対応。このトグルは share のみを操作する(learnは常時true・非表示のまま)。
@@ -17,7 +22,7 @@
 // (src/lib/hermesConsent.ts の resolveLearningConsent と同じ優先順位)。
 
 import { useEffect, useState } from "react";
-import { authFetch, API_BASE } from "../../../lib/api";
+import { authFetch, API_BASE } from "../lib/api";
 
 interface LearningConsent {
   learn: boolean;
