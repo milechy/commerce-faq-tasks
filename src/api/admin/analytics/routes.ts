@@ -718,6 +718,10 @@ export function registerAnalyticsRoutes(app: Express): void {
       if (!pool) {
         return res.status(503).json({ error: "データベース接続が利用できません" });
       }
+      // 2026-08-29: ナレッジ別CV貢献度は成果分析(conversion, Growth〜)の一部。
+      // /admin/knowledge/:tenantId(RequireAuth、super_admin限定ではない)の
+      // 「貢献分析」タブから client_admin も到達するため、gateが抜けていた。
+      if (!(await checkAnalyticsPlanAccess(pool, res, isSuperAdmin, jwtTenantId, "conversion"))) return;
 
       try {
         // summaryQueries.ts の fetchKnowledgeAttribution に集約する(fetchAnalyticsTrendと同じ理由)。
@@ -774,6 +778,10 @@ export function registerAnalyticsRoutes(app: Express): void {
       if (!pool) {
         return res.status(500).json({ error: "データベース接続が利用できません" });
       }
+      // 2026-08-29: ルール効果測定も成果分析(conversion, Growth〜)の一部。
+      // getRuleEffect自体はHermes(GET /v1/hermes-mcp/proposals、hermesMcpAuthMiddleware配下)
+      // からも直接呼ばれるため、gateはこのHTTPルート側にのみ置く(getRuleEffect内には入れない)。
+      if (!(await checkAnalyticsPlanAccess(pool, res, isSuperAdmin, jwtTenantId, "conversion"))) return;
 
       try {
         const result = await getRuleEffect(pool, ruleId);
