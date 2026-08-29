@@ -632,6 +632,16 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
   `x-r2c-traffic-source: e2e` を持つ非GETを一律 403 にしている。
   **是正・承認・登録の書き込み経路はバックエンドの結合テストで端から端まで通す**のが唯一の手段で、
   「E2E が緑だから大丈夫」は成立しない。E2E に期待できるのは閲覧・権限境界・レイアウトまで。
+- **E2E は PR の製品コードを検証していない。** 向き先が本番で CI にサーバ起動ステップが無いため、
+  PR が変更した `src/**` や `public/**` は1行も読まれない。実際に検証されるのは
+  「本番の現在の状態」と、その PR が変更した `tests/e2e/**` だけ。
+  実例(2026-08-29): `widget.js` を壊した PR #1039 自身の E2E は success で通り、
+  壊れた本番がデプロイされた後に**無関係な全ブランチ**の E2E が一斉に赤くなった。
+  そのため役割を3層に分けている ── 左: `pnpm lint:widget` 等の配布物の静的検査(Gate 1)、
+  中: `SCRIPTS/post-deploy-widget-smoke.sh`(deploy-vps.sh がデプロイ直後に実行)、
+  右: `e2e.yml` の schedule 実行(本番の継続監視)。
+  **E2E の赤を見たら、まずその時刻に本番デプロイがあったかを確認する。**
+  デプロイ境界と一致するなら環境ノイズではなく、デプロイした変更を疑う。
 - **既存の機械的ガードを壊さない。** `confirmPolicy.test.ts` / `cardPayloadSync.test.ts` /
   `index.wiringInvariants.test.ts` は対象ファイルを**相対パスで `readFileSync` し正規表現で拾う**。
   `actionExecutor.ts` / `copilot-preview/index.tsx` / `useAgentChatTransport.ts` の

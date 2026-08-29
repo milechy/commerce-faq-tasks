@@ -4,12 +4,22 @@ on:
   # main に対して手動実行できるようにしておく。2026-08-29 の障害調査では
   # 「main単体でも落ちるのか」を確かめるためだけに計測用PR(#1045)を立てる羽目になった。
   workflow_dispatch:
+
+  # 本番監視としての定期実行。デプロイを伴わない本番の変化(テストテナントのデータ、
+  # 外部依存、証明書の期限切れ等)は、これでしか気付けない。
+  # 3時間ごと = 1日8回。PRトリガーを絞った分より少なく、実行回数は純減する
+  # (2026-08-29 は1日で15回走っていた)。頻度を変えるならここ。
+  schedule:
+    - cron: '0 */3 * * *'
+
+  # ⚠️ paths から src/** / admin-ui/src/** / public/** を意図的に外している。
+  # E2E の向き先は本番なので、それらを変更したPRでE2Eを走らせても検証されるのは
+  # 「本番の現在の状態」であって、そのPRの変更ではない。緑でも赤でも、PRの内容とは
+  # 無関係な結果しか返らない。実際に検証できるのは、そのPRが変更した spec 自身だけ。
+  # よってトリガーは spec と config の変更時に限る(壊れた spec をマージ前に弾く目的)。
   pull_request:
     branches: [main]
     paths:
-      - 'src/**'
-      - 'admin-ui/src/**'
-      - 'public/**'
       - 'tests/e2e/**'
       - 'playwright.config.ts'
 
@@ -22,9 +32,12 @@ on:
 # 壊れた本番がデプロイされた後(12:16)、無関係な全ブランチのE2Eが一斉に赤くなった。
 # 守るべきPRを通し、無関係なPRを罰する向きに働いた。
 #
-# デプロイした結果が壊れていないかの検知は SCRIPTS/post-deploy-widget-smoke.sh が担う。
-# 配布物そのものの静的検査は `pnpm lint:widget` が Gate 1 で担う。
-# 本ワークフローの役割の見直しは Asana で継続中(GID 1217969312827120)。
+# そこで役割を3層に分けた(Asana GID 1217969312827120):
+#   左  … 配布物の静的検査 = `pnpm lint:widget` (Gate 1、マージ前に止まる)
+#   中  … デプロイ直後の実挙動 = SCRIPTS/post-deploy-widget-smoke.sh (deploy-vps.sh が実行)
+#   右  … 本番の継続監視 = このワークフローの schedule 実行
+# PRトリガーはこの3層のどれでもなく、他人のPRを巻き込む害だけが残っていたため、
+# spec 自身の変更時のみに絞った。
 #
 # 直列化の理由: 並行PRが同時にE2Eを走らせると
 # 本番へのリクエストがレート制限(429)に達し、PRの内容と無関係にCIが赤くなる事象が
@@ -100,6 +113,21 @@ jobs:
             echo "⏭ linux baseline 未作成 → visual regression スキップ"
             echo "  初回作成: npx playwright test --project=visual-regression --update-snapshots"
             echo "  生成された *-linux.png をコミットしてください"
+          fi
+
+      # 定期実行・手動実行の失敗は誰の画面にも出ないため Slack へ流す。
+      # pull_request の失敗は当該PRのチェック欄に出るので通知しない(二重通知を避ける)。
+      # Gate 8 (gate-8-post-merge.yml) と同じ webhook・同じ形式。
+      - name: Slack alert on failure (schedule / manual only)
+        if: failure() && github.event_name != 'pull_request'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL_R2C }}
+        run: |
+          MSG="⛔ *E2E FAIL* (本番監視 / ${{ github.event_name }})\n本番が壊れている可能性があります。デプロイ直後なら rollback を検討してください。\nhttps://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          if [[ -n "${SLACK_WEBHOOK_URL:-}" ]]; then
+            curl -s -X POST "${SLACK_WEBHOOK_URL}" \
+              -H 'Content-type: application/json' \
+              --data "{\"text\":\"${MSG}\"}" || true
           fi
 
       - name: Upload Playwright report
