@@ -9,7 +9,7 @@ import { pool } from "../../../lib/db";
 import { createNotification, notificationExists } from "../../../lib/notifications";
 import { logger } from '../../../lib/logger';
 import { isAllowedAdminRole } from "../../middleware/roleAuth";
-import { planHasFeature, queryTenantPlan, type GatedFeature } from "../../../lib/billing/planFeatures";
+import { planHasFeature, queryTenantPlanOrThrow, type GatedFeature } from "../../../lib/billing/planFeatures";
 import { getRuleEffect } from "./ruleEffect";
 import {
   fetchAnalyticsSummary,
@@ -83,8 +83,21 @@ const ANALYTICS_PLAN_LIMIT_MESSAGES: Record<Extract<GatedFeature, "analytics" | 
 /**
  * GID: LP料金表(Standard〜: 会話分析 / Growth〜: 成果分析)に基づくplan制限。
  * client_adminのみ対象（super_adminの集約/横断ビューは対象外）。
- * pool可用性チェックの後に呼ぶこと（DB障害時に503を403で覆い隠さないため）。
- * 許可されなければ403を返し、呼び出し元は即returnすること。
+ * pool可用性チェックの後に呼ぶこと(poolそのものが無い場合の503とこの関数の
+ * 403を混同しないため)。
+ *
+ * ★pool可用性チェックだけでは不十分★（2026-08-30 [H-7]で発覚した実際の欠陥）
+ * poolが存在していても、plan確認クエリ自体が例外を投げることはある
+ * (接続断・タイムアウト等)。fail-safeでfree_adに丸め込む queryTenantPlan を
+ * ここで使うと、そのクエリ例外が「plan_upgrade_required」(403)に化けてしまい、
+ * DB障害を「プランをアップグレードしてください」という誤った案内で
+ * 覆い隠してしまう(このコメントが警告していたはずの事象そのもの)。
+ * そのため queryTenantPlanOrThrow(DB例外を握り潰さない版)を使い、
+ * plan確認クエリが失敗した場合は500を返す。
+ *
+ * 許可されなければ403を返し、呼び出し元は即returnすること
+ * (plan確認自体が失敗した場合も500を返した上でfalseを返すので、
+ * 同様に即returnすれば良い。呼び出し元がステータスコードを見分ける必要は無い)。
  */
 async function checkAnalyticsPlanAccess(
   pool: Pick<Pool, "query">,
@@ -94,7 +107,14 @@ async function checkAnalyticsPlanAccess(
   feature: Extract<GatedFeature, "analytics" | "conversion"> = "analytics",
 ): Promise<boolean> {
   if (isSuperAdmin) return true;
-  const plan = await queryTenantPlan(pool, jwtTenantId);
+  let plan: string;
+  try {
+    plan = await queryTenantPlanOrThrow(pool, jwtTenantId);
+  } catch (err) {
+    logger.warn("[checkAnalyticsPlanAccess] plan lookup failed", err);
+    res.status(500).json({ error: "プランの確認に失敗しました" });
+    return false;
+  }
   if (planHasFeature(plan, feature)) return true;
   res.status(403).json({
     error: "plan_upgrade_required",
