@@ -773,6 +773,325 @@ describe("PUT /v1/admin/knowledge/book-pdf/chunks/:chunkId", () => {
       delete process.env.ES_URL;
     }
   });
+
+  // 以下、テスト強化タスク(GID 1213607637045514)で追加。ITリテラシーが高くない著者や
+  // テナント管理者が実際にやりがちな操作を突く。
+
+  it("全フィールドを空文字にして保存する → 保存自体は拒否されないが、原則注入対象からは外れる(embedding_statusは変更しない)", async () => {
+    const chunkRow = {
+      id: 20,
+      metadata: {
+        source: "book",
+        book_id: 1,
+        chunk_index: 0,
+        principle: "アンカリング効果",
+        situation: "状況",
+        example: "例",
+        contraindication: "禁忌",
+      },
+      is_excluded_from_search: false,
+      tenant_id: "tenant-a",
+    };
+    const { app } = makeChunkApp(chunkRow);
+
+    const res = await request(app)
+      .put("/v1/admin/knowledge/book-pdf/chunks/20")
+      .send({ principle: "", situation: "", example: "", contraindication: "" });
+
+    expect(res.status).toBe(200);
+    // 空文字はバリデーションで弾かれず、そのままmetadataに残る
+    expect(res.body.metadata.principle).toBe("");
+    expect(res.body.metadata.situation).toBe("");
+    expect(res.body.metadata.example).toBe("");
+    expect(res.body.metadata.contraindication).toBe("");
+    // psychology_bookの全キーが空になるため detectPrincipleContentType がスキーマを判定できず、
+    // 再埋め込み(=原則注入対象への復帰)は行われない。embedding_statusも変更されないため、
+    // 直前まで持っていた古いベクトルだけが取り残される。
+    expect(res.body.embedding_updated).toBe(false);
+    expect(res.body.metadata.embedding_status).toBeUndefined();
+    expect(embedText).not.toHaveBeenCalled();
+    expect(res.body.metadata.edit_history[0].changes).toEqual({
+      principle: { from: "アンカリング効果", to: "" },
+      situation: { from: "状況", to: "" },
+      example: { from: "例", to: "" },
+      contraindication: { from: "禁忌", to: "" },
+    });
+  });
+
+  it("数千字を貼り付けて保存する → metadataは全文保持されるが、再埋め込み用テキストはbuildSearchTextの800字上限で切られる(ragExcerpt.slice(0,200)ルールはこの保存経路には効いていない)", async () => {
+    const chunkRow = {
+      id: 21,
+      metadata: { source: "book", book_id: 1, chunk_index: 0, principle: "希少性", situation: "旧" },
+      is_excluded_from_search: false,
+      tenant_id: "tenant-a",
+    };
+    const { app } = makeChunkApp(chunkRow);
+    const hugeText = "あ".repeat(5000);
+
+    const res = await request(app)
+      .put("/v1/admin/knowledge/book-pdf/chunks/21")
+      .send({ situation: hugeText });
+
+    expect(res.status).toBe(200);
+    // 保存経路自体はフィールド単位で切り詰めない(200字ルールはprincipleSearch.ts等、
+    // 検索結果を返す側で適用される。保存時には未適用)。
+    expect(res.body.metadata.situation).toHaveLength(5000);
+    expect(res.body.metadata.situation).toBe(hugeText);
+
+    // 再埋め込み用テキストはbuildSearchText側の800字上限(全フィールド結合後)で切られる
+    expect(embedText).toHaveBeenCalledTimes(1);
+    const [searchText] = (embedText as jest.Mock).mock.calls[0];
+    expect(searchText.length).toBeLessThanOrEqual(800);
+  });
+
+  it("絵文字・HTMLタグ・SQL断片を含む値を保存する → そのまま文字列として保存され、metadata || $1::jsonb へのJSONエンコード/デコードも壊れない", async () => {
+    const chunkRow = {
+      id: 22,
+      metadata: { source: "book", book_id: 1, chunk_index: 0, principle: "希少性", situation: "旧" },
+      is_excluded_from_search: false,
+      tenant_id: "tenant-a",
+    };
+    const { app, calls } = makeChunkApp(chunkRow);
+    const dangerousValue = `🎉<script>alert('xss')</script> O'Brien said "hi" \\ '); DROP TABLE faq_embeddings; --`;
+
+    const res = await request(app)
+      .put("/v1/admin/knowledge/book-pdf/chunks/22")
+      .send({ situation: dangerousValue });
+
+    expect(res.status).toBe(200);
+    expect(res.body.metadata.situation).toBe(dangerousValue);
+    expect(res.body.metadata.edit_history[0].changes.situation.to).toBe(dangerousValue);
+
+    // CASのUPDATEに渡すパラメータがJSON.stringify/JSON.parseで正しく往復すること
+    // (手動の文字列連結・エスケープをしていないことの確認。実クエリはpg側で$1バインドされ、
+    // SQL文字列に直接埋め込まれないため注入経路にはならない)
+    const casCall = calls.find((c) => c.sql.includes("COALESCE(metadata->>'embedding_status'"));
+    const parsed = JSON.parse(casCall!.params[0] as string);
+    expect(parsed.situation).toBe(dangerousValue);
+  });
+
+  it("編集履歴は20件を超えると最も古いものから落ちる(21件目の編集で1件目が消える)", async () => {
+    const chunkRow = {
+      id: 23,
+      metadata: { source: "book", book_id: 1, chunk_index: 0, principle: "希少性", situation: "初期" },
+      is_excluded_from_search: false,
+      tenant_id: "tenant-a",
+    };
+    const { app } = makeChunkApp(chunkRow);
+
+    let lastBody: { metadata: { edit_history: Array<{ changes: { situation: { to: string } } }> } } | undefined;
+    for (let i = 1; i <= 21; i++) {
+      const res = await request(app)
+        .put("/v1/admin/knowledge/book-pdf/chunks/23")
+        .send({ situation: `状況${i}` });
+      expect(res.status).toBe(200);
+      lastBody = res.body;
+    }
+
+    expect(lastBody!.metadata.edit_history).toHaveLength(20);
+    // 1件目(初期→状況1)は落ち、2件目(状況1→状況2)〜21件目(状況20→状況21)の20件が残る
+    expect(lastBody!.metadata.edit_history[0].changes.situation.to).toBe("状況2");
+    expect(lastBody!.metadata.edit_history[19].changes.situation.to).toBe("状況21");
+  });
+
+  it("アップロード者でない管理者(同テナント)でもmetadataは編集できる。PUTは原文(text)を一切扱わず、レスポンスにも含まれない", async () => {
+    // GET /:id/chunks とは異なり、PUTのSELECTは book_uploads.uploaded_by を取得しておらず、
+    // isUploader判定そのものが存在しない(=編集の可否はテナント一致のみで決まる)。
+    const chunkRow = {
+      id: 24,
+      metadata: { source: "book", book_id: 1, chunk_index: 0, principle: "希少性", situation: "旧" },
+      is_excluded_from_search: false,
+      tenant_id: "tenant-a",
+    };
+    const { app } = makeChunkApp(chunkRow, {
+      role: "client_admin",
+      tenantId: "tenant-a",
+      userId: "not-the-uploader",
+    });
+
+    const res = await request(app)
+      .put("/v1/admin/knowledge/book-pdf/chunks/24")
+      .send({ situation: "新" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.metadata.situation).toBe("新");
+    expect(res.body).not.toHaveProperty("text");
+  });
+
+  it("edit_historyには書籍の原文(text)が混入しない。textフィールドを送ってもホワイトリスト外として無視される", async () => {
+    const chunkRow = {
+      id: 25,
+      metadata: { source: "book", book_id: 1, chunk_index: 0, principle: "希少性", situation: "旧" },
+      is_excluded_from_search: false,
+      tenant_id: "tenant-a",
+    };
+    const { app, calls } = makeChunkApp(chunkRow);
+
+    const res = await request(app)
+      .put("/v1/admin/knowledge/book-pdf/chunks/25")
+      .send({ situation: "新", text: "これは復号された書籍原文です(本来AES暗号化されている)" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.metadata.edit_history[0].changes).toEqual({
+      situation: { from: "旧", to: "新" },
+    });
+    expect(res.body.metadata.edit_history[0].changes).not.toHaveProperty("text");
+    expect(res.body.metadata).not.toHaveProperty("text");
+
+    // DBへ送る差分にもtextが含まれないこと(ホワイトリストがisUploader制限の迂回口になっていない)
+    const casCall = calls.find((c) => c.sql.includes("COALESCE(metadata->>'embedding_status'"));
+    const parsed = JSON.parse(casCall!.params[0] as string);
+    expect(parsed).not.toHaveProperty("text");
+  });
+});
+
+// ─── PUT直後のチャンク削除 / 反映中の書籍削除(T6 + 削除の相互作用) ───────────
+// 利用者は「保存してすぐ消す」「反映中に消す」を普通にやる。既存の削除実装(chunk単体DELETEと
+// book単位DELETE)の挙動差を固定する。
+describe("チャンク編集後の削除フロー(利用者の実操作を想定)", () => {
+  beforeEach(() => {
+    (embedText as jest.Mock).mockReset().mockResolvedValue(Array.from({ length: 5 }, () => 0.1));
+    delete process.env.ES_URL;
+  });
+
+  // 既存実装の確認: DELETE /chunks/:chunkId (bookPdfRoutes.ts:980-1045) は
+  // faq_embeddings の削除と book_uploads.chunk_count のデクリメントのみを行い、
+  // DELETE /book-pdf/:id (同470-555) と違って deleteBookChunkFromEs を一切呼ばない。
+  // このテストは「削除したら孤児が残らない」という期待どおりの挙動を検証するが、
+  // 現状の実装ではESドキュメントが孤児として残るため失敗する。テストを弱めず、
+  // it.failing で意図(=直すべきバグ)を明示したまま残す。
+  it.failing("5. 保存直後にそのチャンクを削除する → 期待: ESの孤児ドキュメントが残らない(現状: チャンク単体DELETEはES同期を行わないため孤児が残る)", async () => {
+    process.env.ES_URL = "http://es.test:9200";
+    const fetchCalls: Array<{ url: string; method: string }> = [];
+    const originalFetch = global.fetch;
+    global.fetch = jest.fn(async (url: unknown, init?: { method?: string }) => {
+      fetchCalls.push({ url: String(url), method: init?.method ?? "GET" });
+      return { ok: true, text: async () => "" } as unknown as Response;
+    }) as unknown as typeof fetch;
+
+    let currentMetadata: Record<string, unknown> = {
+      source: "book",
+      book_id: 30,
+      chunk_index: 4,
+      principle: "希少性",
+      situation: "旧状況",
+    };
+    const db: any = {
+      query: jest.fn().mockImplementation((sql: string, params: unknown[] = []) => {
+        if (sql.includes("JOIN book_uploads bu")) {
+          return Promise.resolve({
+            rows: [
+              {
+                id: 20,
+                metadata: currentMetadata,
+                is_excluded_from_search: false,
+                tenant_id: "tenant-a",
+                book_id: 30,
+              },
+            ],
+            rowCount: 1,
+          });
+        }
+        if (sql.includes("COALESCE(metadata->>'embedding_status'")) {
+          const patch = JSON.parse(params[0] as string);
+          currentMetadata = { ...currentMetadata, ...patch };
+          return Promise.resolve({ rows: [{ id: 20, metadata: currentMetadata }], rowCount: 1 });
+        }
+        if (sql.includes("embedding = $1::vector")) {
+          const patch = JSON.parse(params[1] as string);
+          currentMetadata = { ...currentMetadata, ...patch };
+          return Promise.resolve({ rows: [{ id: 20, metadata: currentMetadata }], rowCount: 1 });
+        }
+        if (sql.includes("DELETE FROM faq_embeddings")) {
+          return Promise.resolve({ rows: [{ id: 20 }], rowCount: 1 });
+        }
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }),
+    };
+
+    const app = express();
+    app.use(express.json());
+    const noopAuth = (req: any, _res: any, next: any) => {
+      req.user = { id: "user-1", role: "client_admin", tenantId: "tenant-a", email: "" };
+      next();
+    };
+    registerBookPdfRoutes(app, db, noopAuth, (_r: any, _s: any, n: any) => n(), (_r: any, _s: any, n: any) => n());
+
+    try {
+      const putRes = await request(app)
+        .put("/v1/admin/knowledge/book-pdf/chunks/20")
+        .send({ situation: "新状況" });
+      expect(putRes.status).toBe(200);
+      expect(putRes.body.embedding_updated).toBe(true);
+
+      const delRes = await request(app).delete("/v1/admin/knowledge/book-pdf/chunks/20");
+      expect(delRes.status).toBe(200);
+
+      const esDeleteForThisChunk = fetchCalls.some(
+        (c) => c.method === "DELETE" && c.url.includes("book_30_chunk_4")
+      );
+      expect(esDeleteForThisChunk).toBe(true);
+    } finally {
+      global.fetch = originalFetch;
+      delete process.env.ES_URL;
+    }
+  });
+
+  it("6. 反映中(embedding_status='pending')のチャンクを含む書籍を削除しても、book_uploads・faq_embeddings・ESすべてが削除される(pending状態は削除の妨げにならない)", async () => {
+    // DELETE /book-pdf/:id 側のSQLは source/book_id のみで一致判定しており、
+    // embedding_status の値を一切見ない(bookPdfRoutes.ts:519-541)。pendingのチャンクも
+    // 通常のチャンクと同じ扱いで消せることを固定する。
+    process.env.ES_URL = "http://es.test:9200";
+    const fetchCalls: Array<{ url: string; method: string }> = [];
+    const originalFetch = global.fetch;
+    global.fetch = jest.fn(async (url: unknown, init?: { method?: string }) => {
+      fetchCalls.push({ url: String(url), method: init?.method ?? "GET" });
+      return { ok: true, text: async () => "" } as unknown as Response;
+    }) as unknown as typeof fetch;
+
+    const db: any = {
+      query: jest.fn().mockImplementation((sql: string) => {
+        if (sql.includes("SELECT id, tenant_id, storage_path")) {
+          return Promise.resolve({
+            rows: [{ id: 9, tenant_id: "tenant-a", storage_path: "tenant-a/uuid.pdf.enc" }],
+            rowCount: 1,
+          });
+        }
+        if (sql.includes("chunk_index")) {
+          // 反映中(pending)のチャンクを含む。SELECT自体はchunk_indexしか返さないが、
+          // metadata.embedding_status='pending'であっても削除対象から除外されない前提。
+          return Promise.resolve({ rows: [{ chunk_index: 0 }], rowCount: 1 });
+        }
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }),
+    };
+
+    try {
+      const app = express();
+      const noopAuth = (req: any, _res: any, next: any) => {
+        req.user = { id: "u1", role: "client_admin", tenantId: "tenant-a", email: "" };
+        next();
+      };
+      registerBookPdfRoutes(app, db, noopAuth, (_r, _s, n) => n(), (_r, _s, n) => n());
+
+      const res = await request(app).delete("/v1/admin/knowledge/book-pdf/9");
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ ok: true, deleted: 9 });
+
+      const embedDeleteCall = (db.query as jest.Mock).mock.calls.find(
+        (c: unknown[]) => typeof c[0] === "string" && (c[0] as string).includes("DELETE FROM faq_embeddings")
+      );
+      expect(embedDeleteCall).toBeTruthy();
+
+      const esDeleteCalls = fetchCalls.filter((c) => c.method === "DELETE");
+      expect(esDeleteCalls).toHaveLength(1);
+      expect(esDeleteCalls[0].url).toContain("book_9_chunk_0");
+    } finally {
+      global.fetch = originalFetch;
+      delete process.env.ES_URL;
+    }
+  });
 });
 
 // ─── 暗号化フォールバックテスト ─────────────────────────────────────────────
