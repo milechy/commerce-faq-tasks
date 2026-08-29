@@ -29,6 +29,24 @@ export const SERVER_COST_PER_REQUEST_USD = 0.0001;
 export const MARGIN_MULTIPLIER = Number(process.env.MARGIN_RATE ?? '5') || 5;
 
 /**
+ * GID 1217972417593917 [H-10] 2026-08-30: 「原価をテナントに見せるかどうか」は、
+ * このMARGIN_MULTIPLIERの値ではなく、面(画面)ごとの目的で決める方針が確定した。
+ *
+ *   - admin-ui/src/pages/admin/billing/BillingSummaryCards.tsx の「LLMコスト（原価）」、
+ *     同 index.tsx の「コスト内訳（原価・USD概算）」→ 表示する。課金画面は費用の
+ *     事前明示が目的の画面なので、原価の開示はその目的に沿う。請求見積り
+ *     (billing_estimate_jpy)と原価が同じ画面に並ぶため、このMARGIN_MULTIPLIER
+ *     が逆算できてしまう点は承知の上での判断。
+ *   - src/api/admin/tenants/analyticsSummaryRoutes.ts の llm_usage(PostHog原価)
+ *     → super_admin限定で非表示(PR #1062)。あちらはテナント分析が目的の画面で、
+ *     原価はそこに紛れ込んでいただけ。
+ *
+ * この2面が「片方はsuper_admin限定、片方は全公開」に見えるのは不整合ではなく
+ * 意図的な差。どちらかに揃えて直すと、課金画面側なら費用の事前明示が壊れ、
+ * 分析タブ側ならこのMARGIN_MULTIPLIER(粗利率)が漏れる。揃えないこと。
+ */
+
+/**
  * エンドユーザーが直接使う機能（マージン × MARGIN_RATE を適用）。
  * それ以外の管理者・運用向け機能は原価のみ（× 1）。
  */
