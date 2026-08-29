@@ -1,0 +1,73 @@
+{
+  "period": "30d",
+  "tenant_id": "carnation",
+  "source_type": "all",
+  "sort_by": "conversion_rate",
+  "items": [
+    {
+      "chunk_id": "faq-042",
+      "source": "faq",
+      "title": "営業時間について",
+      "usage_count": 88,
+      "injected_count": 0,
+      "conversation_count": 60,
+      "conversion_count": 14,
+      "conversion_rate": 0.233,
+      "avg_judge_score": 4.2,
+      "trend": "up"
+    },
+    {
+      "chunk_id": "book-017",
+      "source": "book",
+      "title": "返報性の原理を使った初回案内",
+      "principle": "reciprocity",
+      "usage_count": 34,
+      "injected_count": 21,
+      "conversation_count": 30,
+      "conversion_count": 4,
+      "conversion_rate": 0.133,
+      "avg_judge_score": 3.8,
+      "trend": "stable"
+    },
+    {
+      "chunk_id": "faq-009",
+      "source": "faq",
+      "title": "キャンセルポリシー",
+      "usage_count": 6,
+      "injected_count": 0,
+      "conversation_count": 5,
+      "conversion_count": 0,
+      "conversion_rate": 0,
+      "avg_judge_score": null,
+      "trend": "insufficient_data"
+    }
+  ],
+  "summary": {
+    "total_chunks_used": 3,
+    "avg_conversion_rate": 0.122,
+    "top_performer": {
+      "chunk_id": "faq-042",
+      "source": "faq",
+      "title": "営業時間について",
+      "usage_count": 88,
+      "injected_count": 0,
+      "conversation_count": 60,
+      "conversion_count": 14,
+      "conversion_rate": 0.233,
+      "avg_judge_score": 4.2,
+      "trend": "up"
+    },
+    "worst_performer": {
+      "chunk_id": "faq-009",
+      "source": "faq",
+      "title": "キャンセルポリシー",
+      "usage_count": 6,
+      "injected_count": 0,
+      "conversation_count": 5,
+      "conversion_count": 0,
+      "conversion_rate": 0,
+      "avg_judge_score": null,
+      "trend": "insufficient_data"
+    }
+  }
+}

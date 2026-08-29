@@ -1,0 +1,15 @@
+{
+  "completionRate": 78.5,
+  "loopRate": 0,
+  "fallbackRate": 4.2,
+  "searchP95Ms": 500,
+  "errorRate": 0,
+  "killSwitchActive": false,
+  "sla": {
+    "completionRateMin": 70,
+    "loopRateMax": 10,
+    "fallbackRateMax": 30,
+    "searchP95Max": 1500,
+    "errorRateMax": 1
+  }
+}
