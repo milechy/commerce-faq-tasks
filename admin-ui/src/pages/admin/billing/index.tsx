@@ -831,7 +831,11 @@ export default function BillingPage() {
             <UsageChartSection daily={daily} chartMode={chartMode} setChartMode={setChartMode} t={t} />
           )}
 
-          {/* コスト内訳(原価、USD概算) */}
+          {/* コスト内訳(原価、USD概算)
+              GID 1217972417593917 [H-10]: 課金画面で原価を表示するのは面ごとの方針決定
+              による(根拠は src/lib/billing/costCalculator.ts の MARGIN_MULTIPLIER 定義部)。
+              analyticsSummaryRoutes.ts の llm_usage が super_admin 限定なのと非対称だが、
+              意図的な差であり不整合ではない。片方だけ見て揃えないこと。 */}
           {costBreakdown && costBreakdown.total_usd > 0 && (
             <section style={{ ...CARD, marginBottom: 20 }}>
               <h2 style={{ fontSize: 15, fontWeight: 600, color: "var(--muted-foreground)", margin: "0 0 16px" }}>

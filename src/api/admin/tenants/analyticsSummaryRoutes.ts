@@ -154,6 +154,15 @@ export function registerAnalyticsSummaryRoutes(app: Express, db: Pool): void {
         // 換算したものであり、テナントへの請求額ではない(costCalculator.ts の
         // MARGIN_MULTIPLIER 参照。請求は会話単位のプラン料金)。原価をテナント側
         // (client_admin)に見せると粗利率を開示することになるため super_admin 限定にする。
+        //
+        // GID 1217972417593917 [H-10] 2026-08-30: 一方でadmin-uiの課金画面
+        // (BillingSummaryCards.tsx「LLMコスト（原価）」/ billing/index.tsx
+        // 「コスト内訳（原価・USD概算）」)は全ロールに原価を表示している。これは
+        // 不整合ではなく、原価を見せるかどうかを画面の目的で決めた結果(根拠は
+        // costCalculator.ts の MARGIN_MULTIPLIER 定義部を参照)。課金画面は費用の
+        // 事前明示が目的なので原価開示がその目的に沿うが、ここ(テナント分析タブ)は
+        // 分析が目的の画面で原価はそこに紛れ込んでいただけ。どちらかに揃えて
+        // 直さないこと。
         const now = new Date();
         const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
         const llmUsage = isSuperAdmin

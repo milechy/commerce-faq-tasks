@@ -50,7 +50,11 @@ export function BillingSummaryCards({ summaryTitle, summary, statusBadge, t }: B
           </div>
         </div>
 
-        {/* LLMコスト（原価） */}
+        {/* LLMコスト（原価）
+            GID 1217972417593917 [H-10]: ここで原価を表示するのは面ごとの方針決定による
+            (根拠は src/lib/billing/costCalculator.ts の MARGIN_MULTIPLIER 定義部)。
+            analyticsSummaryRoutes.ts の llm_usage が super_admin 限定なのと非対称だが、
+            意図的な差であり不整合ではない。片方だけ見て揃えないこと。 */}
         <div style={{ ...CARD, flex: "1 1 140px" }}>
           <div style={{ fontSize: 26, marginBottom: 4 }}>💹</div>
           <div style={{ fontSize: 26, fontWeight: 700, color: "#60a5fa", lineHeight: 1 }}>
