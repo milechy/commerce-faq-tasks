@@ -10,7 +10,7 @@ import type { Express, Request, Response } from "express";
 import { Pool } from "pg";
 import { generateWidgetJs } from "./widgetGenerator";
 import { resolveAvatarAssignment } from "../conversion/avatarAbExperiment";
-import { planHasFeature } from "../../lib/billing/planFeatures";
+import { planHasFeature, planShowsAdPromo } from "../../lib/billing/planFeatures";
 
 const API_BASE_URL =
   process.env.API_BASE_URL ?? "https://api.r2c.biz";
@@ -32,6 +32,21 @@ function buildBadgeUrl(tenantId: string): string {
     utm_source: "widget",
     utm_medium: "badge",
     utm_campaign: "powered_by",
+    r2c_ref: tenantId,
+  });
+  return `${LP_BASE_URL}/lp/from-chat/?${params.toString()}`;
+}
+
+/**
+ * free_ad プラン向け広告帯のリンクURL（UTM + テナント識別子付き）を組み立てる。
+ * utm_medium を badge(powered_by)と分けるのは流入計測を混ぜないため。
+ * rel="nofollow sponsored" はリンク自体（widget.js側）に付与する。ここではURLのみ。
+ */
+function buildAdPromoUrl(tenantId: string): string {
+  const params = new URLSearchParams({
+    utm_source: "widget",
+    utm_medium: "ad_promo",
+    utm_campaign: "free_ad",
     r2c_ref: tenantId,
   });
   return `${LP_BASE_URL}/lp/from-chat/?${params.toString()}`;
@@ -80,6 +95,11 @@ export function registerWidgetRoutes(app: Express, db: Pool | null): void {
       // hide_branding を満たさない = true となりバッジは「表示する」側に自然に倒れる。
       const showBrandingBadge = !planHasFeature(tenant.plan, "hide_branding");
 
+      // planShowsAdPromo は plan が null/未知/未設定のとき false に倒れる（fail-safe）ため、
+      // hide_branding とは逆に「掲出しない」側が判定不能時の既定になる。
+      // 有料テナントのサイトに誤って広告が出る事故を、無料テナントの掲出漏れより重く見る。
+      const showAdPromo = planShowsAdPromo(tenant.plan);
+
       const js = await generateWidgetJs({
         tenantId: tenant.id,
         apiBaseUrl: API_BASE_URL,
@@ -89,6 +109,8 @@ export function registerWidgetRoutes(app: Express, db: Pool | null): void {
         abVariant: assignment.variant,
         showBrandingBadge,
         badgeUrl: buildBadgeUrl(tenant.id),
+        showAdPromo,
+        adPromoUrl: buildAdPromoUrl(tenant.id),
       });
 
       res.set("Content-Type", "application/javascript; charset=utf-8");

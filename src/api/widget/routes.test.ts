@@ -214,6 +214,86 @@ describe('GET /widget/:tenantSlug.js — 「Powered by R2C」バッジ (PR-B)', 
   });
 });
 
+describe('GET /widget/:tenantSlug.js — R2C自身の広告帯 (AD-2)', () => {
+  beforeEach(() => {
+    (generateWidgetJs as jest.Mock).mockClear();
+  });
+
+  it('plan=free_ad → 広告帯を表示する(showAdPromo=true)。バッジ側の理由でバッジも表示側のまま', async () => {
+    const db = makePool([
+      { rows: [{ id: 'tenant-a', is_active: true, features: {}, plan: 'free_ad' }], rowCount: 1 },
+    ]);
+    const app = makeApp(db);
+    await request(app).get('/widget/tenant-a.js');
+    const config = (generateWidgetJs as jest.Mock).mock.calls[0][0];
+    expect(config.showAdPromo).toBe(true);
+    expect(config.adPromoUrl).toEqual(expect.any(String));
+    // widget.js 側は else if で広告帯を優先するため、showBrandingBadge がtrueのままでも
+    // 実際に両方出ることはない(widgetSourceInvariants.test.ts / freeAdBadgeLogic.test.ts参照)。
+    expect(config.showBrandingBadge).toBe(true);
+  });
+
+  it('plan=growth → 広告帯を表示しない(showAdPromo=false)', async () => {
+    const db = makePool([
+      { rows: [{ id: 'tenant-a', is_active: true, features: {}, plan: 'growth' }], rowCount: 1 },
+    ]);
+    const app = makeApp(db);
+    await request(app).get('/widget/tenant-a.js');
+    const config = (generateWidgetJs as jest.Mock).mock.calls[0][0];
+    expect(config.showAdPromo).toBe(false);
+  });
+
+  it('plan=starter/standard/enterprise → 広告帯を表示しない', async () => {
+    for (const plan of ['starter', 'standard', 'enterprise']) {
+      const db = makePool([
+        { rows: [{ id: 'tenant-a', is_active: true, features: {}, plan }], rowCount: 1 },
+      ]);
+      const app = makeApp(db);
+      await request(app).get('/widget/tenant-a.js');
+      const config = (generateWidgetJs as jest.Mock).mock.calls[0][0];
+      expect(config.showAdPromo).toBe(false);
+      (generateWidgetJs as jest.Mock).mockClear();
+    }
+  });
+
+  it('plan=NULL(未設定) → fail-safeで「掲出しない」側に倒れる(バッジとは逆向き)', async () => {
+    const db = makePool([
+      { rows: [{ id: 'tenant-a', is_active: true, features: {}, plan: null }], rowCount: 1 },
+    ]);
+    const app = makeApp(db);
+    await request(app).get('/widget/tenant-a.js');
+    const config = (generateWidgetJs as jest.Mock).mock.calls[0][0];
+    expect(config.showAdPromo).toBe(false);
+  });
+
+  it('plan=未知の文字列 → fail-safeで「掲出しない」側に倒れる(free_adへ誤って倒れない)', async () => {
+    const db = makePool([
+      { rows: [{ id: 'tenant-a', is_active: true, features: {}, plan: 'gold' }], rowCount: 1 },
+    ]);
+    const app = makeApp(db);
+    await request(app).get('/widget/tenant-a.js');
+    const config = (generateWidgetJs as jest.Mock).mock.calls[0][0];
+    expect(config.showAdPromo).toBe(false);
+  });
+
+  it('adPromoUrl に UTM(ad_promo/free_ad) + r2c_ref(テナントID) が付与され、着地先が /lp/from-chat/ である', async () => {
+    const db = makePool([
+      { rows: [{ id: 'tenant-a', is_active: true, features: {}, plan: 'free_ad' }], rowCount: 1 },
+    ]);
+    const app = makeApp(db);
+    await request(app).get('/widget/tenant-a.js');
+    const config = (generateWidgetJs as jest.Mock).mock.calls[0][0];
+    const url = new URL(config.adPromoUrl);
+    expect(url.pathname).toBe('/lp/from-chat/');
+    expect(url.searchParams.get('utm_source')).toBe('widget');
+    expect(url.searchParams.get('utm_medium')).toBe('ad_promo');
+    expect(url.searchParams.get('utm_campaign')).toBe('free_ad');
+    expect(url.searchParams.get('r2c_ref')).toBe('tenant-a');
+    // badgeのutm_mediumとは異なる値で、流入計測を混ぜない
+    expect(url.searchParams.get('utm_medium')).not.toBe('badge');
+  });
+});
+
 describe('GET /widget/:tenantSlug.js — バッジが表示されない既知の経路(仕様として固定)', () => {
   // CLAUDE.md 絶対にやってはいけないこと 38: この3経路は本PRでは是正せず、
   // 仕様として明示的に固定する。将来これを直す場合は、直したことが分かるように
