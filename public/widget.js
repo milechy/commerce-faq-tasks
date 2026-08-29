@@ -50,6 +50,11 @@
   // （plan判定不能時は「表示する」が安全なデフォルト）。badgeUrl が無ければ描画しない。
   var showBrandingBadge = _rajiuceTenantCfg.showBrandingBadge !== false;
   var badgeUrl = _rajiuceTenantCfg.badgeUrl || null;
+  // アバターA/Bテストの露出報告を1セッション1回に絞るフラグ。
+  // #1039(広告帯)で宣言行だけが差し替えで失われ、recordAbExposure() が
+  // ReferenceError を投げて sendMessage() 全体が停止した(本番のチャットが
+  // 全テナントで送信不能になった)。宣言を消さないこと。
+  var _abExposureSent = false;
   // R2C自身の広告帯（free_adプラン限定）。showBrandingBadgeとはfail-safeの向きが逆で、
   // _rajiuceTenantCfgが空オブジェクト（判定不能）のときは `=== true` により false 側に倒れる
   // （有料テナントのサイトに誤って広告が出る事故を避けるため）。adPromoUrlが無ければ描画しない。
@@ -2910,7 +2915,11 @@
     messages.push(userMsg);
     // 実際にチャットセッションが始まった時点（初回メッセージ送信時）でA/B露出を報告する。
     // ページ読み込みだけの離脱訪問者はカウントしない（分母を chat_sessions と揃えるため）。
-    recordAbExposure();
+    // 計測は「失敗してもチャット機能に一切影響させない」契約(recordAbExposure の
+    // docコメント参照)。関数内部の try/catch は fetch しか覆っていないため、
+    // それより手前で投げる例外(未定義参照など)が送信フロー全体を殺しうる。
+    // 計測のバグでチャットが止まらないよう、呼び出し側でも握りつぶす。
+    try { recordAbExposure(); } catch (_abErr) { /* non-fatal: 露出計測の欠測に留める */ }
     isLoading = true;
     renderMessages();
     scrollToBottom(true);  // ユーザー送信時は強制スクロール
