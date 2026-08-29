@@ -8186,7 +8186,8 @@ describe('POST /v1/admin/agent/chat', () => {
       ]);
     });
 
-    // analytics / conversion はLP料金表上Growth〜の機能（AppSidebar.tsxのrequiresPlanと同じ基準）。
+    // analytics はLP料金表上Standard〜、conversion はGrowth〜の機能（AppSidebar.tsxの
+    // requiresPlanと同じ基準。2026-08-29にanalyticsをGrowthからStandardへ開放し分割）。
     // activate_avatarと同様、旧UIへの案内リンク自体もプラン未満のテナントには返さない。
     it.each([
       ['analytics', '会話分析', '/admin/analytics'],
@@ -8209,9 +8210,9 @@ describe('POST /v1/admin/agent/chat', () => {
     });
 
     it.each([
-      ['analytics'],
-      ['conversion'],
-    ])('feature=%s: starterプランはリンクを返さずプラン制限メッセージを返す', async (feature) => {
+      ['analytics', 'Standardプラン以上'],
+      ['conversion', 'Growthプラン以上'],
+    ])('feature=%s: starterプランはリンクを返さずプラン制限メッセージ(%s)を返す', async (feature, notice) => {
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('call-lu-7', 'get_legacy_ui_link', { feature }))
         .mockResolvedValueOnce(makeGroqResponse('プラン制限のためお伝えしました。'));
@@ -8224,7 +8225,7 @@ describe('POST /v1/admin/agent/chat', () => {
 
       expect(res.status).toBe(200);
       const result = res.body.actions[0].result as string;
-      expect(result).toContain('Growthプラン以上');
+      expect(result).toContain(notice);
       // 押せないリンクカードが出ないよう、成功時の3行フォーマット(画面:/URL:/説明:)に一致しないこと
       expect(result).not.toMatch(/画面:/);
       expect(result).not.toMatch(/URL:/);
@@ -8918,7 +8919,7 @@ describe('POST /v1/admin/agent/chat', () => {
         .send({ message: '会話の分析を見たい', sessionId: 'sess-card-04' });
 
       expect(res.status).toBe(200);
-      expect(res.body.actions[0].result).toContain('Growthプラン以上');
+      expect(res.body.actions[0].result).toContain('Standardプラン以上');
       expect(res.body.actions[0].card).toBeUndefined();
     });
   });
@@ -9128,6 +9129,29 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(result).toContain('ポジティブ60');
     });
 
+    // 2026-08-29: analyticsをGrowthからStandardへ開放した本体。standardでも
+    // 実際の数値サマリーが返ることを固定する(conversionはGrowthのまま据え置き、別テストで確認)。
+    it('get_analytics_summary: standardプランでも実際の数値サマリーを返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-as-std-1', 'get_analytics_summary', { period: '30d' }))
+        .mockResolvedValueOnce(makeGroqResponse('会話は増えています。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'standard' }] });
+      mockFetchAnalyticsSummary.mockResolvedValueOnce(ANALYTICS_SUMMARY);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '会話は増えている?', sessionId: 'sess-as-std-01' });
+
+      expect(res.status).toBe(200);
+      expect(mockFetchAnalyticsSummary).toHaveBeenCalledWith({
+        db: mockDb,
+        tenantId: 'tenant-abc',
+        period: '30d',
+      });
+      expect(res.body.actions[0].result).toContain('142件');
+    });
+
     it('get_analytics_summary: period=7d を指定すると集計期間として渡される', async () => {
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('call-as-2', 'get_analytics_summary', { period: '7d' }))
@@ -9175,12 +9199,33 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(result).toContain('answer（11件）');
     });
 
+    // analytics(Standard〜)とconversion(Growth〜)の境界そのものの回帰。standardは
+    // 会話分析は見られるが成果分析(CV計測)はまだ見られない、という段差を固定する。
+    it('get_conversion_summary: standardプランは実際の数値サマリーを返さずプラン制限メッセージを返す(analyticsとは別ゲート)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-cs-std-1', 'get_conversion_summary', {}))
+        .mockResolvedValueOnce(makeGroqResponse('プラン制限のためお伝えしました。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'standard' }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '成約につながっている?', sessionId: 'sess-cs-std-01' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('Growthプラン以上');
+      expect(mockFetchConversionSummary).not.toHaveBeenCalled();
+    });
+
     // get_legacy_ui_link(analytics/conversion) と同じ基準。プラン未満のテナントには
-    // 案内リンクだけでなく数値そのものも返さない。
+    // 案内リンクだけでなく数値そのものも返さない。analytics(Standard〜)とconversion
+    // (Growth〜)で最低プランが異なるため、starterはどちらでも同じく拒否されるが
+    // 案内文言は別になる(2026-08-29分割)。
     it.each([
-      ['get_analytics_summary', 'sess-as-03'],
-      ['get_conversion_summary', 'sess-cs-03'],
-    ])('%s: starterプランは数値を返さずプラン制限メッセージを返す', async (toolName, sessionId) => {
+      ['get_analytics_summary', 'sess-as-03', 'Standardプラン以上'],
+      ['get_conversion_summary', 'sess-cs-03', 'Growthプラン以上'],
+    ])('%s: starterプランは数値を返さずプラン制限メッセージ(%s)を返す', async (toolName, sessionId, notice) => {
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('call-pg-1', toolName, {}))
         .mockResolvedValueOnce(makeGroqResponse('プラン制限のためお伝えしました。'));
@@ -9193,7 +9238,7 @@ describe('POST /v1/admin/agent/chat', () => {
 
       expect(res.status).toBe(200);
       const result = res.body.actions[0].result as string;
-      expect(result).toContain('Growthプラン以上');
+      expect(result).toContain(notice);
       expect(mockFetchAnalyticsSummary).not.toHaveBeenCalled();
       expect(mockFetchConversionSummary).not.toHaveBeenCalled();
       // 数値が1つも漏れていないこと
@@ -9203,9 +9248,9 @@ describe('POST /v1/admin/agent/chat', () => {
     // super_admin の「クライアントビューで見る」はテナントに見えている状態の再現が目的のため、
     // get_legacy_ui_link(analytics/conversion) と同様プランゲートをバイパスさせない。
     it.each([
-      ['get_analytics_summary', 'sess-as-04'],
-      ['get_conversion_summary', 'sess-cs-04'],
-    ])('%s: super_admin が starterテナントをプレビューしてもプラン制限メッセージを返す', async (toolName, sessionId) => {
+      ['get_analytics_summary', 'sess-as-04', 'Standardプラン以上'],
+      ['get_conversion_summary', 'sess-cs-04', 'Growthプラン以上'],
+    ])('%s: super_admin が starterテナントをプレビューしてもプラン制限メッセージ(%s)を返す', async (toolName, sessionId, notice) => {
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('call-pg-2', toolName, {}))
         .mockResolvedValueOnce(makeGroqResponse('プラン制限のためお伝えしました。'));
@@ -9218,7 +9263,7 @@ describe('POST /v1/admin/agent/chat', () => {
 
       expect(res.status).toBe(200);
       const result = res.body.actions[0].result as string;
-      expect(result).toContain('Growthプラン以上');
+      expect(result).toContain(notice);
       expect(mockFetchAnalyticsSummary).not.toHaveBeenCalled();
       expect(mockFetchConversionSummary).not.toHaveBeenCalled();
     });
@@ -9359,7 +9404,7 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.body.actions[0].card.lowScoreSessions).toEqual([]);
     });
 
-    it('growthプラン未契約(starter)は拒否され、fetchAnalyticsTrendに到達しない', async () => {
+    it('standardプラン未契約(starter)は拒否され、fetchAnalyticsTrendに到達しない', async () => {
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('call-at-3', 'get_analytics_trend', {}))
         .mockResolvedValueOnce(makeGroqResponse('プラン制限のためお伝えしました。'));
@@ -9371,7 +9416,7 @@ describe('POST /v1/admin/agent/chat', () => {
         .send({ message: '推移を見せて', sessionId: 'sess-at-03' });
 
       expect(res.status).toBe(200);
-      expect(res.body.actions[0].result).toContain('Growthプラン以上');
+      expect(res.body.actions[0].result).toContain('Standardプラン以上');
       expect(mockFetchAnalyticsTrend).not.toHaveBeenCalled();
       expect(mockFetchLowScoreSessions).not.toHaveBeenCalled();
     });
@@ -12594,7 +12639,10 @@ describe('POST /v1/admin/agent/chat', () => {
 
     // 他のAPI(analytics/routes.ts 等)と共有している既存の文言。この繰り返し抑制で
     // 初回メッセージの文言が変わっていないことを1文字単位で固定する。
+    // conversion(成果分析)はGrowthのまま、analytics(会話分析)は2026-08-29にStandardへ
+    // 開放したため文言が分かれる(PLAN_LIMIT_NOTICES参照)。
     const FULL_GROWTH_NOTICE = 'この機能はGrowthプラン以上でご利用いただけます';
+    const FULL_ANALYTICS_NOTICE = 'この機能はStandardプラン以上でご利用いただけます';
     const FULL_AVATAR_NOTICE = 'AIアバター機能はStandardプラン以上でご利用いただけます';
 
     /** starterプランのテナントとしてプラン制限付きツールを1ターン実行し、その結果文字列を返す */
@@ -12619,28 +12667,28 @@ describe('POST /v1/admin/agent/chat', () => {
 
     it('初回は既存の全文をそのまま返す', async () => {
       const result = await askGated('get_analytics_summary', 'sess-plan-rep-01', 'call-rep-1');
-      expect(result).toBe(FULL_GROWTH_NOTICE);
+      expect(result).toBe(FULL_ANALYTICS_NOTICE);
     });
 
     it('同一セッション・同一機能の2回目は全文を繰り返さず短い文になる', async () => {
       const first = await askGated('get_analytics_summary', 'sess-plan-rep-02', 'call-rep-2');
-      expect(first).toBe(FULL_GROWTH_NOTICE);
+      expect(first).toBe(FULL_ANALYTICS_NOTICE);
 
       const second = await askGated('get_analytics_summary', 'sess-plan-rep-02', 'call-rep-3');
-      expect(second).not.toBe(FULL_GROWTH_NOTICE);
-      expect(second).not.toContain('Growthプラン以上');
-      expect(second.length).toBeLessThan(FULL_GROWTH_NOTICE.length * 0.8);
+      expect(second).not.toBe(FULL_ANALYTICS_NOTICE);
+      expect(second).not.toContain('プラン以上');
+      expect(second.length).toBeLessThan(FULL_ANALYTICS_NOTICE.length * 0.8);
       // 短くなっても制限は効いたまま(数値は一切返さない)
       expect(mockFetchAnalyticsSummary).not.toHaveBeenCalled();
     });
 
     it('別セッションなら同じ機能でも初回として全文を返す(グローバルな抑制ではない)', async () => {
-      expect(await askGated('get_analytics_summary', 'sess-plan-rep-03', 'call-rep-4')).toBe(FULL_GROWTH_NOTICE);
-      expect(await askGated('get_analytics_summary', 'sess-plan-rep-04', 'call-rep-5')).toBe(FULL_GROWTH_NOTICE);
+      expect(await askGated('get_analytics_summary', 'sess-plan-rep-03', 'call-rep-4')).toBe(FULL_ANALYTICS_NOTICE);
+      expect(await askGated('get_analytics_summary', 'sess-plan-rep-04', 'call-rep-5')).toBe(FULL_ANALYTICS_NOTICE);
     });
 
     it('同一セッションでも別の機能なら初回として全文を返す(機能ごとに1回ずつ案内する)', async () => {
-      expect(await askGated('get_analytics_summary', 'sess-plan-rep-05', 'call-rep-6')).toBe(FULL_GROWTH_NOTICE);
+      expect(await askGated('get_analytics_summary', 'sess-plan-rep-05', 'call-rep-6')).toBe(FULL_ANALYTICS_NOTICE);
       expect(await askGated('get_conversion_summary', 'sess-plan-rep-05', 'call-rep-7')).toBe(FULL_GROWTH_NOTICE);
       expect(await askGated('activate_avatar', 'sess-plan-rep-05', 'call-rep-8', { id: 'av-1' })).toBe(FULL_AVATAR_NOTICE);
       expect(mockConnect).not.toHaveBeenCalled();
@@ -12648,10 +12696,10 @@ describe('POST /v1/admin/agent/chat', () => {
 
     it('旧UI案内(get_legacy_ui_link)と数値サマリーは同じ機能の案内として1回に集約される', async () => {
       const first = await askGated('get_legacy_ui_link', 'sess-plan-rep-06', 'call-rep-9', { feature: 'analytics' });
-      expect(first).toBe(FULL_GROWTH_NOTICE);
+      expect(first).toBe(FULL_ANALYTICS_NOTICE);
 
       const second = await askGated('get_analytics_summary', 'sess-plan-rep-06', 'call-rep-10');
-      expect(second).not.toContain('Growthプラン以上');
+      expect(second).not.toContain('プラン以上');
       // 押せないリンクカードが出ないことは短い文でも変わらない
       expect(second).not.toMatch(/画面:/);
       expect(second).not.toMatch(/URL:/);

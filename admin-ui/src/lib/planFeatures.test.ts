@@ -28,11 +28,12 @@ describe("planHasFeature", () => {
     ["starter", "hide_branding", false],
     ["growth", "hide_branding", true],
     ["enterprise", "hide_branding", true],
-    // standard(starterとgrowthの間)。開くのは avatar だけで、他は全て growth 以上のまま。
+    // standard(starterとgrowthの間)。開くのは avatar と analytics(会話分析)で、
+    // 他は全て growth 以上のまま。
     ["standard", "avatar", true],
     ["standard", "avatar_customize", false],
     ["standard", "premium_avatar", false],
-    ["standard", "analytics", false],
+    ["standard", "analytics", true],
     ["standard", "conversion", false],
     ["standard", "hide_branding", false],
     ["standard", "voice_clone", false],
@@ -209,12 +210,12 @@ describe("planFeatureDelta（プラン変更の確認画面に出す増減）", 
     expect(planFeatureDelta("growth", "growth")).toEqual({ gained: [], lost: [] });
   });
 
-  // Standard は「アバターを開放するが、カスタム作成は開放しない」段。
-  // 確認画面がこの2つを取り違えると、テナントは「自社アバターを作れる」と
-  // 誤解して契約する(CLAUDE.md 禁止54: 価格表記と実装を割らない)。
-  it("starter → standard で増えるのは avatar だけ(avatar_customize は増えない)", () => {
+  // Standard は「アバターと会話分析を開放するが、カスタム作成・成果分析は開放しない」段。
+  // 確認画面がこの境界を取り違えると、テナントは「自社アバターを作れる」「成果分析も
+  // 見られる」と誤解して契約する(CLAUDE.md 禁止54: 価格表記と実装を割らない)。
+  it("starter → standard で増えるのは avatar と analytics(avatar_customize / conversion は増えない)", () => {
     const { gained, lost } = planFeatureDelta("starter", "standard");
-    expect(gained).toEqual(["avatar"]);
+    expect(gained).toEqual(["avatar", "analytics"]);
     expect(lost).toEqual([]);
   });
 

@@ -4,8 +4,9 @@
 // PLAN_OPTIONS)と一致させること。
 //
 // LPの機能マッピング:
-//   Standard〜: AIアバター（R2C既定アバターの利用のみ。自社アバターの作成は不可）
-//   Growth〜: アバターの自社カスタム作成（avatar_customize）、高度なAnalytics、CV計測、
+//   Standard〜: AIアバター（R2C既定アバターの利用のみ。自社アバターの作成は不可）、
+//             会話分析（会話数・解決率・未回答質問。自社DB集計で原価ゼロのためStandardへ開放）
+//   Growth〜: アバターの自社カスタム作成（avatar_customize）、成果分析（CV計測・A/Bテスト）、
 //             プレミアムアバター生成
 //   Enterprise〜: カスタムアバター（Fish Audio Voice Cloning）、ディープリサーチ、Sai代行（R2Cエージェント）
 // 「心理学Sales AI」は現状すべてのプランで提供するため、ここでは制限しない。
@@ -70,7 +71,10 @@ const FEATURE_MIN_PLAN: Record<GatedFeature, TenantPlan> = {
   // プロンプト生成 = Avatar Customization Studio）。Standard との差別化の実体。
   avatar_customize: "growth",
   voice_clone: "enterprise",
-  analytics: "growth",
+  // 会話数・解決率・未回答質問など「基本の会話分析」。自社DB集計で限界原価ゼロのため
+  // Standardへ開放する(成果分析=conversionと混ぜないこと。2026-08-29に分割)。
+  analytics: "standard",
+  // 成約率・A/Bテスト等「成果の分析」。Growthの差別化として据え置く。
   conversion: "growth",
   // GID 1216944249525907: 原価が跳ねる機能への新規プランゲート
   deep_research: "enterprise",

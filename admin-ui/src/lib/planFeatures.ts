@@ -43,7 +43,10 @@ const FEATURE_MIN_PLAN: Record<GatedFeature, TenantPlan> = {
   // プロンプト生成 = Avatar Customization Studio）。Standard との差別化の実体。
   avatar_customize: "growth",
   voice_clone: "enterprise",
-  analytics: "growth",
+  // 会話数・解決率・未回答質問など「基本の会話分析」。自社DB集計で限界原価ゼロのため
+  // Standardへ開放する(成果分析=conversionと混ぜないこと。2026-08-29に分割)。
+  analytics: "standard",
+  // 成約率・A/Bテスト等「成果の分析」。Growthの差別化として据え置く。
   conversion: "growth",
   // GID 1216944249525907: 原価が跳ねる機能への新規プランゲート
   deep_research: "enterprise",
