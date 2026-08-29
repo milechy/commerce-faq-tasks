@@ -2,7 +2,7 @@
 
 > 全Phaseに適用。Phase44以降、デプロイ前に必ずこのフローを通す。
 > CLAUDE.mdに本ドキュメントへのポインタを追加すること。
-> 最終更新: 2026-05-31（Playwright MCP 実運用整合 — 接続手順・未接続時hk目視フロー追記）
+> 最終更新: 2026-08-30（Gate 1 — テスト実行結果の判定ルール〔部分実行の誤報告・ローカルフルスイート不安定時の緑/赤判定基準〕追記。PR #1062 由来）
 
 ---
 
@@ -105,6 +105,56 @@ Claude Codeは実装の最終ステップで必ず `pnpm verify` を実行し、
 - 外部API（Groq, Supabase Storage, Leonardo.ai, Fish Audio）: 常にモック
 - DB（PostgreSQL）: テスト用DBまたはモック（既存パターンに従う）
 - Elasticsearch: モック（既存パターンに従う）
+
+### テスト実行結果の判定ルール（緑/赤の根拠）
+
+> PR #1062 で Gate 1 が5件落ちた実例（`jest src/api/admin/...` の部分実行を「全通過」と誤報告）由来。2026-08-30追記。
+
+**部分実行の結果を「緑」と報告しない。**
+
+パス指定の部分実行（例: `jest src/api/admin/...`）は、同じ実装に対するテストが別ディレクトリに
+存在してもそれを実行せず素通りする。挙動を変更したら、変更したファイル名（や関数名）で
+リポジトリ全体を grep してテストの所在を確認してから「全通過」と報告する。
+
+実例（同じルートに対するテストが `src/` 併置と `tests/phaseNN/` の両方に存在する）:
+- `analyticsSummaryRoutes`: `src/api/admin/tenants/analyticsSummaryRoutes.test.ts`（併置）と
+  `tests/phase-a/analyticsSummaryRoutes.test.ts`（横断）の両方が存在する
+- `eventAnalyticsRoutes`: 実装は `src/api/admin/analytics/eventAnalyticsRoutes.ts` にあるが、
+  併置テストファイルは無く、対応するテストは `tests/phase55/eventAnalyticsRoutes.test.ts` にのみ存在する
+
+`jest.config.cjs` の `testMatch` は `["<rootDir>/{src,tests}/**/*.test.ts"]` であり、引数なしの
+`pnpm test`（フルスイート）は最初から `src/` と `tests/` の両方をカバーしている。漏れの原因は
+「テストが2箇所に割れていてスイートから漏れる」ことではなく、パス指定の**部分実行**そのもの。
+判定は必ずフルスイート（`pnpm test` または CI Gate 1）の結果で行う。
+
+**ローカルのフルスイートが不安定な場合の判定基準**
+
+この開発機では `pnpm test`（320スイート・約5,700テスト）を実行すると、実行のたびに
+無関係なスイートが `EADDRNOTAVAIL` / `ECONNRESET` / タイムアウトで落ちることを実測で確認済み
+（2026-08-30）。`supertest` が `request(app)` ごとに
+ephemeral port を bind するため、117ファイル規模の連続実行で TIME_WAIT が積み上がり、macOS の
+ephemeral port 帯（`net.inet.ip.portrange.first`=49152 〜 `.last`=65535 の16,384個）を
+実行中に食いつぶすのが原因と見られる。実測では実行中に TIME_WAIT が 13,706（帯域の84%）まで
+積み上がり、45/320スイートが失敗。コードを変えずに再実行すると失敗数は31/320に変化し、
+失敗したスイートの顔ぶれもほぼ総入れ替えだった。失敗した1スイート（`tuningAuthGuard.test.ts`）
+を単体実行すると 54/54 で即通過した。`package.json` の test スクリプトは既に
+`--maxWorkers=2` 設定済みで、それでも再現する。
+
+ローカルが赤いとき、以下がすべて当てはまれば「実コードの問題ではなく環境要因」と判断してよい:
+- 失敗したスイートを単体実行（`npx jest <path>`）すると通る
+- 実行のたびに失敗するスイートの顔ぶれが変わる（同じファイルが毎回落ちるわけではない）
+- 失敗メッセージがネットワーク系（`EADDRNOTAVAIL` / `ECONNRESET` / 接続タイムアウト）であり、
+  アサーション失敗ではない
+
+逆に、単体実行でも同じスイートが同じ理由（アサーション失敗）で毎回落ちるなら、それは環境要因では
+なく実コードの回帰。修正必須。
+
+環境要因と判断した場合は、**ローカルの赤字を根拠に「回帰なし」と報告するのではなく**、CI Gate 1
+（クリーンな環境で1ジョブとして実行され、他の作業と ephemeral port を奪い合わない）の結果を
+正とする。CI が緑であればそれをもって緑と報告してよい。
+
+有効性を実測で確認できた緩和策は現時点でない。`--runInBand` や worker数のさらなる削減などは
+未検証のため、ここには書かない。
 
 ---
 
