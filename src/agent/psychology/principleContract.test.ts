@@ -234,3 +234,27 @@ describe("通常RAGヒットの記録(retrieved)は生産者(searchAgent.ts)と�
     expect(consumer).toMatch(/COALESCE\(retrieved, true\)/);
   });
 });
+
+// 2026-08-29 テスト強化: chunkId の型不一致による継ぎ目バグ。
+// faq_embeddings.id は BIGSERIAL(int8)。node-postgres は既定で OID 20(int8)を
+// 精度落ち防止のため文字列で返し、このリポジトリに setTypeParser(20, ...) による
+// グローバル上書きは無い(src/lib/db.ts参照)。生産者(searchAgent.ts)は
+// principleChunkIds.has(Number(it.id)) で「principleSearch.ts が返す chunkId は
+// 数値の集合である」ことを前提に突き合わせているため、消費側(principleSearch.ts)が
+// row.id を Number() で正規化せずそのまま chunkId に詰めていると、実行時に文字列
+// (bigintのpg既定挙動)のままになり比較が一致しなくなる — 同じチャンクが通常RAGで
+// ヒットしても injected フラグが静かに立たなくなる(ランタイム再現は
+// principleSearch.test.ts「id 列が文字列(pgのbigint既定パーサ挙動)で返っても chunkId は
+// number になる」参照)。
+describe("principleSearch.ts が返す chunkId は searchAgent.ts の Number(it.id) 比較と型が一致する", () => {
+  it("searchAgent.ts は principleChunkIds を Number(it.id) で突き合わせている(数値の集合である前提)", () => {
+    const consumer = READ("src/agent/flow/searchAgent.ts");
+    expect(consumer).toMatch(/principleChunkIds\.has\(Number\(it\.id\)\)/);
+  });
+
+  it("principleSearch.ts は faq_embeddings.id(BIGSERIAL/int8)を Number() で正規化してから chunkId として返す", () => {
+    const producer = READ("src/agent/psychology/principleSearch.ts");
+    const mapBlock = producer.slice(producer.indexOf("return result.rows.map"));
+    expect(mapBlock).toMatch(/chunkId:\s*Number\(row\.id\)/);
+  });
+});

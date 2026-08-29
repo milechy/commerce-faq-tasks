@@ -111,8 +111,20 @@ export async function searchPrincipleChunks(
       [tenantId, embedLiteral, PRINCIPLE_TOP_K, PRINCIPLE_MAX_DISTANCE],
     );
 
+    // ★2026-08-29: id を Number() で正規化してから chunkId に詰める★
+    // faq_embeddings.id は bigint(OID 20)。node-postgres は精度落ち防止のため
+    // OID 20 を既定で文字列として返す(このリポジトリに setTypeParser(20, ...)
+    // によるグローバル上書きは無い。lib/db.ts 参照)。一方 PrincipleChunk.chunkId
+    // の型宣言は number。ここで row.id をそのまま代入すると型は number・実行時は
+    // string というズレが生じ、searchAgent.ts 側の Set<number> 照合
+    // (`principleChunkIds.has(Number(it.id))` / `rerankedChunkIds.has(String(chunk.chunkId))`)
+    // が静かに壊れ、通常検索と原則注入の両方でヒットしたチャンクの injected フラグが
+    // 常に false のまま記録から消えていた。id は faq_embeddings の主キー(NOT NULL)
+    // であり必ず数値文字列として返るため、Number(row.id) が NaN になることは無い。
+    // NaN 用の代替値は用意しない(未定義の代替 id を割り当てると別チャンクとの
+    // 誤一致を招くため、ここは変換失敗を握りつぶさずそのまま Number() に委ねる)。
     return result.rows.map((row: RawRow) => ({
-      chunkId: row.id,
+      chunkId: Number(row.id),
       // ragExcerpt.slice(0, 200) ルール遵守: 全フィールドに適用
       principle: (row.principle ?? "").slice(0, 200),
       situation: (row.situation ?? "").slice(0, 200),

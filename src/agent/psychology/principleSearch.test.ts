@@ -218,4 +218,35 @@ describe('searchPrincipleChunks', () => {
     const result = await searchPrincipleChunks('tenant-A', 'x', pool);
     expect(result).toEqual([]);
   });
+
+  // 2026-08-29 テスト強化: LIMIT $3 の境界。対象が1件しか無いとき、
+  // buildPrinciplePrompt が先頭3件を前提にしているからといって、
+  // クライアント側で3件に埋め合わせる実装に戻ってはいけない。
+  it('対象が1件しか無いとき、3件に水増しされない(LIMIT $3の境界)', async () => {
+    const { pool, query } = makePoolMock([bookRowFixture(SAMPLE_PRINCIPLE, 1)]);
+    const result = await searchPrincipleChunks('tenant-A', '値段が高いと言われた', pool);
+
+    expect(result).toHaveLength(1);
+    // LIMIT には常に PRINCIPLE_TOP_K(=3) が渡るが、DBが1件しか返さなければ
+    // 結果も1件のままであること。
+    const params = query.mock.calls[0][1] as unknown[];
+    expect(params[2]).toBe(3);
+  });
+
+  // 2026-08-29 テスト強化: faq_embeddings.id は BIGSERIAL(int8)。node-postgres は
+  // 既定で OID 20(int8)を精度落ち防止のため文字列で返し、このリポジトリに
+  // setTypeParser(20, ...) によるグローバル上書きは無い(lib/db.ts参照)。
+  // searchAgent.ts は principleChunkIds.has(Number(it.id)) で「principleChunks[].chunkId
+  // は数値の集合である」ことを前提に突き合わせているため、ここで文字列のまま
+  // chunkId に詰めると実運用で一致しなくなり、injected フラグが静かに立たなくなる。
+  it('id 列が文字列(pgのbigint既定パーサ挙動)で返っても chunkId は number になる', async () => {
+    const { pool } = makePoolMock([
+      { ...bookRowFixture(SAMPLE_PRINCIPLE, 7), id: '7' },
+    ]);
+    const result = await searchPrincipleChunks('tenant-A', '値段が高いと言われた', pool);
+
+    expect(result).toHaveLength(1);
+    expect(typeof result[0].chunkId).toBe('number');
+    expect(result[0].chunkId).toBe(7);
+  });
 });
