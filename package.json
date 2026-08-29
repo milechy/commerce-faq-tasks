@@ -161,6 +161,7 @@
     "@types/uuid": "^11.0.0",
     "autocannon": "^8.0.0",
     "concurrently": "^9.0.0",
+    "javascript-obfuscator": "^5.4.1",
     "jest": "^30.2.0",
     "onnxruntime-node": "1.20.0",
     "oxlint": "^1.68.0",
