@@ -123,11 +123,26 @@ export async function analyzeTuningRules(
 
   if (suggestedRules.length === 0) return [];
 
+  // 3.5. 却下済み提案と同趣旨のものを除外する。
+  // 「同趣旨」の判定は ON CONFLICT (tenant_id, trigger_pattern) が使う一意性の
+  // 粒度に合わせ、trigger_pattern の完全一致(前後空白のみ除去)とする。
+  // 他テナント・global の却下は流用しない(tenant_id = $1 のみを見る)。
+  const rejected = await pool.query<{ trigger_pattern: string }>(
+    `SELECT trigger_pattern FROM tuning_rules
+      WHERE tenant_id = $1 AND source = 'judge' AND status = 'rejected'`,
+    [tenantId],
+  );
+  const rejectedPatterns = new Set(rejected.rows.map((r) => r.trigger_pattern.trim()));
+
   // 4. tuning_rules テーブルに INSERT
   const result: SuggestedRule[] = [];
 
   for (const rule of suggestedRules) {
     if (!rule.triggerPattern || !rule.expectedBehavior) continue;
+    if (rejectedPatterns.has(rule.triggerPattern.trim())) {
+      logger.info({ tenantId, triggerPattern: rule.triggerPattern }, 'evaluationAnalyzer.skip_rejected');
+      continue;
+    }
 
     const evidence = {
       evaluationIds,
