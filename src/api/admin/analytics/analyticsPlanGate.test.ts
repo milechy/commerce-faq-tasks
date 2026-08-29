@@ -118,3 +118,84 @@ describe("GET /v1/admin/analytics/conversions — plan ゲート(Growthのまま
     expect(res.status).not.toBe(403);
   });
 });
+
+// [H-5] GID 1217969425230400: knowledge-attribution / rule-effect はplanゲートを
+// 一切通っていなかった(free_ad含む全プランが無制限に取得可能)。性質としては成果分析
+// (conversion, Growth〜)なのでconversionsと同じゲートを適用する回帰を固定する。
+describe("GET /v1/admin/analytics/knowledge-attribution — plan ゲート", () => {
+  beforeEach(() => {
+    mockQuery.mockReset();
+  });
+
+  it("client_admin + plan=standard → 403 plan_upgrade_required(以降のクエリは実行されない)", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan: "standard" }] });
+
+    const res = await request(makeApp({ role: "client_admin", tenant_id: "tenant-a" }))
+      .get("/v1/admin/analytics/knowledge-attribution");
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("plan_upgrade_required");
+    expect(res.body.message).toContain("Growth");
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it("client_admin + plan=growth → planゲートを通過する(403にならない)", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan: "growth" }] }); // plan確認
+    mockQuery.mockResolvedValue({ rows: [], rowCount: 0 }); // 以降の集計クエリ用の汎用フォールバック
+
+    const res = await request(makeApp({ role: "client_admin", tenant_id: "tenant-a" }))
+      .get("/v1/admin/analytics/knowledge-attribution");
+
+    expect(res.status).not.toBe(403);
+  });
+
+  it("super_adminはplanゲートをバイパスする(plan確認クエリが実行されない)", async () => {
+    mockQuery.mockResolvedValue({ rows: [], rowCount: 0 });
+
+    const res = await request(makeApp({ role: "super_admin" }))
+      .get("/v1/admin/analytics/knowledge-attribution?tenant_id=tenant-a");
+
+    expect(res.status).not.toBe(403);
+    const firstCallSql = mockQuery.mock.calls[0]?.[0] ?? "";
+    expect(firstCallSql).not.toMatch(/SELECT plan FROM tenants/);
+  });
+});
+
+describe("GET /v1/admin/analytics/rule-effect/:ruleId — plan ゲート", () => {
+  beforeEach(() => {
+    mockQuery.mockReset();
+  });
+
+  it("client_admin + plan=standard → 403 plan_upgrade_required(ルール参照クエリは実行されない)", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan: "standard" }] });
+
+    const res = await request(makeApp({ role: "client_admin", tenant_id: "tenant-a" }))
+      .get("/v1/admin/analytics/rule-effect/42");
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("plan_upgrade_required");
+    expect(res.body.message).toContain("Growth");
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it("client_admin + plan=growth → planゲートを通過する(403にならない)", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan: "growth" }] }); // plan確認
+    mockQuery.mockResolvedValue({ rows: [], rowCount: 0 }); // fetchRuleMeta以降の汎用フォールバック(rule_not_found → 404)
+
+    const res = await request(makeApp({ role: "client_admin", tenant_id: "tenant-a" }))
+      .get("/v1/admin/analytics/rule-effect/42");
+
+    expect(res.status).not.toBe(403);
+  });
+
+  it("super_adminはplanゲートをバイパスする(plan確認クエリが実行されない)", async () => {
+    mockQuery.mockResolvedValue({ rows: [], rowCount: 0 });
+
+    const res = await request(makeApp({ role: "super_admin" }))
+      .get("/v1/admin/analytics/rule-effect/42");
+
+    expect(res.status).not.toBe(403);
+    const firstCallSql = mockQuery.mock.calls[0]?.[0] ?? "";
+    expect(firstCallSql).not.toMatch(/SELECT plan FROM tenants/);
+  });
+});
