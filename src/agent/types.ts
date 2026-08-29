@@ -69,6 +69,24 @@ export interface RagSource {
   score: number;
   /** 書籍チャンクに関連づけられた心理原則（書籍チャンクのみ） */
   principle?: string;
+  /**
+   * 通常RAG(rerank結果)としてヒットしたか。
+   * usage_count(検索でヒットした回数)の集計対象を示すフラグで、injected とは
+   * 独立(直交)している。同じチャンクが通常RAGと注入の両方に該当する行は
+   * retrieved・injected の両方が true になる(行を2つに分けない)。
+   * 通常RAGに乗らなかった注入専用行は、この項目を省略せず必ず false を明示する
+   * こと(省略すると次段落の「旧形式」と区別が付かなくなる)。
+   * このフラグ自体が無い旧形式の rag_sources 行(retrieved 導入前に書かれた行、
+   * 当時は全行が検索ヒットだった)は true 扱いにする(summaryQueries.ts の
+   * `COALESCE(retrieved, true)` 参照)。
+   */
+  retrieved?: boolean;
+  /**
+   * 心理学原則として注入されたか(searchPrincipleChunks 経由)。
+   * usage_count とは独立した別軸で、summaryQueries.ts が injected_count として
+   * 別列に集計する(usage_count には混ぜない)。
+   */
+  injected?: boolean;
 }
 
 export interface AgentSearchResponse {

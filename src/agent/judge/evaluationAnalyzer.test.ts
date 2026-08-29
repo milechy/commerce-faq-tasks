@@ -226,6 +226,77 @@ describe('analyzeTuningRules', () => {
     expect(judgeSrc).toMatch(/ON CONFLICT\s*\(\s*tenant_id\s*,\s*trigger_pattern\s*\)/);
   });
 
+  it('7. 却下済み(status=rejected)と同趣旨(trigger_pattern完全一致)の提案は再提示されない', async () => {
+    const mockRepo = createMockRepo(sampleEvaluations);
+    const mockPool = {
+      query: jest.fn().mockImplementation((sql: string) => {
+        if (sql.includes('SELECT trigger_pattern')) {
+          return Promise.resolve({
+            rows: [{ trigger_pattern: '顧客が価格について質問したとき' }],
+            rowCount: 1,
+          });
+        }
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }),
+    };
+    mockCallGroq.mockResolvedValueOnce(mockRulesResponse);
+
+    const result = await analyzeTuningRules('tenant-test', mockRepo as any, mockPool as any);
+
+    // 却下済みの1件を除いた2件のみが提示される
+    expect(result).toHaveLength(2);
+    expect(result.some((r) => r.triggerPattern === '顧客が価格について質問したとき')).toBe(false);
+
+    // 却下済みの提案は INSERT されない
+    const insertCalls = (mockPool.query as jest.Mock).mock.calls.filter(
+      (call: any[]) => typeof call[0] === 'string' && call[0].includes('INSERT INTO tuning_rules'),
+    );
+    expect(
+      insertCalls.some((call: any[]) => call[1].includes('顧客が価格について質問したとき')),
+    ).toBe(false);
+  });
+
+  it('8. 却下済みが1件も無い状態でも従来どおり提案が生成される（フィルタが全件を落とさないことの境界値テスト）', async () => {
+    const mockRepo = createMockRepo(sampleEvaluations);
+    const mockPool = createMockPool(); // SELECT/INSERT とも常に rows: [] を返す
+    mockCallGroq.mockResolvedValueOnce(mockRulesResponse);
+
+    const result = await analyzeTuningRules('tenant-test', mockRepo as any, mockPool as any);
+
+    expect(result).toHaveLength(3);
+  });
+
+  it('9. 他テナントの却下は影響しない（tenant_id を必ず$1に束縛してクエリする）', async () => {
+    const mockRepo = createMockRepo(sampleEvaluations);
+    const mockPool = {
+      query: jest.fn().mockImplementation((sql: string, params: unknown[]) => {
+        if (sql.includes('SELECT trigger_pattern')) {
+          // 却下は 'other-tenant' にのみ存在する。tenant-test 向けのクエリは
+          // tenant_id=$1 で絞られているため、other-tenant の却下は返らないはず。
+          if (params?.[0] === 'other-tenant') {
+            return Promise.resolve({
+              rows: [{ trigger_pattern: '顧客が価格について質問したとき' }],
+              rowCount: 1,
+            });
+          }
+          return Promise.resolve({ rows: [], rowCount: 0 });
+        }
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }),
+    };
+    mockCallGroq.mockResolvedValueOnce(mockRulesResponse);
+
+    const result = await analyzeTuningRules('tenant-test', mockRepo as any, mockPool as any);
+
+    // other-tenant の却下は tenant-test の提案に影響しない → 3件とも残る
+    expect(result).toHaveLength(3);
+
+    const selectCall = (mockPool.query as jest.Mock).mock.calls.find(
+      (call: any[]) => typeof call[0] === 'string' && call[0].includes('SELECT trigger_pattern'),
+    );
+    expect(selectCall![1]).toEqual(['tenant-test']);
+  });
+
   it('6. conversation_evaluations 側も同様にコードとスキーマが一致している', () => {
     const migrationPath = path.join(
       __dirname,

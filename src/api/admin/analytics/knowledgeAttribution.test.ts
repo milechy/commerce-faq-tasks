@@ -51,6 +51,7 @@ type AttrRow = {
   src_type: 'faq' | 'book' | null;
   principle: string | null;
   usage_count: number;
+  injected_count: number;
   conversation_count: number;
   conversion_count: number;
   conversion_rate: number;
@@ -75,6 +76,7 @@ describe('GET /v1/admin/analytics/knowledge-attribution', () => {
         src_type: 'faq',
         principle: null,
         usage_count: 40,
+        injected_count: 0,
         conversation_count: 38,
         conversion_count: 12,
         conversion_rate: 12 / 38,
@@ -88,6 +90,7 @@ describe('GET /v1/admin/analytics/knowledge-attribution', () => {
         src_type: 'book',
         principle: 'reciprocity',
         usage_count: 15,
+        injected_count: 9, // 心理学原則として注入された回数(usage_countの内数)
         conversation_count: 14,
         conversion_count: 7,
         conversion_rate: 0.5,
@@ -121,6 +124,9 @@ describe('GET /v1/admin/analytics/knowledge-attribution', () => {
     expect(bookItem.principle).toBe('reciprocity');
     expect(bookItem.title).toContain('影響力の武器');
     expect(bookItem.trend).toBe('stable'); // |0.5 - 0.5| < 0.02
+    // T3: 注入軸(usage_countとは別枠。injected_countはusage_countの内数)
+    expect(bookItem.injected_count).toBe(9);
+    expect(faqItem.injected_count).toBe(0);
 
     // summary
     expect(res.body.summary.total_chunks_used).toBe(2);
@@ -135,6 +141,7 @@ describe('GET /v1/admin/analytics/knowledge-attribution', () => {
         src_type: 'faq',
         principle: null,
         usage_count: 5,
+        injected_count: 0,
         conversation_count: 5,
         conversion_count: 3,
         conversion_rate: 0.6,
@@ -193,6 +200,57 @@ describe('GET /v1/admin/analytics/knowledge-attribution', () => {
     const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
     expect(sql).toContain("(src->>'source') = $3");
     expect(params).toEqual(['tenant-A', '30 days', 'book']);
+  });
+
+  // 2026-08-29 レビュー是正: usage_count が rag_sources の全行(注入専用行を含む)を
+  // 数えていたため、「検索でヒットした回数」という既存の意味が壊れ、過去データと
+  // 比較不能になっていた(タスクの明示制約違反)。retrieved フラグで集計対象を
+  // 絞ったことを SQL テキストで固定する。
+  it('usage_count は retrieved のみを数え、注入専用行(retrieved: false)を増やさない', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await request(makeApp())
+      .get('/v1/admin/analytics/knowledge-attribution')
+      .set('x-tenant-id', 'tenant-A');
+
+    const [sql] = mockQuery.mock.calls[0] as [string, unknown[]];
+    // 生産側(searchAgent.ts)と同じキー名で retrieved を取り出していること
+    expect(sql).toContain(`(src->>'retrieved')::boolean AS retrieved`);
+    // usage_count は COUNT(*) 全件ではなく retrieved で絞った FILTER になっていること
+    expect(sql).toMatch(/COUNT\(\*\) FILTER \(WHERE COALESCE\(retrieved, true\)\)::int AS usage_count/);
+    expect(sql).not.toMatch(/COUNT\(\*\)::int AS usage_count/);
+  });
+
+  it('usage_count は DB(SQLのCOALESCE(retrieved,true))が返した値をそのまま使い、JS側でinjected_countと合算しない', async () => {
+    // このテストは SQL の COALESCE(retrieved, true) 自体(NULL=旧形式行を true 扱いに
+    // する後方互換)を実行はしない(本ファイルは pool.query をモックしており実DBが無い)。
+    // 代わりに、DB がその結果として返す usage_count(旧形式行を含めた値)を
+    // ルート層が書き換えずにそのまま返すことを確認する — usage_count に
+    // injected_count を足し込むような回帰が起きれば、この値がズレて検出できる。
+    const rows: AttrRow[] = [
+      {
+        chunk_id: '404',
+        src_type: 'book',
+        principle: 'reciprocity',
+        usage_count: 3, // DBがCOALESCE(retrieved,true)で絞った後の値(旧形式行込み)
+        injected_count: 7, // usage_countより大きい(注入のみの行が多いケース)
+        conversation_count: 3,
+        conversion_count: 1,
+        conversion_rate: 1 / 3,
+        avg_judge_score: 70,
+        raw_text: '返報性の原理は顧客心理に強く働く',
+        book_title: '影響力の武器',
+        prev_rate: 0,
+        prev_conversation_count: 0,
+      },
+    ];
+    mockQuery.mockResolvedValueOnce({ rows });
+
+    const res = await request(makeApp())
+      .get('/v1/admin/analytics/knowledge-attribution')
+      .set('x-tenant-id', 'tenant-A');
+
+    expect(res.body.items[0].usage_count).toBe(3);
+    expect(res.body.items[0].injected_count).toBe(7);
   });
 
   // -------------------------------------------------------------------------

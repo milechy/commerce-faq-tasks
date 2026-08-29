@@ -106,6 +106,24 @@ export function buildPrincipleWhereClause(): string {
   return `(${keys.map((k) => `metadata->>'${k}' IS NOT NULL`).join(" OR ")})`;
 }
 
+/**
+ * SQL の COALESCE(buildFieldSelect)と同じ優先順位を、取得済みの1行 metadata に対して
+ * JS 側で行うための解決関数。searchAgent.ts の rerank 結果(通常RAG経由でヒットした
+ * 書籍チャンク)は principleSearch.ts の SQL を通らないため、metadata から直接
+ * 打ち手を読む必要がある。psychology_book 決め打ちの `meta['principle']` のままだと
+ * sales_manual スキーマの書籍(打ち手キーが `solution`)が貢献度表で空になる。
+ */
+export function resolvePrincipleFromMetadata(
+  meta: Record<string, unknown> | undefined,
+): string | undefined {
+  if (!meta) return undefined;
+  for (const mapping of PRINCIPLE_SCHEMA_MAPPINGS) {
+    const value = meta[mapping.principle];
+    if (typeof value === "string" && value.length > 0) return value;
+  }
+  return undefined;
+}
+
 /** PRINCIPLE_FIELDS の各要素を検索テキストに埋め込むときの日本語ラベル。 */
 const PRINCIPLE_FIELD_LABELS: Record<PrincipleField, string> = {
   principle: "原則",
