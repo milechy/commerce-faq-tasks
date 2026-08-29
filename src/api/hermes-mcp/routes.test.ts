@@ -363,6 +363,37 @@ describe("GET /v1/hermes-mcp/proposals", () => {
     expect(pending.effect).toBeNull();
   });
 
+  it("effect計算はリクエストあたり上限10件で打ち切り、超過分は「未計算」を pending/rejected の null と区別できる形で返す", async () => {
+    // 作成日時降順(SQLのORDER BY)で並んだ status='active' 行を11件用意する。
+    const activeRows = Array.from({ length: 11 }, (_, i) => ({
+      ...ACTIVE_TENANT_ROW,
+      id: i + 1,
+      dedup_key: `tenant:carnation:rule-${i + 1}`,
+    }));
+    mockQuery.mockResolvedValueOnce({ rows: activeRows });
+    mockGetRuleEffect.mockResolvedValue({ status: "ok", comparison: {} });
+
+    const res = await authedGet("/v1/hermes-mcp/proposals");
+
+    expect(res.status).toBe(200);
+    // 上限(10件)だけ実際にgetRuleEffectを呼ぶ。11件全部には呼ばない。
+    expect(mockGetRuleEffect).toHaveBeenCalledTimes(10);
+    // 先頭(=作成日時が新しい方)から順に計算する
+    for (let i = 0; i < 10; i++) {
+      expect(mockGetRuleEffect).toHaveBeenNthCalledWith(i + 1, expect.anything(), i + 1);
+    }
+
+    const proposals = res.body.proposals as Array<{ proposal_id: string; effect: unknown }>;
+    // 上限内: 実際のgetRuleEffect結果
+    for (let i = 0; i < 10; i++) {
+      expect(proposals[i]!.effect).toEqual({ status: "ok", comparison: {} });
+    }
+    // 上限超過: nullではなく「未計算」を明示するマーカー(pending/rejectedのeffect: nullと
+    // 区別できないと、Hermesが「効果ゼロ」と誤読するため)
+    expect(proposals[10]!.effect).toEqual({ status: "not_computed", reason: "effect_limit_exceeded" });
+    expect(proposals[10]!.effect).not.toBeNull();
+  });
+
   it("limit未指定は既定50、200を超える指定は400でクエリを発行しない", async () => {
     mockQuery.mockResolvedValueOnce({ rows: [] });
     const okRes = await authedGet("/v1/hermes-mcp/proposals?limit=10");

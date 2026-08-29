@@ -31,6 +31,29 @@ const MAX_TEXT_LEN = 2000;
 const PROPOSALS_MAX_LIMIT = 200;
 const PROPOSALS_DEFAULT_LIMIT = 50;
 
+// GET /proposals で「効果を計算する」提案数の上限。
+// getRuleEffect(ruleEffect.ts) は1回の呼び出しで最大 CANDIDATE_SESSION_LIMIT(5000)
+// セッションを before/after 双方から読み、各セッションごとに
+// conversation_evaluations/chat_messages/conversion_attributions への相関サブクエリを
+// 実行する重いDiD集計。status='active' の全件(PROPOSALS_MAX_LIMIT=200まで)に
+// 無制限に適用すると、Hermesが毎晩無人cronから叩く1リクエストが最悪
+// 200件 × 5000セッションぶんの本番DB走査になり、誰も見ていない時間帯に
+// 本番DBを殴る形になる。
+// 現状Hermesのactive提案数は一桁見込みで、DEFAULT_LIMIT=50の1ページ全件に
+// effectを付けるのが自然かも検討したが、「今は少数」を前提に上限を作らないと
+// 増えた時に気づける場所が無いままになるため、明示的にキャップする。
+// 10件なら現実的な当面の件数を十分にカバーしつつ、想定外に承認済み提案が
+// 積み上がった場合でも1リクエストあたり最大 10 × 5000セッションに頭打ちできる。
+const PROPOSALS_EFFECT_LIMIT = 10;
+
+// 「effectが未計算(上限超過でスキップ)」であることを示すマーカー。
+// pending/rejected の effect: null (=効果測定の対象外) と区別するために使う。
+// 両方 null にすると Hermes が「効果ゼロ」と誤読しうるため、意図的に別の形にする。
+interface ProposalEffectNotComputed {
+  status: "not_computed";
+  reason: "effect_limit_exceeded";
+}
+
 type HermesProposalScope = "global" | "tenant";
 const VALID_PROPOSAL_SCOPES: readonly HermesProposalScope[] = ["global", "tenant"];
 
@@ -281,24 +304,49 @@ export function registerHermesMcpRoutes(app: Express): void {
       // /v1/admin/analytics/rule-effect/:ruleId と同じロジック)を再利用する
       // (実装を2箇所に持たない)。status='active'(承認済み)の提案のみ
       // before/afterのafter区間が存在するため対象にする。
-      const proposals = await Promise.all(
-        result.rows.map(async (row) => {
-          const scope: HermesProposalScope = row.tenant_id === "global" ? "global" : "tenant";
-          const effect = row.status === "active" ? await getRuleEffect(pool, row.id) : null;
+      //
+      // PROPOSALS_EFFECT_LIMIT件を超えたら計算をスキップし、代わりに
+      // ProposalEffectNotComputed を返す(pending/rejectedのeffect: nullとは
+      // 区別できる形にする。上限内であれば直列(Promise.allにしない)で1件ずつ
+      // 実行し、無人cronからの呼び出しに対して瞬間的な同時実行数を作らない)。
+      const proposals: Array<{
+        proposal_id: string;
+        scope: HermesProposalScope;
+        tenant_id: string | undefined;
+        title: string;
+        status: string;
+        dedup_key: string | null;
+        decided_at: string | null;
+        created_at: string;
+        effect: Awaited<ReturnType<typeof getRuleEffect>> | ProposalEffectNotComputed | null;
+      }> = [];
 
-          return {
-            proposal_id: String(row.id),
-            scope,
-            tenant_id: scope === "tenant" ? row.tenant_id : undefined,
-            title: row.trigger_pattern,
-            status: row.status,
-            dedup_key: row.dedup_key,
-            decided_at: row.approved_at ?? row.rejected_at ?? null,
-            created_at: row.created_at,
-            effect,
-          };
-        }),
-      );
+      let effectComputedCount = 0;
+      for (const row of result.rows) {
+        const scope: HermesProposalScope = row.tenant_id === "global" ? "global" : "tenant";
+
+        let effect: Awaited<ReturnType<typeof getRuleEffect>> | ProposalEffectNotComputed | null = null;
+        if (row.status === "active") {
+          if (effectComputedCount < PROPOSALS_EFFECT_LIMIT) {
+            effect = await getRuleEffect(pool, row.id);
+            effectComputedCount += 1;
+          } else {
+            effect = { status: "not_computed", reason: "effect_limit_exceeded" };
+          }
+        }
+
+        proposals.push({
+          proposal_id: String(row.id),
+          scope,
+          tenant_id: scope === "tenant" ? row.tenant_id : undefined,
+          title: row.trigger_pattern,
+          status: row.status,
+          dedup_key: row.dedup_key,
+          decided_at: row.approved_at ?? row.rejected_at ?? null,
+          created_at: row.created_at,
+          effect,
+        });
+      }
 
       return res.json({ proposals });
     } catch (err) {
