@@ -94,6 +94,23 @@ describe("POST /v1/admin/avatar/design-voice", () => {
     );
   });
 
+  // GID: Copilot UI(admin-ui/src/pages/copilot-preview/index.tsx の designAvatarVoice)は
+  // super_adminのテナントプレビュー中に対象を明示する目的で ?tenant= を付けて叩く。
+  // client_admin が同じ経路を(悪意・誤操作問わず)叩いても、他テナントの声の作成として
+  // 計上されてはならない(resolveEffectiveTenantId の isSuperAdmin 分岐が正しく効くこと)。
+  it("[越権防止] client_adminが?tenant=tenant-bを付けても無視され、JWTの自テナントで計上される", async () => {
+    mockVoiceDesignOk();
+
+    const res = await request(makeApp("client_admin", "tenant-a"))
+      .post("/v1/admin/avatar/design-voice?tenant=tenant-b")
+      .send({ instruction: "落ち着いた30代女性の声。ゆっくり丁寧に話す。" });
+
+    expect(res.status).toBe(200);
+    expect(mockTrackUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ tenantId: "tenant-a" }),
+    );
+  });
+
   it("GID 1217084040142043(実API確認済み): modelはJSON bodyではなくHTTPヘッダ'model: voice-design-1'で送る", async () => {
     mockVoiceDesignOk();
 
@@ -382,6 +399,68 @@ describe("POST /v1/admin/avatar/design-voice", () => {
 
     expect(res.status).toBe(500);
     expect(mockTrackUsage).not.toHaveBeenCalled();
+  });
+});
+
+// POST /v1/admin/avatar/match-voice の振る舞いテスト。design-voiceと異なりこれまで
+// 専用のテストが1本も無く、認可(avatarGenerationAuthGuard.test.ts)の
+// 400/403判定しかカバーされていなかった。ここでは越権防止(#テナント分離)だけを
+// 対象とする(バリデーション境界等の網羅は本ファイルの目的外)。
+// 呼び出し順は callGroqLLM(キーワード抽出) → Fish Audio検索 → callGroqLLM(ランキング)
+// の3回のfetch(generationRoutes.ts:305,321,357)。
+function mockMatchVoiceOk() {
+  mockFetch
+    .mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: "明るい" } }] }),
+    })
+    .mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        items: [{ _id: "voice-1", title: "明るい声", description: "", tags: [], languages: ["ja"] }],
+      }),
+    })
+    .mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              content: '[{"id":"voice-1","title":"明るい声","description":"元気な印象","score":0.9}]',
+            },
+          },
+        ],
+      }),
+    });
+}
+
+describe("POST /v1/admin/avatar/match-voice", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockQuery.mockResolvedValue({ rows: [{ plan: "growth" }] });
+    process.env.FISH_AUDIO_API_KEY = "test-fish-key";
+    process.env.GROQ_API_KEY = "test-groq-key";
+  });
+
+  afterEach(() => {
+    delete process.env.FISH_AUDIO_API_KEY;
+    delete process.env.GROQ_API_KEY;
+  });
+
+  // GID: Copilot UI(admin-ui/src/pages/copilot-preview/index.tsx の matchAvatarVoice)は
+  // super_adminのテナントプレビュー中に対象を明示する目的で ?tenant= を付けて叩く。
+  // design-voiceと同じ越権防止(#テナント分離)をここでも固定する。
+  it("[越権防止] client_adminが?tenant=tenant-bを付けても無視され、JWTの自テナントで計上される", async () => {
+    mockMatchVoiceOk();
+
+    const res = await request(makeApp("client_admin", "tenant-a"))
+      .post("/v1/admin/avatar/match-voice?tenant=tenant-b")
+      .send({ description: "落ち着いた女性の声" });
+
+    expect(res.status).toBe(200);
+    expect(mockTrackUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ tenantId: "tenant-a", featureUsed: "avatar_config_voice" }),
+    );
   });
 });
 
