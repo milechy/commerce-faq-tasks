@@ -37,6 +37,14 @@ jest.mock('../../../admin/http/supabaseAuthMiddleware', () => ({
   },
 }));
 
+// [H-5] GID 1217969425230400: このルートは成果分析(conversion, Growth〜)のplanゲートを
+// 通るようになった。ゲート自体の回帰はanalyticsPlanGate.test.tsで確認済みのため、ここでは
+// RBAC・越境防止・母数不足時の挙動の検証に集中できるようqueryTenantPlanをgrowth固定でモックする。
+jest.mock('../../../lib/billing/planFeatures', () => ({
+  ...jest.requireActual('../../../lib/billing/planFeatures'),
+  queryTenantPlan: jest.fn().mockResolvedValue('growth'),
+}));
+
 import { registerAnalyticsRoutes } from './routes';
 
 function makeApp() {
