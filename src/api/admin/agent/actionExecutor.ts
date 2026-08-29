@@ -235,8 +235,10 @@ const PLAN_LIMIT_NOTICES: Record<PlanLimitedFeature, { full: string; short: stri
     full: '高品質なアバター画像の生成はGrowthプラン以上でご利用いただけます',
     short: '高品質なアバター画像の生成はプラン対象外のままです',
   },
+  // 2026-08-29: analytics(会話分析)は Standard へ開放。conversion(成果分析)は
+  // 引き続き Growth のまま(analytics/routes.ts の ANALYTICS_PLAN_LIMIT_MESSAGES と同じ分割)。
   analytics: {
-    full: 'この機能はGrowthプラン以上でご利用いただけます',
+    full: 'この機能はStandardプラン以上でご利用いただけます',
     short: 'この機能はプラン対象外のままです',
   },
   conversion: {
@@ -4302,8 +4304,8 @@ export async function executeToolCall(
         },
       };
 
-      // GID: LP料金表(Growth〜: 高度なAnalytics、CV計測、AIアバター、プレミアムアバター生成)に
-      // 基づくプラン制限。AppSidebar.tsx(225行付近)とは異なり、ここでは super_admin も
+      // GID: LP料金表(Standard〜: 会話分析 / Growth〜: 成果分析(CV計測)、AIアバター、
+      // プレミアムアバター生成)に基づくプラン制限。AppSidebar.tsx(225行付近)とは異なり、ここでは super_admin も
       // バイパスさせない。super_admin がこの新UIに入る経路は「クライアントビューで見る」
       // (previewMode)であり、目的はテナントに見えている状態の再現なので、Starterテナントの
       // プレビューでGrowth限定機能の案内を出すのは再現として誤り。読み取り専用の案内でしかなく、
