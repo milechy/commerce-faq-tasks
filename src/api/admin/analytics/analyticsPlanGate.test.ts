@@ -199,3 +199,42 @@ describe("GET /v1/admin/analytics/rule-effect/:ruleId — plan ゲート", () =>
     expect(firstCallSql).not.toMatch(/SELECT plan FROM tenants/);
   });
 });
+
+// GID 1217969364194602 [H-7]: checkAnalyticsPlanAccess は queryTenantPlan(DB例外も
+// free_adへ丸め込むfail-safe)を使っていたため、plan確認クエリ自体がDB障害で例外を
+// 投げると「plan_upgrade_required」(403)に化けてしまい、実際のDB障害を隠していた。
+// queryTenantPlanOrThrow への切り替えの回帰テスト。403でないことだけでなく、
+// 意図した500が返ることまで確認する。
+describe("plan確認クエリがDB障害の場合、plan_upgrade_requiredで覆い隠さない", () => {
+  it("GET /v1/admin/analytics/summary — plan確認クエリが例外→500(403に化けない)", async () => {
+    mockQuery.mockRejectedValueOnce(new Error("connection reset"));
+
+    const res = await request(makeApp({ role: "client_admin", tenant_id: "tenant-a" }))
+      .get("/v1/admin/analytics/summary");
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).not.toBe("plan_upgrade_required");
+  });
+
+  it("GET /v1/admin/analytics/conversions — plan確認クエリが例外→500(403に化けない)", async () => {
+    mockQuery.mockRejectedValueOnce(new Error("connection reset"));
+
+    const res = await request(makeApp({ role: "client_admin", tenant_id: "tenant-a" }))
+      .get("/v1/admin/analytics/conversions");
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).not.toBe("plan_upgrade_required");
+  });
+
+  it("super_adminはplanゲート自体をバイパスするため、plan確認クエリのDB障害の影響を受けない", async () => {
+    // super_adminはcheckAnalyticsPlanAccessの時点でtrueを返しplan確認クエリを叩かないため、
+    // 後続の集計クエリだけがrejectされる(= 通常のDBエラー500経路。プランゲートとは無関係)。
+    mockQuery.mockRejectedValue(new Error("connection reset"));
+
+    const res = await request(makeApp({ role: "super_admin" }))
+      .get("/v1/admin/analytics/summary");
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).not.toBe("plan_upgrade_required");
+  });
+});
