@@ -31,6 +31,10 @@ function isDevWildcardModeActive(): boolean {
 }
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+// X-Request-ID の受信は許可のまま（上流LB/クライアントのトレース相関用途）。
+// ただしサーバは受信値を課金・識別には使わない（request-id.ts が req.requestId を
+// 必ずサーバ新規採番し、受信値は clientTraceId としてログ相関のみに使う）。
+// レスポンスの X-Request-ID はサーバ採番の正規IDを返す（EXPOSED_HEADERS）。
 const ALLOWED_HEADERS = [
   "Content-Type",
   "Authorization",
