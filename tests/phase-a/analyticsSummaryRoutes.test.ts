@@ -14,10 +14,19 @@ function makeMockDb(rows: {
   cvMicro?: { source: string; cnt: string }[];
   cvRank?: { rank: string; cnt: string }[];
   alert?: { mismatch: string; ranked_d: string }[];
+  // [H-7] client_adminはplanゲート(conversion=Growth〜)を通す必要がある。
+  // super_adminはバイパスされるため影響しない。
+  plan?: string;
 }) {
   let call = 0;
+  const plan = rows.plan ?? "growth";
   return {
-    query: jest.fn().mockImplementation(() => {
+    query: jest.fn().mockImplementation((sql: string) => {
+      // queryTenantPlanOrThrow(`SELECT plan FROM tenants ...`)は本体クエリの
+      // 呼び出し順(0〜4番目)には数えず、SQLで判別して別枠で答える。
+      if (/SELECT\s+plan\s+FROM\s+tenants/i.test(sql)) {
+        return Promise.resolve({ rows: [{ plan }] });
+      }
       const i = call++;
       switch (i) {
         case 0: return Promise.resolve({ rows: rows.conversations ?? [{ total: "10", avg_per_day: "0.33" }] });
@@ -99,12 +108,53 @@ describe("GET /v1/admin/tenants/:id/analytics-summary", () => {
     // days defaults to 30 for unknown period key
   });
 
-  it("returns 500 on DB error", async () => {
+  // [H-7] GID 1217969364194602: DBが完全に落ちている場合、plan確認クエリ自体も
+  // 失敗する。queryTenantPlanOrThrow(queryTenantPlanではない)を使うことで、
+  // この失敗がfree_adへ丸め込まれて403(plan_upgrade_required)に化けず、
+  // 実際のDB障害として500で返ることを固定する回帰テスト。
+  it("returns 500 on DB error (plan確認クエリも含めて全滅している場合、403に化けない)", async () => {
     const db = { query: jest.fn().mockRejectedValue(new Error("db error")) } as any;
     const app = makeApp(db);
     const res = await request(app)
       .get("/v1/admin/tenants/t1/analytics-summary")
       .set("Authorization", `Bearer ${makeToken("t1")}`);
     expect(res.status).toBe(500);
+    expect(res.body.error).not.toBe("plan_upgrade_required");
+  });
+
+  // [H-7] GID 1217969364194602: このタブが返すCV内訳・rank分布・source不一致アラートは
+  // routes.ts の /v1/admin/analytics/conversions と同じ「成果分析」の性質なのに
+  // plan制限が無かった。conversion(Growth〜)ゲートの回帰テスト。
+  describe("plan ゲート", () => {
+    it("client_admin + plan=starter → 403 plan_upgrade_required", async () => {
+      const db = makeMockDb({ plan: "starter" });
+      const app = makeApp(db);
+      const res = await request(app)
+        .get("/v1/admin/tenants/t1/analytics-summary")
+        .set("Authorization", `Bearer ${makeToken("t1")}`);
+      expect(res.status).toBe(403);
+      expect(res.body.error).toBe("plan_upgrade_required");
+    });
+
+    it("client_admin + plan=growth → planゲートを通過する(既定値。200)", async () => {
+      const db = makeMockDb({});
+      const app = makeApp(db);
+      const res = await request(app)
+        .get("/v1/admin/tenants/t1/analytics-summary")
+        .set("Authorization", `Bearer ${makeToken("t1")}`);
+      expect(res.status).toBe(200);
+    });
+
+    it("super_adminはplanゲートをバイパスする(plan確認クエリが実行されない)", async () => {
+      const db = makeMockDb({});
+      const app = makeApp(db);
+      const token = jwt.sign({ app_metadata: { role: "super_admin" } }, "test");
+      const res = await request(app)
+        .get("/v1/admin/tenants/any-tenant/analytics-summary")
+        .set("Authorization", `Bearer ${token}`);
+      expect(res.status).toBe(200);
+      const firstCallSql = db.query.mock.calls[0]?.[0] ?? "";
+      expect(firstCallSql).not.toMatch(/SELECT plan FROM tenants/);
+    });
   });
 });
