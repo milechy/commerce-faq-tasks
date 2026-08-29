@@ -36,6 +36,9 @@ export async function searchPrincipleChunksViaOpenViking(
           .slice(0, 200); // ragExcerpt.slice(0,200) ルール遵守
 
       results.push({
+        // OpenViking は path ベースで faq_embeddings.id を持たないため 0 を入れる
+        // (このアダプタは未接続の legacy 経路。knowledge.md 参照)。
+        chunkId: 0,
         principle: principle.slice(0, 200),
         situation: get('situation'),
         example: get('example'),

@@ -80,6 +80,7 @@ describe('buildPrinciplePrompt', () => {
   it('原則名を直接ユーザー向けに出力しない形式を維持する', () => {
     const chunks: PrincipleChunk[] = [
       {
+        chunkId: 1,
         principle: 'アンカリング効果',
         situation: '価格を提示する場面',
         example: '最初に高い価格を示す',
@@ -104,6 +105,7 @@ describe('buildPrinciplePrompt', () => {
     const longText = 'a'.repeat(300);
     const chunks: PrincipleChunk[] = [
       {
+        chunkId: 1,
         principle: 'テスト原則',
         situation: longText.slice(0, 200),  // slice適用済み
         example: longText.slice(0, 200),    // slice適用済み
@@ -119,6 +121,7 @@ describe('buildPrinciplePrompt', () => {
 
   it('最大3チャンクまで使用する', () => {
     const chunks: PrincipleChunk[] = Array.from({ length: 5 }, (_, i) => ({
+      chunkId: i + 1,
       principle: `原則${i + 1}`,
       situation: '',
       example: '',

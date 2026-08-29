@@ -19,6 +19,7 @@ import { planQuery } from "./queryPlanner";
 import { getBehaviorContext } from "../../api/events/behaviorContext";
 import { findSimilarPatterns } from "../../api/events/similarUserMatcher";
 import { searchPrincipleChunks } from "../psychology/principleSearch";
+import { resolvePrincipleFromMetadata } from "../psychology/principleSchemaMap";
 import { pool } from "../../lib/db";
 import { logger } from '../../lib/logger';
 
@@ -248,21 +249,51 @@ export async function runSearchAgent(
   // 'book:pdf:qwen-ocr'(OCR由来)も startsWith で拾う。厳密一致だと OCR チャンクが
   // 'faq' に誤ラベルされ、ragSources・ナレッジCV帰属で実態と異なる集計になっていた
   // (2026-08-25 是正)。
+  // T3(Asana LB-1): principleChunks(心理学原則として注入した分)は通常RAGとは
+  // 別の検索(principleSearch.ts のベクトル近傍検索)からヒットするため、
+  // rerankResult.items に含まれるとは限らない。含まれる場合は行を2つにせず
+  // retrieved(通常RAGヒット)・injected(注入)の2つの独立したフラグで表現する
+  // (usage_count は retrieved のみを数え、injected_count とは別軸で集計する。
+  // summaryQueries.ts / .claude/rules/knowledge.md「生産者と消費者が別のリテラルを
+  // 持たない」参照)。
+  const principleChunkIds = new Set(principleChunks.map((p) => p.chunkId));
   const ragSources: RagSource[] = rerankResult.items.map((it) => {
     const meta = (it as { metadata?: Record<string, unknown> }).metadata;
     const rawSource = meta?.["source"];
     const sourceType = typeof rawSource === "string" && rawSource.startsWith("book") ? "book" : "faq";
-    const principle = typeof meta?.["principle"] === "string"
-      ? (meta["principle"] as string)
-      : undefined;
+    // 2026-08-29: meta['principle'] 決め打ちだと sales_manual スキーマ(打ち手キーが
+    // 'solution')の書籍が貢献度表で principle 空欄になる(principleSchemaMap.ts 参照)。
+    const principle = resolvePrincipleFromMetadata(meta);
     const source: RagSource = {
       chunk_id: String(it.id),
       source: sourceType,
       score: typeof it.score === "number" ? it.score : 0,
+      retrieved: true,
     };
     if (principle) source.principle = principle;
+    if (principleChunkIds.has(Number(it.id))) source.injected = true;
     return source;
   });
+
+  // 通常RAG(rerankResult.items)に乗らなかった注入分を追加する。
+  // score は rerank のクロスエンコーダスコアを持たない(principleSearch.ts は
+  // ベクトル距離のみで rerank を経由しない)ため 0 とする。
+  // retrieved: false を明示する(キーを省略しない)。省略すると summaryQueries.ts の
+  // COALESCE(retrieved, true) が retrieved 未導入時代の旧行(NULL=true扱いが正しい)
+  // と区別できず、この注入専用行まで usage_count に数えてしまう。
+  const rerankedChunkIds = new Set(rerankResult.items.map((it) => it.id));
+  for (const chunk of principleChunks) {
+    const chunkId = String(chunk.chunkId);
+    if (rerankedChunkIds.has(chunkId)) continue;
+    ragSources.push({
+      chunk_id: chunkId,
+      source: "book",
+      score: 0,
+      principle: chunk.principle,
+      retrieved: false,
+      injected: true,
+    });
+  }
 
   return {
     answer: synth.answer,

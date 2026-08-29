@@ -157,3 +157,80 @@ describe("bookStructurizer.ts と bookPdfRoutes.ts はページ情報のキー�
     expect(writtenKeys).toContain(sortKey);
   });
 });
+
+// T3(Asana LB-1): 原則注入を rag_sources に記録し、貢献度集計で注入軸を分ける。
+// 生産者(searchAgent.ts が rag_sources に書く injected フラグ)と消費者
+// (summaryQueries.ts が rag_sources から読む injected フラグ)が別のキー名を
+// 独立に持つと、注入は起きているのに貢献度画面には一生出ない継ぎ目バグになる
+// (この種のバグは単体テストのモックでは検出できない。冒頭の説明参照)。
+describe("原則注入の記録(injected)は生産者(searchAgent.ts)と消費者(summaryQueries.ts)でキー名が一致する", () => {
+  it("RagSource 型(types.ts)に injected フィールドが定義されている", () => {
+    const typesSrc = READ("src/agent/types.ts");
+    const ragSourceMatch = typesSrc.match(/export interface RagSource \{([\s\S]*?)\n\}/);
+    expect(ragSourceMatch).not.toBeNull();
+    expect(ragSourceMatch![1]).toMatch(/injected\?:\s*boolean/);
+  });
+
+  it("searchAgent.ts が RagSource に 'injected' キーで注入フラグを書く", () => {
+    const producer = READ("src/agent/flow/searchAgent.ts");
+    // 通常RAGとも重複ヒットした分: 既存の行に注入フラグだけを立てる(行を2つにしない)
+    expect(producer).toMatch(/source\.injected\s*=\s*true/);
+    // 通常RAGに乗らなかった注入分: 新規の行として追加する
+    expect(producer).toMatch(/ragSources\.push\(\{[\s\S]*?injected:\s*true[\s\S]*?\}\)/);
+  });
+
+  it("summaryQueries.ts が同じ 'injected' キーで rag_sources から読み、usage_count とは別列に集計する", () => {
+    const consumer = READ("src/api/admin/analytics/summaryQueries.ts");
+    // 生産側と同じ JSONB キー名('injected')を読んでいること
+    expect(consumer).toContain(`(src->>'injected')::boolean AS injected`);
+    // 既存 usage_count の意味(検索でヒットした回数)を変えず、注入回数は別列で持つ
+    expect(consumer).toMatch(/COUNT\(\*\) FILTER \(WHERE injected\)::int AS injected_count/);
+    expect(consumer).toContain("injected_count: row.injected_count");
+  });
+});
+
+// 2026-08-29 レビュー是正: usage_count に注入専用行(通常RAGに乗らない分)が
+// 混入し、「検索でヒットした回数」という既存の意味が壊れていた(過去データと
+// 比較不能になる制約違反)。1ビットでは「検索ヒットのみ/注入のみ/両方」の
+// 3状態を表せないため、retrieved(通常RAGヒット)と injected(注入)を直交する
+// 2つのフラグに分けた。usage_count は retrieved のみを数える。
+describe("通常RAGヒットの記録(retrieved)は生産者(searchAgent.ts)と消費者(summaryQueries.ts)でキー名が一致する", () => {
+  it("RagSource 型(types.ts)に retrieved フィールドが定義されている", () => {
+    const typesSrc = READ("src/agent/types.ts");
+    const ragSourceMatch = typesSrc.match(/export interface RagSource \{([\s\S]*?)\n\}/);
+    expect(ragSourceMatch).not.toBeNull();
+    expect(ragSourceMatch![1]).toMatch(/retrieved\?:\s*boolean/);
+  });
+
+  it("searchAgent.ts は rerankResult.items 由来の行に retrieved: true、注入専用行に retrieved: false を明示する", () => {
+    const producer = READ("src/agent/flow/searchAgent.ts");
+    // rerankResult.items.map(...) が組み立てる行: retrieved: true を持つ
+    const mapBlockMatch = producer.match(
+      /const ragSources: RagSource\[\] = rerankResult\.items\.map\(\(it\) => \{[\s\S]*?\n  \}\);/,
+    );
+    expect(mapBlockMatch).not.toBeNull();
+    expect(mapBlockMatch![0]).toMatch(/retrieved:\s*true/);
+
+    // 通常RAGに乗らなかった注入専用の push 行: retrieved: false を明示する。
+    // キーを省略すると summaryQueries.ts の COALESCE(retrieved, true) が
+    // retrieved 未導入時代の旧行(NULL=true扱いが正しい)と区別できなくなる。
+    const pushBlockMatch = producer.match(/ragSources\.push\(\{[\s\S]*?\}\);/);
+    expect(pushBlockMatch).not.toBeNull();
+    expect(pushBlockMatch![0]).toMatch(/retrieved:\s*false/);
+  });
+
+  it("summaryQueries.ts が同じ 'retrieved' キーで rag_sources から読み、usage_count の集計対象を絞る", () => {
+    const consumer = READ("src/api/admin/analytics/summaryQueries.ts");
+    // 生産側と同じ JSONB キー名('retrieved')を読んでいること
+    expect(consumer).toContain(`(src->>'retrieved')::boolean AS retrieved`);
+    // usage_count は retrieved のみを数える(injected 専用行を混入させない)
+    expect(consumer).toMatch(/COUNT\(\*\) FILTER \(WHERE COALESCE\(retrieved, true\)\)::int AS usage_count/);
+  });
+
+  it("旧形式の行(retrieved キーを持たない)は COALESCE で true 扱いになる(後方互換)", () => {
+    // retrieved 導入前に書かれた rag_sources 行は当時すべて検索ヒットだったため、
+    // NULL を true として扱わないと過去の usage_count が変わってしまう。
+    const consumer = READ("src/api/admin/analytics/summaryQueries.ts");
+    expect(consumer).toMatch(/COALESCE\(retrieved, true\)/);
+  });
+});
