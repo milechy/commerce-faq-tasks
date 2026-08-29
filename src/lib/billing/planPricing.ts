@@ -64,6 +64,25 @@ export const PLAN_MULTIPLIERS: Record<string, number> = {
 export const STARTER_MONTHLY_BILLED_QUANTITY_CAP = 480;
 
 /**
+ * Growth(¥29,800・テキスト込み枠3,000会話・超過¥30/会話)の月間テキスト会話数が
+ * これを超えると、実効単価(総額÷会話数)が Starter の定額¥20/会話を上回る。
+ *
+ * 導出: 29,800 + 30×(N-3,000) = 20×N を解くと N=6,020。
+ * この時点で Growth の平均単価はちょうど¥20/会話になり、それ以降は
+ * 「最も成長した顧客が最も悪い実効単価を払う」逆転が起きる
+ * (Starter満額が Standard を上回る LB-3 と対になる論点)。
+ *
+ * ★この数値は手計算の定数であり、価格改定時は再計算が必要★
+ * 基本料・込み枠・超過単価は Stripe Price(env経由、getSubscriptionItemPrices参照)に
+ * あり、このリポジトリのTS定数からは追えない。Growthの基本料/込み枠/超過単価の
+ * いずれかを変更したら、このコメントの式に当てはめて N を出し直すこと。
+ *
+ * 到達したテナントへは自動でプラン変更しない(合意なく請求単価を変えない)。
+ * Enterprise個別見積りへの案内通知を出すだけに留める([LB-4]、_reportQuotaOverageUsage参照)。
+ */
+export const GROWTH_TEXT_UNITS_ENTERPRISE_NUDGE_THRESHOLD = 6020;
+
+/**
  * プラン名から倍率を引く。
  *
  * `?? 'starter'` は null/undefined のみを捕捉するため 0 はそのまま通る
