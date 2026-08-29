@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { gotoWithRetry } from './helpers/gotoRetry';
-import { mockAvatarBackend } from './helpers/mockAvatarBackend';
+import { mockAvatarBackend, mockAvatarDisabled } from './helpers/mockAvatarBackend';
 import { DEMO_BASE_URL } from './config';
 
 // QA sweep 2026-07-08: previously-uncovered Role A (end-user/anonymous) flows
@@ -109,7 +109,11 @@ test.describe('QA 2026-07-08 — Role A widget interactions', () => {
   test('A2-6: 有人スタッフへのエスカレーションボタンが機能する', async ({ page }) => {
     // アバター実課金を避けるため、埋め込みページへ遷移する前に必ずモックする
     // (widget.js は .fab クリックの有無に関係なくページ読込時に avatar config を fetch する)
-    await mockAvatarBackend(page);
+    // A2-6 は「アバターを介さないテキスト経路 + 有人エスカレーション」を検証するため、
+    // アバターを完全に無効化する。mockAvatarBackend は room-token を enabled:true +
+    // 無効ホスト(wss://e2e-mock.invalid)で返すため widget が接続に失敗し、初期化が
+    // 途中で止まって /api/chat が一度も呼ばれない(2026-08-29、trace で確認)。
+    await mockAvatarDisabled(page);
     await gotoWithRetry(page, `${DEMO_BASE}/index.html`);
     await page.waitForFunction(
       () => {

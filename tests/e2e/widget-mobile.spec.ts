@@ -1,12 +1,20 @@
 import { test, expect } from '@playwright/test';
 import { gotoWithRetry } from './helpers/gotoRetry';
 import { DEMO_INDEX_URL } from './config';
-import { mockAvatarBackend } from './helpers/mockAvatarBackend';
+import { mockAvatarDisabled } from './helpers/mockAvatarBackend';
 
 const E2E_ENABLED = process.env.E2E_ENABLED === '1' || !!process.env.CI;
 const DEMO_URL = DEMO_INDEX_URL;
 
 test.describe('Widget — Mobile iPhone 12 (390px) M1-M6', () => {
+  // M1-M6 は全て同じ埋め込みデモページを開く。widget.js は .fab クリックの有無に
+  // 関係なくページ読込時に avatar config を fetch するため、モックしないと CI 実行の
+  // たびに実際のアバターセッションが確立され原価が発生する(実測 ¥25.9/分)。
+  // かつ本スイートはテキスト UI を検証するので、アバターは最初から無効にする。
+  test.beforeEach(async ({ page }) => {
+    await mockAvatarDisabled(page);
+  });
+
   test.skip(!E2E_ENABLED, 'E2E tests require E2E_ENABLED=1 or CI=true');
 
   test.use({
@@ -189,13 +197,6 @@ test.describe('Widget — Mobile iPhone 12 (390px) M1-M6', () => {
   // 検証する（サーバ側の上限判定ロジックは src/api/chat/route.freeAdQuota.test.ts
   // が担当）。
   test('M6: free_ad quota message renders as assistant message, not a red error banner', async ({ page }) => {
-    // アバター実課金を避けるため、埋め込みページへ遷移する前に必ずモックする
-    // (widget.js は .fab クリックの有無に関係なくページ読込時に avatar config を fetch する)。
-    // qa-2026-07-08-role-a.spec.ts の A2-6 と同じ理由。本テストにはこれが無く、CI 実行の
-    // たびに実際の /api/avatar/anam-session と /api/avatar/room-token を叩いていた
-    // (2026-08-29、E2E失敗の trace で確認)。
-    await mockAvatarBackend(page);
-
     const QUOTA_MESSAGE = '今月のご利用可能回数の上限に達しました。プランをアップグレードすると引き続きご利用いただけます。';
     await page.route('**/api/chat', (route) =>
       route.fulfill({
