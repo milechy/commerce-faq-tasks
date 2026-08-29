@@ -10,7 +10,7 @@ import { supabaseAuthMiddleware } from '../../../admin/http/supabaseAuthMiddlewa
 import { pool } from '../../../lib/db';
 import { logger } from '../../../lib/logger';
 import { isAllowedAdminRole } from "../../middleware/roleAuth";
-import { planHasFeature, queryTenantPlan } from "../../../lib/billing/planFeatures";
+import { planHasFeature, queryTenantPlanOrThrow } from "../../../lib/billing/planFeatures";
 
 // whitelist: SQL injection防止のため group_by は固定列名のみ許可
 const ALLOWED_GROUP_BY = new Set(['event_type', 'page_url', 'visitor_id']);
@@ -126,8 +126,18 @@ export function registerEventAnalyticsRoutes(app: Express): void {
       // 「基本の会話分析」(analytics)の一部。routes.ts の summary/trends/evaluations と
       // 同じくStandard〜で開放する(成果分析=conversionとは別ゲート。
       // src/lib/billing/planFeatures.ts 参照)。super_adminはバイパス。
+      //
+      // queryTenantPlanOrThrow を使う(queryTenantPlanではない): DB問い合わせ自体が
+      // 例外を投げた場合にfree_adへ丸め込まれると、DB障害が「plan_upgrade_required」
+      // (403)に化けてしまい、実際に起きているDB障害を隠してしまうため。
       if (!isSuperAdmin) {
-        const plan = await queryTenantPlan(pool, jwtTenantId);
+        let plan: string;
+        try {
+          plan = await queryTenantPlanOrThrow(pool, jwtTenantId);
+        } catch (err) {
+          logger.warn({ err }, '[GET /v1/admin/analytics/events] plan lookup failed');
+          return res.status(500).json({ error: 'internal_error' });
+        }
         if (!planHasFeature(plan, "analytics")) {
           return res.status(403).json({
             error: "plan_upgrade_required",

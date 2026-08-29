@@ -5,7 +5,7 @@ import { getMonthlyLLMUsageFromPostHog } from "../../../lib/billing/posthogUsage
 import { logger } from "../../../lib/logger";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 import { userSourceClause, userSourceExists } from "../analytics/summaryQueries";
-import { planHasFeature, queryTenantPlan } from "../../../lib/billing/planFeatures";
+import { planHasFeature, queryTenantPlanOrThrow } from "../../../lib/billing/planFeatures";
 
 const PERIOD_DAYS: Record<string, number> = {
   last_7d: 7,
@@ -48,7 +48,16 @@ export function registerAnalyticsSummaryRoutes(app: Express, db: Pool): void {
       const su = (req as AuthedReq).supabaseUser;
       const isSuperAdmin = su?.app_metadata?.role === "super_admin";
       if (!isSuperAdmin) {
-        const plan = await queryTenantPlan(db, tenantId);
+        // queryTenantPlanOrThrow を使う(queryTenantPlanではない): DB問い合わせ自体が
+        // 例外を投げた場合にfree_adへ丸め込まれると、DB障害が「plan_upgrade_required」
+        // (403)に化けてしまい、実際に起きているDB障害を隠してしまうため。
+        let plan: string;
+        try {
+          plan = await queryTenantPlanOrThrow(db, tenantId);
+        } catch (err) {
+          logger.warn({ err, tenantId }, "[analyticsSummary] plan lookup failed");
+          return res.status(500).json({ error: "analytics fetch failed" });
+        }
         if (!planHasFeature(plan, "conversion")) {
           return res.status(403).json({
             error: "plan_upgrade_required",

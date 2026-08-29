@@ -131,6 +131,44 @@ export async function queryTenantPlan(
   }
 }
 
+/**
+ * GID 1217969364194602 [H-7]: queryTenantPlan と異なり、DB問い合わせ自体が例外を
+ * 投げた場合は free_ad へ丸め込まず、そのまま呼び出し元へ投げる。
+ *
+ * queryTenantPlan の fail-safe(DB障害も free_ad = 最も制限が強い段へ倒す)は
+ * 「plan を引けなかった以上、機能を開放しない」という向きでは正しいが、
+ * pool可用性チェックの後段でこれを使って plan ゲートを掛けている場所では、
+ * DB接続断そのものが「plan_upgrade_required」(403)に化けてしまう
+ * (テナントに「プランを契約してください」という誤った案内をし、
+ * 実際に起きているDB障害を隠してしまう)。呼び出し元が503/500として
+ * 扱えるよう、ここでは例外を握り潰さない。
+ *
+ * plan列がnull/未知の文字列/テナント不在(rowsが空)の場合は、DB障害ではなく
+ * データの状態そのものなので、従来通り free_ad へ倒す(allowlistは
+ * queryTenantPlan/queryTenantPlanResult と同じ理由で独立に持つ。
+ * 実装を共有すると、どちらかの修正が他のfail-safeの向きを意図せず変える)。
+ */
+export async function queryTenantPlanOrThrow(
+  pool: Pick<Pool, "query">,
+  tenantId: string,
+): Promise<TenantPlan> {
+  const result = await pool.query<{ plan: string | null }>(
+    `SELECT plan FROM tenants WHERE id = $1`,
+    [tenantId],
+  );
+  const plan = result.rows[0]?.plan;
+  if (
+    plan === "free_ad" ||
+    plan === "starter" ||
+    plan === "standard" ||
+    plan === "growth" ||
+    plan === "enterprise"
+  ) {
+    return plan;
+  }
+  return "free_ad";
+}
+
 // /api/chat は全リクエストで getTenantPlan() を呼ぶ(free_ad以外のプランでも毎回)。
 // この関数がコードベース全体でqueryTenantPlanのprod唯一の呼び出し元であり、
 // 恒久的なDBラウンドトリップが最高トラフィックエンドポイントに乗っている状態を
