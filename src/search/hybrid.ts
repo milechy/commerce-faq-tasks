@@ -26,6 +26,39 @@ const normZ = (xs: number[]) => {
   return (x: number) => (x - m) / (s || 1);
 };
 
+/**
+ * ES 可視性フィルター（is_published + is_excluded_from_search）。
+ *
+ * **主経路とフォールバック経路で条件が乖離しないよう、ここに一本化する。**
+ * 2026-08-30、言語別インデックス404時のフォールバック検索（下記 fallbackIndex）が
+ * tenant_id フィルタのみで、非公開（is_published=false）や検索除外設定
+ * （is_excluded_from_search=true）にした FAQ が匿名訪問者（widget）の回答に混入し得る
+ * 情報漏洩を修正。主経路（bool.filter.must）と同一条件をフォールバックにも適用する。
+ *
+ * pgvector 側の FAQ_VISIBILITY_WHERE（src/search/pgvector.ts）に対応:
+ *  - is_published=true、または is_published フィールド未設定なら公開扱い。
+ *    書籍チャンク等の faq_id を持たないドキュメントは is_published を持たないため、
+ *    未設定 branch で通す（over-block しない）。pgvector の「非 FAQ は faq_docs を
+ *    見ない」挙動に相当。
+ *  - is_excluded_from_search=true は FAQ・非 FAQ を問わず常に除外。
+ */
+const ES_VISIBILITY_FILTERS: object[] = [
+  {
+    bool: {
+      should: [
+        { term: { is_published: true } },
+        { bool: { must_not: { exists: { field: "is_published" } } } },
+      ],
+      minimum_should_match: 1,
+    },
+  },
+  {
+    bool: {
+      must_not: { term: { is_excluded_from_search: true } },
+    },
+  },
+];
+
 export async function hybridSearch(
   q: string,
   tenantId?: string,
@@ -118,24 +151,11 @@ export async function hybridSearch(
                       { term: { tenant_id: "r2c_docs" } },
                     ],
                     minimum_should_match: 1,
-                    must: [
-                      {
-                        bool: {
-                          should: [
-                            { term: { is_published: true } },
-                            { bool: { must_not: { exists: { field: "is_published" } } } },
-                          ],
-                          minimum_should_match: 1,
-                        },
-                      },
-                      // Phase69-2 PR-C2 Round 2: ES 永続フィルター（is_excluded_from_search=true は除外）
-                      // pgvector の WHERE 句と対応。リクエストスコープ excluded_ids との二重防御
-                      {
-                        bool: {
-                          must_not: { term: { is_excluded_from_search: true } },
-                        },
-                      },
-                    ],
+                    // Phase69-2 PR-C2 Round 2 / 2026-08-30: 可視性フィルター（is_published +
+                    // is_excluded_from_search=true 除外）。pgvector の WHERE 句と対応し、
+                    // リクエストスコープ excluded_ids との二重防御。条件は下記フォールバック
+                    // 経路と共有（ES_VISIBILITY_FILTERS）。
+                    must: ES_VISIBILITY_FILTERS,
                   },
                 },
               },
@@ -170,7 +190,18 @@ export async function hybridSearch(
             query: {
               bool: {
                 must: { multi_match: { query: q, fields: ["question", "answer", "text"] } },
-                filter: { term: { tenant_id: tenantId } },
+                // 2026-08-30: フォールバック経路も主経路と同一の可視性フィルターを適用する。
+                // 以前は tenant_id フィルタのみで、非公開・検索除外の FAQ が匿名訪問者の
+                // 回答に混入し得た（情報漏洩）。tenant スコープは faq_${tenantId} 単一
+                // インデックスに限定されるため term フィルタのまま維持する。
+                filter: {
+                  bool: {
+                    must: [
+                      { term: { tenant_id: tenantId } },
+                      ...ES_VISIBILITY_FILTERS,
+                    ],
+                  },
+                },
               },
             },
           },
