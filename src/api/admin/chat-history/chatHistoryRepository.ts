@@ -298,6 +298,13 @@ export interface ChatHistoryMessage {
   content: string;
   metadata: Record<string, unknown>;
   created_at: string;
+  /**
+   * GID 1217968284736841 (T9): 応答生成に使用された RAG チャンク。
+   * 保存時(saveMessage)と同じ形をそのまま返す(assistant メッセージのみ非null)。
+   * 著者画面(author-loop)が principle + injected を見て「教えが使われた会話」を
+   * 判別するために追加した。既存呼び出し元は未使用なら無視すればよいため optional。
+   */
+  rag_sources?: RagSource[] | null;
 }
 
 /**
@@ -331,7 +338,7 @@ export async function getMessages(
   }
 
   const msgResult = await pool.query<ChatHistoryMessage>(
-    `SELECT id, role, content, metadata, created_at
+    `SELECT id, role, content, metadata, created_at, rag_sources
      FROM chat_messages
      WHERE session_id = $1
      ORDER BY created_at ASC`,
