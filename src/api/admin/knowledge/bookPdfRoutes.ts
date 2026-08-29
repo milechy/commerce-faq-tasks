@@ -11,9 +11,13 @@ import AdmZip from "adm-zip";
 import type { Pool } from "pg";
 import { supabaseAdmin } from "../../../auth/supabaseClient";
 import { pipelineQueue } from "../../../lib/book-pipeline/pipelineQueue";
-import { deleteBookChunkFromEs, setBookChunkExcludedInEs } from "../../../lib/book-pipeline/embedAndStore";
+import { deleteBookChunkFromEs, setBookChunkExcludedInEs, upsertToEs } from "../../../lib/book-pipeline/embedAndStore";
 import { decryptText } from "../../../lib/crypto/textEncrypt";
 import { logger } from '../../../lib/logger';
+import { embedText } from "../../../agent/llm/openaiEmbeddingClient";
+import { buildSearchText } from "../../../agent/knowledge/bookStructurizer";
+import { buildSearchTextFields, PRINCIPLE_SCHEMA_MAPPINGS } from "../../../agent/psychology/principleSchemaMap";
+import { KNOWN_SCHEMAS } from "../../../lib/book-pipeline/contentAnalyzer";
 
 type Middleware = (req: Request, res: Response, next: NextFunction) => void;
 type BookPdfUser = { id?: string; role?: string; tenantId?: string | null };
@@ -34,6 +38,7 @@ const ZIP_MIMETYPES = new Set([
 ]);
 const MAX_ZIP_PDF_COUNT = 20;                  // ZIP内PDFファイル数上限
 const MAX_ZIP_EXPANDED_BYTES = 200 * 1024 * 1024; // 展開後合計サイズ上限(200MB)
+const CHUNK_EDIT_HISTORY_LIMIT = 20; // metadata.edit_history に保持する件数上限
 
 // ── Multer: メモリバッファ、50MB上限、PDF + ZIP ────────────────────────────
 const upload = multer({
@@ -76,6 +81,21 @@ function resolveUploadTenantId(req: Request): string | null {
     return fromQuery || user?.tenantId || null;
   }
   return user?.tenantId ?? null;
+}
+
+// ── チャンク編集: metadata から principleSchemaMap.ts 対応表のスキーマ種別を判定 ──
+// book_uploads.content_type は使わない: 経路7(embedAndStore, schemaFields)は
+// 書籍ごとに決まる content_type に従うが、経路8(bookStructurizer)は書籍の
+// content_type に関わらず常に psychology_book 形のフィールドを書く。同じ book_id
+// 配下に2経路のチャンクが混在しうるため、チャンク自身が持つキーで判定する。
+function detectPrincipleContentType(metadata: Record<string, unknown>): string | null {
+  for (const mapping of PRINCIPLE_SCHEMA_MAPPINGS) {
+    const schemaKeys = (KNOWN_SCHEMAS[mapping.contentType] ?? []).map((f) => f.key);
+    if (schemaKeys.some((k) => typeof metadata[k] === "string" && metadata[k] !== "")) {
+      return mapping.contentType;
+    }
+  }
+  return null;
 }
 
 // ── PDF 1件処理ヘルパー ────────────────────────────────────────────────────
@@ -756,7 +776,7 @@ export function registerBookPdfRoutes(
       try {
         // チャンク取得（book_idからbook_uploadsのtenant_idを確認）
         const chunkResult = await db.query(
-          `SELECT fe.id, fe.metadata, bu.tenant_id
+          `SELECT fe.id, fe.metadata, fe.is_excluded_from_search, bu.tenant_id
            FROM faq_embeddings fe
            JOIN book_uploads bu ON bu.id = (fe.metadata->>'book_id')::int
            WHERE fe.id = $1 AND fe.metadata->>'source' = 'book'`,
@@ -769,6 +789,7 @@ export function registerBookPdfRoutes(
         const chunk = chunkResult.rows[0] as {
           id: number;
           metadata: Record<string, unknown>;
+          is_excluded_from_search: boolean;
           tenant_id: string;
         };
         if (!isSuperAdmin && chunk.tenant_id !== user?.tenantId) {
@@ -796,15 +817,137 @@ export function registerBookPdfRoutes(
           return res.status(400).json({ error: "更新するフィールドがありません" });
         }
 
-        const updateResult = await db.query(
+        // T6: 実際に値が変わったフィールドだけを編集履歴に残す(平文のmetadata差分のみ、
+        // faq_embeddings.text の書籍原文は含めない — Anti-Slop)。連打で同じ値が送られた
+        // 場合は差分が空になり、以降の再埋め込みもスキップする。
+        const changes: Record<string, { from: string | null; to: string | null }> = {};
+        for (const field of Object.keys(patch) as AllowedField[]) {
+          const before = (chunk.metadata[field] as string | null | undefined) ?? null;
+          const after = patch[field] ?? null;
+          if (before !== after) {
+            changes[field] = { from: before, to: after };
+          }
+        }
+
+        if (Object.keys(changes).length === 0) {
+          return res.json({ id: chunk.id, metadata: chunk.metadata, embedding_updated: false });
+        }
+
+        const historyEntry = {
+          at: new Date().toISOString(),
+          by: user?.id ?? null,
+          changes,
+        };
+        const existingHistory = Array.isArray(chunk.metadata['edit_history'])
+          ? (chunk.metadata['edit_history'] as unknown[])
+          : [];
+        const editHistory = [...existingHistory, historyEntry].slice(-CHUNK_EDIT_HISTORY_LIMIT);
+
+        // 再埋め込み用の検索テキストは、パッチ適用後の metadata から組み立てる
+        // (T5: buildSearchText / buildSearchTextFields をスキーマ非依存化済み)。
+        // 対応表(principleSchemaMap.ts)に無いスキーマ(product_catalog等)は
+        // searchText が空になり、再埋め込みをスキップする(意図的、principleSchemaMap.ts
+        // のコメント参照 — 打ち手フィールドを持たないスキーマは対象外)。
+        const mergedMetadata: Record<string, unknown> = { ...chunk.metadata, ...patch };
+        const contentType = detectPrincipleContentType(mergedMetadata);
+        const searchTextFields = contentType ? buildSearchTextFields(contentType, mergedMetadata) : [];
+        const searchText = buildSearchText(searchTextFields);
+        const embeddingEligible = searchText !== '';
+
+        const patchForDb: Record<string, unknown> = { ...patch, edit_history: editHistory };
+        if (embeddingEligible) {
+          patchForDb['embedding_status'] = 'pending';
+        }
+
+        // 保存ボタン連打対策: embedding_status='pending' の間は次の書き込みを CAS で弾く
+        // (DBの状態で判定するため、プロセスが複数でも安全)。
+        const casResult = await db.query(
           `UPDATE faq_embeddings
            SET metadata = metadata || $1::jsonb
            WHERE id = $2
+             AND COALESCE(metadata->>'embedding_status', '') <> 'pending'
            RETURNING id, metadata`,
-          [JSON.stringify(patch), chunkId]
+          [JSON.stringify(patchForDb), chunkId]
         );
+        if (casResult.rows.length === 0) {
+          return res
+            .status(409)
+            .json({ error: "他の編集が反映処理中です。少し待ってからもう一度お試しください。" });
+        }
 
-        return res.json(updateResult.rows[0]);
+        let savedRow = casResult.rows[0] as { id: number; metadata: Record<string, unknown> };
+
+        if (!embeddingEligible) {
+          return res.json({ id: savedRow.id, metadata: savedRow.metadata, embedding_updated: false });
+        }
+
+        // 埋め込みAPI障害時も文言の保存自体は既に成功させている(上のUPDATE)。
+        // ここから先は「保存済み」と「反映済み」を別状態として扱う。
+        let vector: number[] | null = null;
+        try {
+          vector = await embedText(searchText, { tenantId: chunk.tenant_id, billable: false });
+        } catch (err: unknown) {
+          logger.warn(
+            "[book-pdf] PUT chunk re-embed failed (metadata saved, embedding not updated):",
+            err instanceof Error ? err.message : String(err)
+          );
+        }
+
+        if (vector) {
+          const doneResult = await db.query(
+            `UPDATE faq_embeddings
+             SET embedding = $1::vector,
+                 metadata = metadata || $2::jsonb
+             WHERE id = $3
+             RETURNING id, metadata`,
+            [
+              `[${vector.join(',')}]`,
+              JSON.stringify({
+                embedding_status: 'done',
+                embedding_updated_at: new Date().toISOString(),
+              }),
+              chunkId,
+            ]
+          );
+          savedRow = doneResult.rows[0];
+
+          // ES 同期(best-effort)。upsertToEs は _doc への PUT(全置換)のため、
+          // 検索フィルタが参照するフィールド(is_published / is_excluded_from_search)を
+          // 落とさないよう mergedMetadata から作り直す(5引数呼び出しでフラグが
+          // 巻き戻った過去の不具合と同じ轍を踏まない — knowledge.md 参照)。
+          const esUrl = process.env.ES_URL;
+          if (esUrl) {
+            const bookId = mergedMetadata['book_id'];
+            const chunkIndex = mergedMetadata['chunk_index'];
+            const docId = `book_${bookId}_chunk_${chunkIndex}`;
+            const esDoc: Record<string, unknown> = {
+              tenant_id: chunk.tenant_id,
+              source: 'book',
+              book_id: bookId,
+              chunk_index: chunkIndex,
+              is_published: true,
+              is_excluded_from_search: chunk.is_excluded_from_search ?? false,
+            };
+            if (typeof mergedMetadata['category'] === 'string') esDoc['category'] = mergedMetadata['category'];
+            if (Array.isArray(mergedMetadata['keywords'])) esDoc['keywords'] = mergedMetadata['keywords'];
+            if (typeof mergedMetadata['principle'] === 'string') esDoc['principle'] = mergedMetadata['principle'];
+            if (searchTextFields[0]) esDoc['question'] = searchTextFields[0]!.value.slice(0, 200);
+            const last = searchTextFields[searchTextFields.length - 1];
+            if (last) esDoc['answer'] = last.value.slice(0, 200);
+            void upsertToEs(esUrl, chunk.tenant_id, docId, esDoc);
+          }
+        } else {
+          const failedResult = await db.query(
+            `UPDATE faq_embeddings
+             SET metadata = metadata || $1::jsonb
+             WHERE id = $2
+             RETURNING id, metadata`,
+            [JSON.stringify({ embedding_status: 'failed' }), chunkId]
+          );
+          savedRow = failedResult.rows[0];
+        }
+
+        return res.json({ id: savedRow.id, metadata: savedRow.metadata, embedding_updated: vector !== null });
       } catch (err: unknown) {
         logger.error(
           "[book-pdf] PUT chunk error:",
