@@ -17,7 +17,10 @@ export default defineConfig({
   reporter: [['list']],
   use: {
     browserName: 'chromium',
-    channel: 'chrome',
+    // ローカル(デプロイ実行機)では実Chromeを使う。Playwright同梱の chromium が
+    // 未ダウンロードのことがあるため。CI は `npx playwright install chromium` で
+    // 同梱ブラウザを入れるので SMOKE_USE_BUNDLED_CHROMIUM=1 で切り替える。
+    ...(process.env.SMOKE_USE_BUNDLED_CHROMIUM === '1' ? {} : { channel: 'chrome' as const }),
     headless: true,
     viewport: { width: 1280, height: 900 },
     screenshot: 'only-on-failure',
