@@ -39,10 +39,15 @@ jest.mock('../../../admin/http/supabaseAuthMiddleware', () => ({
 
 // [H-5] GID 1217969425230400: このルートは成果分析(conversion, Growth〜)のplanゲートを
 // 通るようになった。ゲート自体の回帰はanalyticsPlanGate.test.tsで確認済みのため、ここでは
-// RBAC・越境防止・母数不足時の挙動の検証に集中できるようqueryTenantPlanをgrowth固定でモックする。
+// RBAC・越境防止・母数不足時の挙動の検証に集中できるようqueryTenantPlanOrThrowをgrowth固定
+// でモックする。
+// [H-7] GID 1217969364194602: checkAnalyticsPlanAccess は DB障害を403で覆い隠さないよう
+// queryTenantPlan から queryTenantPlanOrThrow に切り替わった。ここでモックする対象も
+// 追従させる(旧名のままだと実装のqueryTenantPlanOrThrowが素通りし、モックされた
+// 空のpool({})に対して本物のクエリを投げて例外になる)。
 jest.mock('../../../lib/billing/planFeatures', () => ({
   ...jest.requireActual('../../../lib/billing/planFeatures'),
-  queryTenantPlan: jest.fn().mockResolvedValue('growth'),
+  queryTenantPlanOrThrow: jest.fn().mockResolvedValue('growth'),
 }));
 
 import { registerAnalyticsRoutes } from './routes';
