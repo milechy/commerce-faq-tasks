@@ -281,7 +281,23 @@ ssh "${VPS}" "curl -sf http://localhost:3100/health && echo ' API OK' || echo ' 
 
 echo ""
 echo "=== Running post-deploy smoke test ==="
-bash SCRIPTS/post-deploy-smoke.sh || echo "⚠️  Some smoke tests failed (non-blocking)"
+# スモークの失敗をデプロイの失敗として扱う(2026-08-29 の障害を受けて変更)。
+# 以前は `|| echo "(non-blocking)"` で握りつぶしていたため、本番が壊れていても
+# 「Deploy complete」と表示されて終わっていた。デプロイ自体はもう終わっているので
+# 自動ロールバックはしないが、終了コードを非0にして必ず気付ける形にする。
+SMOKE_FAILED=0
+bash SCRIPTS/post-deploy-smoke.sh || SMOKE_FAILED=1
+
+# HTTPレベル(上)では「200が返る壊れたJS」を検知できない。実際にブラウザで会話して
+# 確かめる層を足す。詳細は SCRIPTS/post-deploy-widget-smoke.sh のヘッダ参照。
+bash SCRIPTS/post-deploy-widget-smoke.sh || SMOKE_FAILED=1
+
+if [ "$SMOKE_FAILED" -ne 0 ]; then
+  echo ""
+  echo "❌ デプロイは完了したが、本番のスモークが失敗している。"
+  echo "   訪問者から見て壊れている可能性がある。ロールバック判断を先に行うこと。"
+  exit 1
+fi
 
 echo ""
 echo "=== Deploy complete ==="
