@@ -123,8 +123,8 @@ export function HermesConsentToggle({ overrideTenantId }: HermesConsentTogglePro
       setFeatures({ ...prev, ...updated.features });
       showToast(
         next
-          ? "✅ Hermesへのデータ提供に同意しました"
-          : "✅ 同意を取り消しました",
+          ? "✅ 共有学習プールに参加しました"
+          : "✅ 参加を取り消しました",
       );
     } catch {
       setFeatures(prev); // ロールバック
@@ -159,19 +159,23 @@ export function HermesConsentToggle({ overrideTenantId }: HermesConsentTogglePro
       >
         <div>
           <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0, color: "var(--foreground)" }}>
-            🧠 外部(Hermes)へのデータ提供同意
+            🧠 共有学習プールへの参加
           </h2>
           <p style={{ fontSize: 14, color: "var(--muted-foreground)", margin: "6px 0 0", maxWidth: 480 }}>
-            これは社外の分析エージェント(Hermes)へ会話ログ生データを提供するための同意です。
-            R2C社内での学習(FAQ改善・回答の自動学習)は、この同意の有無に関わらず常に行われます。
-            ONにすると、貴社の過去分を含む会話ログ(QA AI・アバターの応答)に加え、その会話に至るまでの
-            ページ閲覧履歴・流入元(URLのパス部分、検索語や会員IDなどのクエリ文字列は除く)がHermesでの
-            分析対象になります。OFFにすると以降の新規データ提供は停止しますが、それまでに提供済みの
-            データへの反映は取り消せません。
+            参加すると、他社の会話から学んだ改善が反映された「グローバルルール」が貴社のAI応答にも
+            使われるようになります(このページに🌐グローバルとして表示されるルール)。その代わりに、
+            貴社の会話ログ(QA AI・アバターの応答。発話のなかったセッションを含む)、そこに至るまでの
+            ページ閲覧履歴・流入元(URLのパス部分。検索語や会員IDなどのクエリ文字列は除く)、成約時の
+            詳細(金額・成約の種類を含む)が、社外の分析基盤での分析対象になります。
+          </p>
+          <p style={{ fontSize: 14, color: "var(--muted-foreground)", margin: "8px 0 0", maxWidth: 480 }}>
+            R2C社内での学習(FAQ改善・回答の自動学習)は、この設定に関わらず常に行われます。
+            ここで操作するのは社外への提供のみです。OFFにすると以降の新規データ提供は停止しますが、
+            それまでに提供済みのデータへの反映は取り消せません。
           </p>
           {forcedByPlan && (
             <p style={{ fontSize: 13, color: "#f0b429", margin: "8px 0 0", maxWidth: 480 }}>
-              ⚠️ 現在のプラン(広告プラン)では、無料でのご提供の対価としてデータ提供が必須です。
+              ⚠️ 現在のプラン(広告プラン)では、無料でのご提供の対価として参加が必須です。
               停止するには有料プランへの変更が必要です。
             </p>
           )}
@@ -183,10 +187,10 @@ export function HermesConsentToggle({ overrideTenantId }: HermesConsentTogglePro
           aria-pressed={consentGranted}
           aria-label={
             forcedByPlan
-              ? "広告プランのためデータ提供は必須です(変更不可)"
+              ? "広告プランのため参加は必須です(変更不可)"
               : consentGranted
-                ? "Hermesへのデータ提供同意を取り消す"
-                : "Hermesへのデータ提供に同意する"
+                ? "共有学習プールへの参加を取り消す"
+                : "共有学習プールに参加する"
           }
           style={{
             padding: "12px 28px",
@@ -212,8 +216,8 @@ export function HermesConsentToggle({ overrideTenantId }: HermesConsentTogglePro
             : forcedByPlan
               ? "🔒 必須(広告プラン)"
               : consentGranted
-                ? "✅ 同意済み"
-                : "⏸️ 未同意"}
+                ? "✅ 参加中"
+                : "⏸️ 未参加"}
         </button>
       </div>
       {toast && (
