@@ -9,7 +9,7 @@ import { pool } from "../../../lib/db";
 import { createNotification, notificationExists } from "../../../lib/notifications";
 import { logger } from '../../../lib/logger';
 import { isAllowedAdminRole } from "../../middleware/roleAuth";
-import { planHasFeature, queryTenantPlan } from "../../../lib/billing/planFeatures";
+import { planHasFeature, queryTenantPlan, type GatedFeature } from "../../../lib/billing/planFeatures";
 import { getRuleEffect } from "./ruleEffect";
 import {
   fetchAnalyticsSummary,
@@ -71,8 +71,17 @@ function resolveTenantFilter(
   return jwtTenantId || null;
 }
 
+// 2026-08-29: 「基本の会話分析」(analytics)と「成果の分析」(conversion)を別ゲートに
+// 分割した。summary/trends/evaluations は analytics(Standard〜)、conversions は
+// conversion(Growth〜、成果分析)を見る。403メッセージも呼び出し元のfeatureに応じて
+// 出し分ける(固定文言のままだとStandard開放後に嘘の案内になる)。
+const ANALYTICS_PLAN_LIMIT_MESSAGES: Record<Extract<GatedFeature, "analytics" | "conversion">, string> = {
+  analytics: "会話分析はStandardプラン以上でご利用いただけます",
+  conversion: "成果分析はGrowthプラン以上でご利用いただけます",
+};
+
 /**
- * GID: LP料金表(Growth〜: 高度なAnalytics)に基づくplan制限。
+ * GID: LP料金表(Standard〜: 会話分析 / Growth〜: 成果分析)に基づくplan制限。
  * client_adminのみ対象（super_adminの集約/横断ビューは対象外）。
  * pool可用性チェックの後に呼ぶこと（DB障害時に503を403で覆い隠さないため）。
  * 許可されなければ403を返し、呼び出し元は即returnすること。
@@ -82,13 +91,14 @@ async function checkAnalyticsPlanAccess(
   res: Response,
   isSuperAdmin: boolean,
   jwtTenantId: string,
+  feature: Extract<GatedFeature, "analytics" | "conversion"> = "analytics",
 ): Promise<boolean> {
   if (isSuperAdmin) return true;
   const plan = await queryTenantPlan(pool, jwtTenantId);
-  if (planHasFeature(plan, "analytics")) return true;
+  if (planHasFeature(plan, feature)) return true;
   res.status(403).json({
     error: "plan_upgrade_required",
-    message: "高度なAnalyticsはGrowthプラン以上でご利用いただけます",
+    message: ANALYTICS_PLAN_LIMIT_MESSAGES[feature],
   });
   return false;
 }
@@ -429,7 +439,7 @@ export function registerAnalyticsRoutes(app: Express): void {
       if (!pool) {
         return res.status(503).json({ error: "データベース接続が利用できません" });
       }
-      if (!(await checkAnalyticsPlanAccess(pool, res, isSuperAdmin, jwtTenantId))) return;
+      if (!(await checkAnalyticsPlanAccess(pool, res, isSuperAdmin, jwtTenantId, "conversion"))) return;
 
       try {
         const responseData = await fetchConversionSummary({ db: pool, tenantId, period });

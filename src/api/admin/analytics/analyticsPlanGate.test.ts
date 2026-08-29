@@ -1,6 +1,8 @@
 // src/api/admin/analytics/analyticsPlanGate.test.ts
-// GID: LP料金表(Growth〜: 高度なAnalytics)に基づくplan制限の回帰テスト。
-// pool可用性チェックの後段でplanを確認し、client_adminのみ対象とすることを検証する。
+// GID: LP料金表(Standard〜: 会話分析 / Growth〜: 成果分析(CV計測))に基づくplan制限の
+// 回帰テスト。pool可用性チェックの後段でplanを確認し、client_adminのみ対象とすることを
+// 検証する。2026-08-29: summary/trends/evaluations(analytics)を Standard へ開放し、
+// conversions(conversion)は Growth のまま据え置いた分割の固定。
 
 const mockQuery = jest.fn();
 
@@ -73,5 +75,46 @@ describe("GET /v1/admin/analytics/summary — plan ゲート", () => {
     // 1件目のクエリがplan確認(`SELECT plan FROM tenants`)ではないことを確認
     const firstCallSql = mockQuery.mock.calls[0]?.[0] ?? "";
     expect(firstCallSql).not.toMatch(/SELECT plan FROM tenants/);
+  });
+
+  // 2026-08-29: analyticsをGrowthからStandardへ開放した本体。summaryはStandardで
+  // 通ることを固定する(analyticsPlanGate回帰の中核)。
+  it("client_admin + plan=standard → planゲートを通過する(403にならない)", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan: "standard" }] }); // plan確認
+    mockQuery.mockResolvedValue({ rows: [{ total: "0" }], rowCount: 0 }); // 以降の集計クエリ用の汎用フォールバック
+
+    const res = await request(makeApp({ role: "client_admin", tenant_id: "tenant-a" }))
+      .get("/v1/admin/analytics/summary");
+
+    expect(res.status).not.toBe(403);
+  });
+});
+
+// conversions(成果分析)はanalytics分割後もGrowthのまま据え置き。summaryがStandardで
+// 通るようになった一方、こちらはStandardでは403になることを固定する(混同防止の回帰)。
+describe("GET /v1/admin/analytics/conversions — plan ゲート(Growthのまま据え置き)", () => {
+  beforeEach(() => {
+    mockQuery.mockReset();
+  });
+
+  it("client_admin + plan=standard → 403 plan_upgrade_required(analyticsとは別ゲート)", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan: "standard" }] });
+
+    const res = await request(makeApp({ role: "client_admin", tenant_id: "tenant-a" }))
+      .get("/v1/admin/analytics/conversions");
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("plan_upgrade_required");
+    expect(res.body.message).toContain("Growth");
+  });
+
+  it("client_admin + plan=growth → planゲートを通過する(403にならない)", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan: "growth" }] }); // plan確認
+    mockQuery.mockResolvedValue({ rows: [], rowCount: 0 }); // 以降の集計クエリ用の汎用フォールバック
+
+    const res = await request(makeApp({ role: "client_admin", tenant_id: "tenant-a" }))
+      .get("/v1/admin/analytics/conversions");
+
+    expect(res.status).not.toBe(403);
   });
 });
