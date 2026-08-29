@@ -94,3 +94,19 @@ jobs:
           name: playwright-report-${{ github.run_id }}
           path: playwright-report/
           retention-days: 7
+          if-no-files-found: ignore
+
+      # 失敗の一次証拠(スクリーンショット・トレース・error-context)を残す。
+      # playwright.config.ts は screenshot:'only-on-failure' / trace:'on-first-retry' を
+      # 設定済みで、これらは outputDir 既定の test-results/ に出力される。
+      # 上の playwright-report/ は reporter に html を設定していない限り生成されないため、
+      # これまで失敗時に手掛かりが1つも残っていなかった(2026-08-29、E2E 2件の失敗を
+      # 追った際にスクリーンショットが1枚も無く原因特定に至らなかった)。
+      - name: Upload E2E failure artifacts (screenshots / traces)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-failure-artifacts-${{ github.run_id }}
+          path: test-results/
+          retention-days: 7
+          if-no-files-found: ignore
