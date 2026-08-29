@@ -29,6 +29,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "oxlint src admin-ui/src --max-warnings 63",
     "lint:widget": "oxlint -c oxlint.widget.json -A all --deny no-undef public/widget.js",
+    "smoke:widget": "playwright test --config=playwright.smoke.config.ts",
     "test": "jest --maxWorkers=2 --workerIdleMemoryLimit=1500mb",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",

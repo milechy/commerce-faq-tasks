@@ -1,6 +1,9 @@
 name: E2E + Visual Regression (Gate 4b / Phase C)
 
 on:
+  # main に対して手動実行できるようにしておく。2026-08-29 の障害調査では
+  # 「main単体でも落ちるのか」を確かめるためだけに計測用PR(#1045)を立てる羽目になった。
+  workflow_dispatch:
   pull_request:
     branches: [main]
     paths:
@@ -10,8 +13,20 @@ on:
       - 'tests/e2e/**'
       - 'playwright.config.ts'
 
+# ⚠️ このワークフローが検証しているのは「本番の現在の状態」であって、PRの製品コードではない。
 # E2E は tests/e2e/config.ts の ADMIN_BASE_URL/API_BASE_URL(既定値は本番)経由で
-# 本番環境を直接叩く(専用のstaging環境やサーバ起動ステップが無いため)。並行PRが同時にE2Eを走らせると
+# 本番環境を直接叩き、CIにサーバ起動ステップが無い。つまりPRが変更した src/** や
+# public/** は1行も読まれず、実際に検証されるのはそのPRが変更した tests/e2e/** だけ。
+#
+# 実例(2026-08-29): widget.js を壊した PR #1039 自身のE2Eは success で通った(11:44)。
+# 壊れた本番がデプロイされた後(12:16)、無関係な全ブランチのE2Eが一斉に赤くなった。
+# 守るべきPRを通し、無関係なPRを罰する向きに働いた。
+#
+# デプロイした結果が壊れていないかの検知は SCRIPTS/post-deploy-widget-smoke.sh が担う。
+# 配布物そのものの静的検査は `pnpm lint:widget` が Gate 1 で担う。
+# 本ワークフローの役割の見直しは Asana で継続中(GID 1217969312827120)。
+#
+並行PRが同時にE2Eを走らせると
 # 本番へのリクエストがレート制限(429)に達し、PRの内容と無関係にCIが赤くなる事象が
 # 確認された(GID 1216947610263309)。E2Eジョブを1本ずつ直列実行させることで回避する。
 # cancel-in-progress は必ず false — 後から来たPRのE2Eが先行PRの実行中E2Eをキャンセルして
