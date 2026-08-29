@@ -468,4 +468,20 @@ describe('public/widget.js — S6 開示バナーのfail-open是正', () => {
   it('consentAckKey() は _resolvedTenantId(サーバ解決値) を data-tenant属性より優先する', () => {
     expect(WIDGET_SRC).toMatch(/function consentAckKey\(\)\s*\{[\s\S]{0,80}_resolvedTenantId \|\| tenantId \|\| 'unknown'/);
   });
+
+  // 2026-08-29 の本番障害の再発防止。
+  // #1039(free_ad広告帯)が `var _abExposureSent = false;` の行を差し替えで消し、
+  // 参照(recordAbExposure内)だけが残った。結果 sendMessage() が ReferenceError で
+  // 停止し、全テナントのチャットが「送信しても何も起きない」状態になった。
+  // 静的な no-undef は pnpm lint:widget が担うが、宣言の消失は不変条件としても固定する。
+  it('_abExposureSent は参照より前にモジュールスコープで宣言されている', () => {
+    const declIdx = WIDGET_SRC.indexOf('var _abExposureSent = false;');
+    expect(declIdx).toBeGreaterThan(-1);
+    const refIdx = WIDGET_SRC.indexOf('if (_abExposureSent ||');
+    expect(refIdx).toBeGreaterThan(declIdx);
+  });
+
+  it('sendMessage() からの recordAbExposure() 呼び出しは try/catch で握りつぶす(計測でチャットを止めない)', () => {
+    expect(WIDGET_SRC).toMatch(/try\s*\{\s*recordAbExposure\(\);\s*\}\s*catch/);
+  });
 });

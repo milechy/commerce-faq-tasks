@@ -35,6 +35,13 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+      # public/widget.js は pnpm lint の対象(src / admin-ui/src)に入っておらず、
+      # 未定義変数の参照が誰にも止められないまま本番へ出る。#1039 で
+      # `var _abExposureSent = false;` の宣言だけが差し替えで失われ、
+      # 本番のチャットが全テナントで送信不能になった(E2Eだけが検知していた)。
+      - name: Lint widget.js (no-undef)
+        run: pnpm lint:widget
+
       - name: Test
         run: pnpm test
 
