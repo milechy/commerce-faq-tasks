@@ -60,13 +60,13 @@ describe("planHasFeature", () => {
     ["starter", "hide_branding", false],
     ["growth", "hide_branding", true],
     ["enterprise", "hide_branding", true],
-    // standard(starterとgrowthの間)。開くのは avatar だけで、他は全て growth 以上のまま。
-    // ★ここが Standard(¥9,800)の商品性そのもの★
+    // standard(starterとgrowthの間)。開くのは avatar と analytics(会話分析)で、
+    // 他は全て growth 以上のまま。★ここが Standard(¥9,800)の商品性そのもの★
     ["starter", "avatar", false],
     ["standard", "avatar", true],
     ["standard", "avatar_customize", false],
     ["standard", "premium_avatar", false],
-    ["standard", "analytics", false],
+    ["standard", "analytics", true],
     ["standard", "conversion", false],
     ["standard", "hide_branding", false],
     ["standard", "voice_clone", false],
@@ -138,11 +138,11 @@ describe("PLAN_RANK の相対順序（standard を starter と growth の間に�
     expect(count("standard")).toBeLessThan(count("growth"));
   });
 
-  it("standard で開くのは avatar だけ(値引きではなくアバター開放が目的)", () => {
+  it("standard で開くのは avatar と analytics(値引きではなくアバター開放・会話分析が目的)", () => {
     const gained = ALL_GATED_FEATURES.filter(
       (f) => planHasFeature("standard", f) && !planHasFeature("starter", f),
     );
-    expect(gained).toEqual(["avatar"]);
+    expect(gained).toEqual(["avatar", "analytics"]);
   });
 
   it("growth で追加されるものに avatar_customize が含まれる(Standardとの差別化の実体)", () => {
