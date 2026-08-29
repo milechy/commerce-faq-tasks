@@ -60,6 +60,23 @@ CLAUDE.md の禁止6 が挙げる4系統(`faqCrudRoutes` / レガシー `faqAdmi
 **5系統目・11系統目を増やさない。** 新しい書き込みが必要になったときは、
 既存のどれかに機能を足すか、正典ヘルパ(下記)を呼ぶ形にする。
 
+### 書籍だけで2系統(7と8)ある。metadata の形が違う
+
+同じ1冊のPDFに対して **7 と 8 は直列に使う**。片方だけ見ると必ず誤解する
+(2026-08-29 に実際に誤解が起きた)。
+
+| | 7. `embedAndStore.ts` | 8. `bookStructurizer.ts` |
+|---|---|---|
+| 起動 | アップロード時に自動(`runBookPipeline`) | 手動 `POST /v1/admin/knowledge/structurize-trigger`(super_admin) |
+| metadata | `source, book_id, chunk_index, page_number, category, keywords, confidence` | 左に加えて `principle, situation, resistance, contraindication, example, failure_example` |
+| 前提 | なし | `BOOK_STRUCTURIZE_ENABLED=true`(**`.env.example` に記載が無い**。未設定だと無言で即 return) |
+| 対象 | 全チャンク | `status='embedded'` かつ `principle` を持つ行がまだ無い書籍 |
+
+`searchPrincipleChunks`(`metadata->>'principle' = ANY($2)`)は **8 の行にしかヒットしない**。
+管理画面に「N件の分割テキスト登録完了」と出ていても、それは 7 の完了であって
+心理学原則が使える状態を意味しない。8 は**追加生成**であり 7 の上書きではないので、
+7 のデータを消して入れ直す必要はない。
+
 ## 索引同期の正典は faqIndexSync.ts
 
 `src/lib/knowledge/faqIndexSync.ts` が embedding + ES 同期の唯一の共有実装。
