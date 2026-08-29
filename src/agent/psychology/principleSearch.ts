@@ -10,6 +10,7 @@ import {
   buildFieldSelect,
   buildPrincipleWhereClause,
 } from './principleSchemaMap';
+import { PRINCIPLE_MAX_DISTANCE } from '../config/ragLimits';
 
 export interface PrincipleChunk {
   principle: string;
@@ -57,6 +58,10 @@ function getPool(db?: InstanceType<typeof Pool>): InstanceType<typeof Pool> {
  * （他RAG経路 pgvector / langRouter / knowledgeSearchUtil と一貫: `tenant_id = $1 OR 'global'`）。
  * 各テキストフィールドに ragExcerpt.slice(0, 200) を適用（書籍内容漏洩防止）。
  *
+ * ★2026-08-29: 距離の足切りを追加した★
+ * 足切りが無いと無関係な質問でも常に上位 PRINCIPLE_TOP_K 件が注入されていた。
+ * 閾値 PRINCIPLE_MAX_DISTANCE の根拠(実測データ)は ragLimits.ts のコメント参照。
+ *
  * @param queryText 直近のユーザー発話。空文字なら検索せず空配列を返す。
  */
 export async function searchPrincipleChunks(
@@ -96,9 +101,10 @@ export async function searchPrincipleChunks(
          AND metadata->>'source' = 'book'
          AND ${buildPrincipleWhereClause()}
          AND (is_excluded_from_search IS NULL OR is_excluded_from_search = false)
+         AND embedding <-> $2::vector <= $4
        ORDER BY embedding <-> $2::vector
        LIMIT $3`,
-      [tenantId, embedLiteral, PRINCIPLE_TOP_K],
+      [tenantId, embedLiteral, PRINCIPLE_TOP_K, PRINCIPLE_MAX_DISTANCE],
     );
 
     return result.rows.map((row: RawRow) => ({

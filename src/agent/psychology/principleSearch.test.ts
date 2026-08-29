@@ -10,6 +10,7 @@ import { Pool } from 'pg';
 import { searchPrincipleChunks } from './principleSearch';
 import { embedText } from '../llm/openaiEmbeddingClient';
 import type { StructuredPrinciple } from '../knowledge/bookStructurizer';
+import { PRINCIPLE_MAX_DISTANCE } from '../config/ragLimits';
 
 const mockEmbedText = embedText as jest.MockedFunction<typeof embedText>;
 const DUMMY_VECTOR = [0.1, 0.2, 0.3];
@@ -117,6 +118,36 @@ describe('searchPrincipleChunks', () => {
     expect(result[0].situation).toBe('営業が主導権を握ることが困難');
     // null は空文字に落とす(buildPrinciplePrompt が行ごと省く)
     expect(result[0].example).toBe('');
+  });
+
+  // 2026-08-29: 足切り無しでは無関係な質問でも常に上位3件が注入されていたため追加。
+  it('SQL に距離の足切り(PRINCIPLE_MAX_DISTANCE)が入る', async () => {
+    const { pool, query } = makePoolMock([]);
+    await searchPrincipleChunks('tenant-A', '受付で断られてしまいます', pool);
+
+    const sql = query.mock.calls[0][0] as string;
+    expect(sql).toMatch(/embedding <-> \$2::vector <= \$4/);
+    // パラメータは [tenantId, ベクトルリテラル, topK, 閾値]
+    const params = query.mock.calls[0][1] as unknown[];
+    expect(params[3]).toBe(PRINCIPLE_MAX_DISTANCE);
+  });
+
+  it('閾値ちょうどの距離の行も足切りに含める(<=、境界値)', async () => {
+    const { pool, query } = makePoolMock([]);
+    await searchPrincipleChunks('tenant-A', '営業時間を教えてください', pool);
+
+    const sql = query.mock.calls[0][0] as string;
+    // OFF の最良値(1.0274)が閾値(1.02)ちょうどでも誤って通らないよう、
+    // < ではなく <= であることを固定する
+    expect(sql).toMatch(/<= \$4/);
+  });
+
+  it('全件が閾値を超えて0件のとき空配列を返す', async () => {
+    // 足切りは SQL の WHERE で行うため、DB が0行返すケースをそのまま模する
+    // (「駐車場はありますか」のような無関係な質問で上位3件が全て閾値超のケース)
+    const { pool } = makePoolMock([]);
+    const result = await searchPrincipleChunks('tenant-A', '駐車場はありますか', pool);
+    expect(result).toEqual([]);
   });
 
   it('検索対象から is_excluded_from_search の行を除外する', async () => {
