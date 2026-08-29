@@ -87,6 +87,23 @@ export interface ChatOpenDropoff {
   dropoffRate: number | null;
   /** visitor_id が付いたセッションの割合。この指標自体の信頼度を示す。 */
   sessionCoverage: RateMetric;
+  /**
+   * LB-9: 「AIが割り込んで開いた(先回り声がけ)」と「訪問者が自分で開いた」は
+   * 応答率の意味が全く違うのに、上記の visitorsOpened/dropoffRate は両者を
+   * 同一視して合算していた。behavioral_events.event_data.trigger='proactive' の
+   * 有無でopened/conversedをそれぞれ独立に数え直す(1訪問者が両方の開き方を
+   * した場合は両方の集計に重複して入りうる。「片方だけした人」に絞る集計では
+   * ないため、proactive.visitorsOpened + manual.visitorsOpened は
+   * 必ずしも visitorsOpened と一致しない)。
+   */
+  proactive: ChatOpenDropoffByTrigger;
+  manual: ChatOpenDropoffByTrigger;
+}
+
+export interface ChatOpenDropoffByTrigger {
+  visitorsOpened: number;
+  visitorsConversed: number;
+  dropoffRate: number | null;
 }
 
 /**
@@ -198,30 +215,61 @@ export async function fetchMeasurementHealth(
   // trackingSince より前は結合しようがないので、母数の開始点をそこに切る。
   // GREATEST で期間指定とも突き合わせる。
   const beTenantClause = tenantId ? "AND b.tenant_id = $2" : "";
-  const dropoffResult = await db.query<{ opened: string; conversed: string }>(
+  const dropoffResult = await db.query<{
+    opened: string; conversed: string;
+    opened_proactive: string; conversed_proactive: string;
+    opened_manual: string; conversed_manual: string;
+  }>(
     `WITH tracking AS (
        SELECT MIN(s2.started_at) AS since FROM chat_sessions s2
        WHERE s2.visitor_id IS NOT NULL ${tenantId ? "AND s2.tenant_id = $2" : ""}
+     ),
+     -- LB-9: 1visitor_idが複数回chat_openを起こしうるため、visitor単位に畳んでから
+     -- 「proactive発火を1回でも含むか」「能動クリックを1回でも含むか」を bool_or で持つ。
+     -- 両方に該当する訪問者は両方の集計に入る(片方だけに絞る設計ではない。
+     -- ChatOpenDropoffのコメント参照)。
+     opened_visitors AS (
+       SELECT b.visitor_id,
+              bool_or(b.event_data->>'trigger' = 'proactive') AS has_proactive,
+              bool_or(b.event_data->>'trigger' IS DISTINCT FROM 'proactive') AS has_manual
+         FROM behavioral_events b, tracking t
+        WHERE b.event_type = 'chat_open'
+          AND t.since IS NOT NULL
+          AND b.created_at >= GREATEST(t.since, NOW() - $1::interval)
+          ${beTenantClause}
+        GROUP BY b.visitor_id
+     ),
+     conversed_visitors AS (
+       SELECT DISTINCT s.visitor_id
+         FROM chat_sessions s, tracking t
+        WHERE s.visitor_id IS NOT NULL
+          AND t.since IS NOT NULL
+          AND s.started_at >= GREATEST(t.since, NOW() - $1::interval)
+          AND s.message_count > 0
+          ${tenantClause}
+          ${userSourceClause("s")}
      )
      SELECT
-       (SELECT COUNT(DISTINCT b.visitor_id)
-          FROM behavioral_events b, tracking t
-         WHERE b.event_type = 'chat_open'
-           AND t.since IS NOT NULL
-           AND b.created_at >= GREATEST(t.since, NOW() - $1::interval)
-           ${beTenantClause}) AS opened,
-       (SELECT COUNT(DISTINCT s.visitor_id)
-          FROM chat_sessions s, tracking t
-         WHERE s.visitor_id IS NOT NULL
-           AND t.since IS NOT NULL
-           AND s.started_at >= GREATEST(t.since, NOW() - $1::interval)
-           AND s.message_count > 0
-           ${tenantClause}
-           ${userSourceClause("s")}) AS conversed`,
+       (SELECT COUNT(*) FROM opened_visitors) AS opened,
+       (SELECT COUNT(*) FROM conversed_visitors) AS conversed,
+       (SELECT COUNT(*) FROM opened_visitors WHERE has_proactive) AS opened_proactive,
+       (SELECT COUNT(*) FROM opened_visitors ov JOIN conversed_visitors cv
+          ON cv.visitor_id = ov.visitor_id WHERE ov.has_proactive) AS conversed_proactive,
+       (SELECT COUNT(*) FROM opened_visitors WHERE has_manual) AS opened_manual,
+       (SELECT COUNT(*) FROM opened_visitors ov JOIN conversed_visitors cv
+          ON cv.visitor_id = ov.visitor_id WHERE ov.has_manual) AS conversed_manual`,
     params,
   );
-  const visitorsOpened = parseInt(dropoffResult.rows[0]?.opened ?? "0", 10);
-  const visitorsConversed = parseInt(dropoffResult.rows[0]?.conversed ?? "0", 10);
+  const dropoffRow = dropoffResult.rows[0];
+  const visitorsOpened = parseInt(dropoffRow?.opened ?? "0", 10);
+  const visitorsConversed = parseInt(dropoffRow?.conversed ?? "0", 10);
+
+  const rateForTrigger = (opened: number, conversed: number): ChatOpenDropoffByTrigger => ({
+    visitorsOpened: opened,
+    visitorsConversed: conversed,
+    dropoffRate: opened >= MIN_VISITORS_FOR_RATE ? Math.round(((opened - conversed) / opened) * 1000) / 10 : null,
+  });
+
   const chatOpenDropoff: ChatOpenDropoff = {
     trackingSince,
     visitorsOpened,
@@ -231,6 +279,14 @@ export async function fetchMeasurementHealth(
         ? Math.round(((visitorsOpened - visitorsConversed) / visitorsOpened) * 1000) / 10
         : null,
     sessionCoverage,
+    proactive: rateForTrigger(
+      parseInt(dropoffRow?.opened_proactive ?? "0", 10),
+      parseInt(dropoffRow?.conversed_proactive ?? "0", 10),
+    ),
+    manual: rateForTrigger(
+      parseInt(dropoffRow?.opened_manual ?? "0", 10),
+      parseInt(dropoffRow?.conversed_manual ?? "0", 10),
+    ),
   };
 
   const knowledgeIndexDrift = tenantId
