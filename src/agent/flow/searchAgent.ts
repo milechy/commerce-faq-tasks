@@ -19,6 +19,7 @@ import { planQuery } from "./queryPlanner";
 import { getBehaviorContext } from "../../api/events/behaviorContext";
 import { findSimilarPatterns } from "../../api/events/similarUserMatcher";
 import { searchPrincipleChunks } from "../psychology/principleSearch";
+import { resolvePrincipleFromMetadata } from "../psychology/principleSchemaMap";
 import { pool } from "../../lib/db";
 import { logger } from '../../lib/logger';
 
@@ -252,9 +253,9 @@ export async function runSearchAgent(
     const meta = (it as { metadata?: Record<string, unknown> }).metadata;
     const rawSource = meta?.["source"];
     const sourceType = typeof rawSource === "string" && rawSource.startsWith("book") ? "book" : "faq";
-    const principle = typeof meta?.["principle"] === "string"
-      ? (meta["principle"] as string)
-      : undefined;
+    // 2026-08-29: meta['principle'] 決め打ちだと sales_manual スキーマ(打ち手キーが
+    // 'solution')の書籍が貢献度表で principle 空欄になる(principleSchemaMap.ts 参照)。
+    const principle = resolvePrincipleFromMetadata(meta);
     const source: RagSource = {
       chunk_id: String(it.id),
       source: sourceType,

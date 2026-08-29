@@ -13,6 +13,7 @@ import {
 import { PRINCIPLE_MAX_DISTANCE } from '../config/ragLimits';
 
 export interface PrincipleChunk {
+  chunkId: number;
   principle: string;
   situation: string;    // slice(0, 200) 適用済み
   example: string;      // slice(0, 200) 適用済み
@@ -83,6 +84,7 @@ export async function searchPrincipleChunks(
     const embedLiteral = `[${embedding.join(',')}]`;
 
     interface RawRow {
+      id: number;
       principle: string | null;
       situation: string | null;
       example: string | null;
@@ -90,11 +92,13 @@ export async function searchPrincipleChunks(
     }
 
     // SELECT 句・WHERE 句は principleSchemaMap.ts の対応表から機械生成する
-    // (スキーマ追加時に SQL を手で書き換えないため)。
+    // (スキーマ追加時に SQL を手で書き換えないため)。id は論理フィールドではなく
+    // 固定列なので PRINCIPLE_FIELDS には含めない。
     const selectClause = PRINCIPLE_FIELDS.map(buildFieldSelect).join(',\n        ');
 
     const result = await pool.query<RawRow>(
       `SELECT
+        id,
         ${selectClause}
        FROM faq_embeddings
        WHERE (tenant_id = $1 OR tenant_id = 'global')
@@ -108,6 +112,7 @@ export async function searchPrincipleChunks(
     );
 
     return result.rows.map((row: RawRow) => ({
+      chunkId: row.id,
       // ragExcerpt.slice(0, 200) ルール遵守: 全フィールドに適用
       principle: (row.principle ?? "").slice(0, 200),
       situation: (row.situation ?? "").slice(0, 200),
