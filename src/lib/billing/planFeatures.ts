@@ -54,6 +54,7 @@ const PLAN_RANK: Record<TenantPlan, number> = {
 
 export type GatedFeature =
   | "avatar"
+  | "voice"
   | "avatar_customize"
   | "voice_clone"
   | "analytics"
@@ -67,6 +68,14 @@ export type GatedFeature =
 const FEATURE_MIN_PLAN: Record<GatedFeature, TenantPlan> = {
   // アバター「そのもの」を使えるか。Standard は R2C 既定アバターのみ利用できる。
   avatar: "standard",
+  // 音声入出力(Fish Audio TTS $15/1M byte・ASR $0.36/audio hour)を使えるか。
+  // TTS/ASR は「AIアバター」体験の一部(声で話す/聞く)であり、機能面では avatar と同格。
+  // よって最低プランは avatar と揃えて Standard を既定とする。
+  // ★方針確認事項★: avatar を持つ Standard 以上のみ音声原価を許容し、free_ad/starter の
+  // 公開api-keyからの匿名コスト増幅(Fish課金の全額会社負担・DoS)を止めるのが本ゲートの目的。
+  // 「音声は Growth 以上」等に引き上げる場合、既存の Standard アバター利用テナントの
+  // 音声が一斉に 403 になる点に注意(実装ではなく料金表・方針の判断)。
+  voice: "standard",
   // アバターを自社向けに作り込めるか（画像生成・声マッチング・声デザイン・
   // プロンプト生成 = Avatar Customization Studio）。Standard との差別化の実体。
   avatar_customize: "growth",
