@@ -18,6 +18,7 @@ import { planQueryWithLlmAsync } from "./llmPlannerRuntime";
 import { planQuery } from "./queryPlanner";
 import { getBehaviorContext } from "../../api/events/behaviorContext";
 import { findSimilarPatterns } from "../../api/events/similarUserMatcher";
+import { searchPrincipleChunks } from "../psychology/principleSearch";
 import { pool } from "../../lib/db";
 import { logger } from '../../lib/logger';
 
@@ -202,6 +203,13 @@ export async function runSearchAgent(
       : Promise.resolve([]),
   ]).catch(() => [null, []] as [null, []]);
 
+  // 心理学原則の取得(2026-08-29 配線, Asana LB-1)。
+  // 旧実装では searchPrincipleChunks の呼び出し元がテストと未接続の openviking だけで、
+  // 本番の principleChunks は常に空だったため原則注入が一度も発火していなかった。
+  // ユーザーの発話文でベクトル近傍検索し、関連する打ち手を最大3件引く。
+  // best-effort: 失敗しても回答生成は止めない(principleSearch 側でも catch 済み)。
+  const principleChunks = await searchPrincipleChunks(effectiveTenantId, q).catch(() => []);
+
   // 4) Answer Synthesis
   const tSynth0 = performance.now();
   const synth = await synthesizeAnswer({
@@ -212,6 +220,7 @@ export async function runSearchAgent(
     behaviorContext,
     similarPatterns: similarPatterns ?? [],
     sessionId,
+    principleChunks,
   });
   const tSynth1 = performance.now();
   steps.push({
