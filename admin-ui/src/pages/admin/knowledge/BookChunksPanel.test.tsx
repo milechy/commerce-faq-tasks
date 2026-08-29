@@ -65,7 +65,7 @@ describe("BookChunksPanel — 反映状態の表示", () => {
   it("embedding_status='done' のチャンクは読み込み直後から「AIが覚えました」を表示する(リロード耐性)", async () => {
     mockChunksAndDetail([baseChunk({ embedding_status: "done" })]);
     render(
-      <BookChunksPanel bookId={1} bookTitle="書籍" bookStatus="embedded" tenantId="tenant-a" onClose={() => {}} />
+      <BookChunksPanel bookId={1} bookTitle="書籍" bookStatus="embedded" bookTenantId="tenant-a" onClose={() => {}} />
     );
     expect(await screen.findByText(/AIが覚えました/)).toBeTruthy();
   });
@@ -73,7 +73,7 @@ describe("BookChunksPanel — 反映状態の表示", () => {
   it("embedding_status='pending' のチャンクは読み込み直後から「AIが覚え直しています」を表示する(保存直後のリロードでも同じ表現)", async () => {
     mockChunksAndDetail([baseChunk({ embedding_status: "pending" })]);
     render(
-      <BookChunksPanel bookId={1} bookTitle="書籍" bookStatus="embedded" tenantId="tenant-a" onClose={() => {}} />
+      <BookChunksPanel bookId={1} bookTitle="書籍" bookStatus="embedded" bookTenantId="tenant-a" onClose={() => {}} />
     );
     expect(await screen.findByText(/AIが覚え直しています/)).toBeTruthy();
   });
@@ -81,7 +81,7 @@ describe("BookChunksPanel — 反映状態の表示", () => {
   it("embedding_status='failed' のチャンクは失敗を無言で消さず表示する", async () => {
     mockChunksAndDetail([baseChunk({ embedding_status: "failed" })]);
     render(
-      <BookChunksPanel bookId={1} bookTitle="書籍" bookStatus="embedded" tenantId="tenant-a" onClose={() => {}} />
+      <BookChunksPanel bookId={1} bookTitle="書籍" bookStatus="embedded" bookTenantId="tenant-a" onClose={() => {}} />
     );
     expect(await screen.findByText(/AIが覚えるのに失敗しました/)).toBeTruthy();
   });
@@ -89,7 +89,7 @@ describe("BookChunksPanel — 反映状態の表示", () => {
   it("embedding_status が無いチャンクは反映バッジを出さない(対象外スキーマ)", async () => {
     mockChunksAndDetail([baseChunk()]);
     render(
-      <BookChunksPanel bookId={1} bookTitle="書籍" bookStatus="embedded" tenantId="tenant-a" onClose={() => {}} />
+      <BookChunksPanel bookId={1} bookTitle="書籍" bookStatus="embedded" bookTenantId="tenant-a" onClose={() => {}} />
     );
     await screen.findByText("編集");
     expect(screen.queryByText(/AIが覚え/)).not.toBeTruthy();
@@ -97,19 +97,22 @@ describe("BookChunksPanel — 反映状態の表示", () => {
 });
 
 describe("BookChunksPanel — 保存前の影響範囲提示", () => {
-  it("global テナントでは「本を使っている全部の会社」に影響する旨を表示する", async () => {
+  // bookTenantId は「書籍自身の tenant_id」(閲覧者のテナントではない)。
+  // 閲覧者との取り違え自体は BookUploadsSection.bookTenant.test.tsx で
+  // 配線ごと検証する(このファイルはコンポーネント単体のロジックのみ検証)。
+  it("書籍が global テナント所属では「本を使っている全部の会社」に影響する旨を表示する", async () => {
     mockChunksAndDetail([baseChunk()]);
     render(
-      <BookChunksPanel bookId={1} bookTitle="書籍" bookStatus="embedded" tenantId="global" onClose={() => {}} />
+      <BookChunksPanel bookId={1} bookTitle="書籍" bookStatus="embedded" bookTenantId="global" onClose={() => {}} />
     );
     fireEvent.click(await screen.findByText("編集"));
     expect(await screen.findByText(/全部の会社の回答が変わります/)).toBeTruthy();
   });
 
-  it("テナント固有では自社内のみに影響する旨を表示し、「テナント」という語は画面に出さない", async () => {
+  it("書籍がテナント固有所属では自社内のみに影響する旨を表示し、「テナント」という語は画面に出さない", async () => {
     mockChunksAndDetail([baseChunk()]);
     render(
-      <BookChunksPanel bookId={1} bookTitle="書籍" bookStatus="embedded" tenantId="tenant-a" onClose={() => {}} />
+      <BookChunksPanel bookId={1} bookTitle="書籍" bookStatus="embedded" bookTenantId="tenant-a" onClose={() => {}} />
     );
     fireEvent.click(await screen.findByText("編集"));
     expect(await screen.findByText(/あなたの会社の中だけで有効です/)).toBeTruthy();
@@ -121,7 +124,7 @@ describe("BookChunksPanel — 保存フロー", () => {
   it("保存に成功すると「保存しました」を表示し編集を終了する", async () => {
     mockChunksAndDetail([baseChunk()]);
     render(
-      <BookChunksPanel bookId={1} bookTitle="書籍" bookStatus="embedded" tenantId="tenant-a" onClose={() => {}} />
+      <BookChunksPanel bookId={1} bookTitle="書籍" bookStatus="embedded" bookTenantId="tenant-a" onClose={() => {}} />
     );
     fireEvent.click(await screen.findByText("編集"));
     const textarea = (await screen.findAllByRole("textbox"))[1]!; // 状況フィールド
@@ -143,7 +146,7 @@ describe("BookChunksPanel — 保存フロー", () => {
   it("埋め込みに失敗しても保存自体は成功として扱い、区別して通知する", async () => {
     mockChunksAndDetail([baseChunk()]);
     render(
-      <BookChunksPanel bookId={1} bookTitle="書籍" bookStatus="embedded" tenantId="tenant-a" onClose={() => {}} />
+      <BookChunksPanel bookId={1} bookTitle="書籍" bookStatus="embedded" bookTenantId="tenant-a" onClose={() => {}} />
     );
     fireEvent.click(await screen.findByText("編集"));
     const textarea = (await screen.findAllByRole("textbox"))[1]!;
@@ -162,7 +165,7 @@ describe("BookChunksPanel — 保存フロー", () => {
   it("通信断(fetch例外)では「保存できませんでした」と表示する", async () => {
     mockChunksAndDetail([baseChunk()]);
     render(
-      <BookChunksPanel bookId={1} bookTitle="書籍" bookStatus="embedded" tenantId="tenant-a" onClose={() => {}} />
+      <BookChunksPanel bookId={1} bookTitle="書籍" bookStatus="embedded" bookTenantId="tenant-a" onClose={() => {}} />
     );
     fireEvent.click(await screen.findByText("編集"));
     const textarea = (await screen.findAllByRole("textbox"))[1]!;
@@ -177,7 +180,7 @@ describe("BookChunksPanel — 保存フロー", () => {
   it("反映中の409応答は専門用語を出さない文言で伝える", async () => {
     mockChunksAndDetail([baseChunk()]);
     render(
-      <BookChunksPanel bookId={1} bookTitle="書籍" bookStatus="embedded" tenantId="tenant-a" onClose={() => {}} />
+      <BookChunksPanel bookId={1} bookTitle="書籍" bookStatus="embedded" bookTenantId="tenant-a" onClose={() => {}} />
     );
     fireEvent.click(await screen.findByText("編集"));
     const textarea = (await screen.findAllByRole("textbox"))[1]!;
@@ -199,7 +202,7 @@ describe("BookChunksPanel — 取り消し", () => {
       }),
     ]);
     render(
-      <BookChunksPanel bookId={1} bookTitle="書籍" bookStatus="embedded" tenantId="tenant-a" onClose={() => {}} />
+      <BookChunksPanel bookId={1} bookTitle="書籍" bookStatus="embedded" bookTenantId="tenant-a" onClose={() => {}} />
     );
     expect(await screen.findByText(/元に戻す/)).toBeTruthy();
   });
@@ -207,7 +210,7 @@ describe("BookChunksPanel — 取り消し", () => {
   it("編集履歴が無いチャンクには「元に戻す」ボタンが出ない", async () => {
     mockChunksAndDetail([baseChunk()]);
     render(
-      <BookChunksPanel bookId={1} bookTitle="書籍" bookStatus="embedded" tenantId="tenant-a" onClose={() => {}} />
+      <BookChunksPanel bookId={1} bookTitle="書籍" bookStatus="embedded" bookTenantId="tenant-a" onClose={() => {}} />
     );
     await screen.findByText("編集");
     expect(screen.queryByText(/元に戻す/)).not.toBeTruthy();
@@ -220,7 +223,7 @@ describe("BookChunksPanel — 取り消し", () => {
       }),
     ]);
     render(
-      <BookChunksPanel bookId={1} bookTitle="書籍" bookStatus="embedded" tenantId="tenant-a" onClose={() => {}} />
+      <BookChunksPanel bookId={1} bookTitle="書籍" bookStatus="embedded" bookTenantId="tenant-a" onClose={() => {}} />
     );
     const undoBtn = await screen.findByText(/元に戻す/);
 

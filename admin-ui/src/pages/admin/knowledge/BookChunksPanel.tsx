@@ -55,7 +55,13 @@ interface Props {
   bookId: number;
   bookTitle: string;
   bookStatus: string;
-  tenantId: string;
+  /**
+   * この書籍が属するテナントID(閲覧者のテナントではない)。
+   * T7で保存前の影響範囲表示に使う("global"なら赤嶺氏の書籍=全社影響)。
+   * 閲覧者(super_admin)のテナント文脈とは別物であり、混同すると
+   * 影響範囲メッセージが正反対に出る(2026-08-29 レビューで発覚)。
+   */
+  bookTenantId: string;
   onClose: () => void;
   onChunkDeleted?: () => void;
 }
@@ -170,7 +176,7 @@ export default function BookChunksPanel({
   bookId,
   bookTitle,
   bookStatus,
-  tenantId,
+  bookTenantId,
   onClose,
   onChunkDeleted,
 }: Props) {
@@ -513,7 +519,7 @@ export default function BookChunksPanel({
                   deletingId={deletingId}
                   deleting={deleting}
                   undoingId={undoingId}
-                  isGlobal={tenantId === "global"}
+                  isGlobal={bookTenantId === "global"}
                   onStartEdit={() => startEdit(chunk)}
                   onCancelEdit={cancelEdit}
                   onEditFieldChange={(key, val) =>

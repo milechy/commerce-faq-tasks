@@ -138,7 +138,7 @@ export function BookUploadsSection({ tenantId }: { tenantId: string }) {
           bookId={selectedBook.id}
           bookTitle={selectedBook.title}
           bookStatus={selectedBook.status}
-          tenantId={tenantId}
+          bookTenantId={selectedBook.tenant_id}
           onClose={() => setSelectedBook(null)}
           onChunkDeleted={() => { void loadBooks(); }}
         />
@@ -587,7 +587,7 @@ export default function PdfUploadTab({ tenantId }: { tenantId: string }) {
           bookId={selectedBook.id}
           bookTitle={selectedBook.title}
           bookStatus={selectedBook.status}
-          tenantId={tenantId}
+          bookTenantId={selectedBook.tenant_id}
           onClose={() => setSelectedBook(null)}
           onChunkDeleted={() => { void loadBooks(); }}
         />
