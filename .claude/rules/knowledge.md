@@ -17,6 +17,8 @@ paths:
   - "src/agent/knowledge/**"
   - "src/agent/memory/**"
   - "src/agent/config/ragLimits.ts"
+  - "src/agent/psychology/**"
+  - "config/bookStructurizerPrompt.md"
 ---
 
 # ナレッジ配線ルール
@@ -96,3 +98,24 @@ lemonslice 経由のアバターは `/api/chat` の回答を TTS するだけで
 `JUDGE_SWEEP_TENANTS`(既定 `r2c_default`)と `LEARNED_MEMORY_TENANTS` は独立した allowlist。
 両方が「有効」と表示されていても、対象テナントの交差が空なら learned_memory は永久に0件になる。
 点火状態を確認するときは、個別のフラグではなく交差を見る。
+
+## 生産者と消費者が別のリテラルを持たない
+
+2026-08-29、心理学原則の注入経路で3件の継ぎ目バグが見つかった。いずれも「書く側」と
+「読む側」が同じ値・同じキー名を独立に持っており、一方だけ変更されて他方が追随して
+いなかった:
+
+- `principleDetector.ts` の語彙(`KEYWORD_MAP`)と `bookStructurizerPrompt.md` の
+  few-shot例が独立に原則名を持ち、「返報性」と「返報性の原理」のように揺れていた
+  (`principleSearch.ts` は完全一致検索のため永久にヒットしない)
+- `bookStructurizer.ts` が metadata に書くキーと `principleSearch.ts` が読むキーが
+  一致していなかった(`example` が書かれず常に空文字)
+- `bookStructurizer.ts` の `page_hint` と `bookPdfRoutes.ts` の `page_number` が
+  同じ値を指す別名で、結合できていなかった
+
+各ファイルの単体テストは自分で「理想の行」を用意しており、生産側が実際に何を書くかを
+見ないため、この種のバグを検出できない。**原則名の語彙は `principleVocabulary.ts`
+1箇所を出どころにし**(`principleDetector.ts`・`bookStructurizer.ts`・
+`bookStructurizerPrompt.md` の3箇所はすべてここを参照する)、**metadataのキー名は
+`principleContract.test.ts` がソース走査で生産側・消費側を突き合わせる**。
+新しい生産者・消費者ペアを追加するときは、ここにモックではなくソース走査の契約テストを足す。

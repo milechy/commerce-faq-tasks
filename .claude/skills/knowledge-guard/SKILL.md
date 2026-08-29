@@ -19,7 +19,8 @@ pnpm test -- --maxWorkers=1 \
   src/search/faqIndexUnify.test.ts \
   src/lib/knowledge/faqIndexSync.test.ts \
   src/api/admin/agent/confirmPolicy.test.ts \
-  src/api/admin/analytics/schemaHealth.test.ts
+  src/api/admin/analytics/schemaHealth.test.ts \
+  src/agent/psychology/principleContract.test.ts
 ```
 
 新しく追加した機械ガード(例: 5引数 `upsertFaqToEs` 呼び出し禁止のソース走査テスト)は、
@@ -35,6 +36,7 @@ pnpm test -- --maxWorkers=1 \
 | `faqIndexSync.test.ts` | `faqIndexSync.ts` 各関数の挙動 |
 | `confirmPolicy.test.ts` | 書き込みツールが確認ゲートに分類されていること(未分類は失敗) |
 | `schemaHealth.test.ts` | `REQUIRED_COLUMNS` が実際の `INSERT INTO` とソース走査で完全一致していること |
+| `principleContract.test.ts` | 心理学原則の語彙(`principleVocabulary.ts`)が検出器・書籍抽出プロンプトと一致し、`bookStructurizer.ts` が書く metadata キーを `principleSearch.ts`/`bookPdfRoutes.ts` が正しく読めること |
 
 ## 使い方
 

@@ -7,8 +7,15 @@
 // 検索 index に届かない（= book pipeline が無言で検索に反映されない）バグだった。
 // 本テストは upsert 先 index が resolveFaqWriteIndex と一致し、ES_FAQ_INDEX を無視することを保証する。
 
-import { upsertToEs } from './bookStructurizer';
+import { upsertToEs, structurizeBook } from './bookStructurizer';
 import { resolveFaqWriteIndex } from '../../search/langIndex';
+import { callGeminiJudge } from '../../lib/gemini/client';
+import { getPool } from '../../lib/db';
+import { embedText } from '../llm/openaiEmbeddingClient';
+
+jest.mock('../../lib/gemini/client', () => ({ callGeminiJudge: jest.fn() }));
+jest.mock('../../lib/db', () => ({ getPool: jest.fn() }));
+jest.mock('../llm/openaiEmbeddingClient', () => ({ embedText: jest.fn() }));
 
 describe('bookStructurizer upsertToEs — ES write index 統一 (F3 / Phase69-2-E)', () => {
   const ORIG_ES_URL = process.env.ES_URL;
@@ -59,5 +66,96 @@ describe('bookStructurizer upsertToEs — ES write index 統一 (F3 / Phase69-2-
     delete process.env.ES_URL;
     await upsertToEs('demo', 'd', {});
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+// 2026-08-29 継ぎ目バグ回帰テスト:
+// principleSearch.ts が読む metadata の形と、structurizeBook が実際に書く形が
+// 一致することを、Gemini/DB/埋め込みをモックしたうえで structurizeBook 本体を
+// 実行して検証する(principleContract.test.ts はソース走査、こちらは実行結果の検証)。
+describe('bookStructurizer structurizeBook — metadata の継ぎ目 (2026-08-29)', () => {
+  const ORIG_ENABLED = process.env.BOOK_STRUCTURIZE_ENABLED;
+  let queryMock: jest.Mock;
+
+  beforeEach(() => {
+    process.env.BOOK_STRUCTURIZE_ENABLED = 'true';
+    queryMock = jest.fn().mockResolvedValue({ rows: [{ id: 1 }] });
+    (getPool as jest.Mock).mockReturnValue({ query: queryMock });
+    (embedText as jest.Mock).mockResolvedValue([0.1, 0.2, 0.3]);
+    global.fetch = jest.fn().mockResolvedValue({ ok: true }) as unknown as typeof fetch;
+  });
+
+  afterEach(() => {
+    if (ORIG_ENABLED !== undefined) process.env.BOOK_STRUCTURIZE_ENABLED = ORIG_ENABLED;
+    else delete process.env.BOOK_STRUCTURIZE_ENABLED;
+    jest.restoreAllMocks();
+  });
+
+  /** faq_embeddings への INSERT が呼ばれた際の第4引数(metadata JSON)を取り出す。 */
+  function insertedMetadata(): Record<string, unknown> {
+    const call = queryMock.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO faq_embeddings'));
+    expect(call).toBeDefined();
+    return JSON.parse(call![1][3] as string);
+  }
+
+  it('保存する metadata に example と page_number を含む(example欠落・page_hint不一致の回帰)', async () => {
+    (callGeminiJudge as jest.Mock).mockResolvedValue(JSON.stringify([
+      {
+        situation: '価格提示の前に基準値を示す',
+        resistance: '価格が高いと感じている',
+        principle: 'アンカリング効果',
+        contraindication: '誇大広告は禁止',
+        example: '通常価格を先に見せる',
+        failure_example: '過大なアンカーは不信感を招く',
+      },
+    ]));
+
+    await structurizeBook('carnation', 1, '価格交渉に関する短いテキスト。');
+
+    const metadata = insertedMetadata();
+    expect(metadata.example).toBe('通常価格を先に見せる');
+    expect(metadata.page_number).toBeDefined();
+    expect(metadata).not.toHaveProperty('page_hint');
+  });
+
+  it('principleVocabulary.ts に無い原則名は保存せず skippedCount に計上する', async () => {
+    (callGeminiJudge as jest.Mock).mockResolvedValue(JSON.stringify([
+      {
+        situation: '状況',
+        resistance: '抵抗',
+        principle: '返報性の原理', // 語彙には「返報性」しか無い表記揺れ
+        contraindication: '注意',
+        example: '例文',
+        failure_example: '失敗例',
+      },
+    ]));
+
+    const result = await structurizeBook('carnation', 1, '短いテキスト。');
+
+    expect(result.structuredCount).toBe(0);
+    expect(result.skippedCount).toBe(1);
+    expect(queryMock).not.toHaveBeenCalledWith(
+      expect.stringContaining('INSERT INTO faq_embeddings'),
+      expect.anything(),
+    );
+  });
+
+  it('語彙に一致する原則名は通常どおり保存される', async () => {
+    (callGeminiJudge as jest.Mock).mockResolvedValue(JSON.stringify([
+      {
+        situation: '状況',
+        resistance: '抵抗',
+        principle: '希少性',
+        contraindication: '注意',
+        example: '例文',
+        failure_example: '失敗例',
+      },
+    ]));
+
+    const result = await structurizeBook('carnation', 1, '短いテキスト。');
+
+    expect(result.structuredCount).toBe(1);
+    expect(result.skippedCount).toBe(0);
+    expect(insertedMetadata().principle).toBe('希少性');
   });
 });

@@ -9,6 +9,7 @@ import { getPool } from '../../lib/db';
 import { embedText } from '../llm/openaiEmbeddingClient';
 import { splitIntoChunks } from './bookChunker';
 import { resolveFaqWriteIndex } from '../../search/langIndex';
+import { PRINCIPLE_NAMES, isKnownPrinciple } from '../psychology/principleVocabulary';
 
 const logger = pino();
 
@@ -130,7 +131,11 @@ export async function structurizeBook(
     }
 
     const chunk = chunks[i]!;
-    const prompt = promptTemplate.replace('{{CHUNK_TEXT}}', chunk.text);
+    // principleVocabulary.ts の語彙をプロンプトに差し込み、原則名を自由記述させない
+    // (継ぎ目バグ: 検出器の語彙「返報性」と抽出結果「返報性の原理」が独立に揺れていた)。
+    const prompt = promptTemplate
+      .replace('{{PRINCIPLE_LIST}}', PRINCIPLE_NAMES.join('、'))
+      .replace('{{CHUNK_TEXT}}', chunk.text);
 
     let raw: string;
     try {
@@ -175,7 +180,7 @@ export async function structurizeBook(
         result.skippedCount++;
         continue;
       }
-      principles = parsed.map((item: unknown) => {
+      const extracted = parsed.map((item: unknown) => {
         const obj = item as Record<string, unknown>;
         return {
           situation: truncateField(obj['situation']),
@@ -186,6 +191,20 @@ export async function structurizeBook(
           failure_example: truncateField(obj['failure_example']),
         };
       });
+
+      // 継ぎ目バグ対策: プロンプトで語彙を指定していても、LLMが言い換えて返す可能性は
+      // 残る。principleVocabulary.ts に無い原則名は保存せず skippedCount に計上する
+      // (searchPrincipleChunks は完全一致検索のため、未知の語を保存しても検索に永久に
+      // ヒットせず容量だけを消費する)。
+      const unknownCount = extracted.filter((p) => !isKnownPrinciple(p.principle)).length;
+      if (unknownCount > 0) {
+        logger.warn(
+          { chunkIndex: chunk.chunkIndex, unknownCount },
+          'bookStructurizer: unknown principle name(s) skipped (not in principleVocabulary.ts)',
+        );
+      }
+      result.skippedCount += unknownCount;
+      principles = extracted.filter((p) => isKnownPrinciple(p.principle));
     } catch (err) {
       logger.warn({ err, chunkIndex: chunk.chunkIndex }, 'bookStructurizer: JSON parse failed');
       result.failedCount++;
@@ -211,10 +230,15 @@ export async function structurizeBook(
         source: 'book',
         book_id: bookId,
         chunk_index: chunk.chunkIndex,
-        page_hint: chunk.pageHint ?? null,
+        // bookPdfRoutes.ts の一覧取得は `(metadata->>'page_number')::int` でソートする。
+        // 継ぎ目バグ: ここが page_hint のままだと常にNULLになりページ順に並ばない。
+        page_number: chunk.pageHint ?? null,
         principle: principle.principle,
         situation: principle.situation,
         contraindication: principle.contraindication,
+        // 継ぎ目バグ: principleSearch.ts は metadata->>'example' を読むが、
+        // 従来ここに example が無く常に空文字になっていた。
+        example: principle.example,
         failure_example: principle.failure_example,
       };
 
