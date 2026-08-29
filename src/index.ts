@@ -209,6 +209,12 @@ app.use(
 app.get("/ui", (_req, res) => res.redirect("/ui/index.html"));
 // Phase65: 旧demoページから新構成への後方互換リダイレクト
 app.get("/carnation-demo.html", (_req, res) => res.redirect(301, "/carnation-demo/index.html"));
+// widget.min.js(難読化ビルド)は撤去済み(SCRIPTS/build-widget.sh も削除)。
+// 難読化は同一ロジックが /widget.js として平文で配信されているため元々無意味だった上、
+// javascript-obfuscator の出力がビルドごとに変わり widget.js との一致を機械的に固定できず、
+// #871 以降誰も再ビルドしないまま古いコードが本番に残り続けていた(2026-08-29発覚)。
+// 外部に古い埋め込みが残っていた場合に404ではなく最新のwidget.jsへ導くためリダイレクトする。
+app.get("/widget.min.js", (_req, res) => res.redirect(301, "/widget.js"));
 
 // CE status is public (side-effect free)
 app.get("/ce/status", (_req, res) => {

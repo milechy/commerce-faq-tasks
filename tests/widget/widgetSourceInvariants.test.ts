@@ -194,26 +194,29 @@ describe('public/widget.js アバターセッション keep-alive / 復活の不
   });
 });
 
-describe('public/widget.min.js が壊れたビルド成果物になっていない', () => {
-  // 当初は「特定の文字列(data-scripted-responses 等)が難読化後も残っているか」で
-  // ビルド忘れを検知しようとしたが、javascript-obfuscator の文字列配列抽出は実行の
-  // たびに異なる分割をするため、同じ入力でも生存する部分文字列が毎回変わる
-  // （実測: 同一 widget.js を3回連続ビルドしても "data-scripted-responses" の
-  // 生存/消失が 1回目:生存, 2回目:消失, 3回目:消失 とばらついた）。
-  // これはビルド忘れの検知ではなくobfuscatorの乱数を検証してしまう偽陽性の温床だったため撤去し、
-  // 代わりに「ビルド成果物が構文的に壊れていないか」という決定的な性質だけを検証する。
-  const minSrc = fs.readFileSync(
-    path.resolve(__dirname, '../../public/widget.min.js'),
-    'utf8'
-  );
-
-  it('widget.min.js が空でない', () => {
-    expect(minSrc.length).toBeGreaterThan(1000);
+describe('public/widget.min.js は撤去済み（再発防止）', () => {
+  // 2026-08-29発覚: widget.min.js(javascript-obfuscatorによる難読化ビルド)は
+  // SCRIPTS/build-widget.sh を呼ぶ経路がどこにも無く、PR #871 以降誰も再ビルドしないまま
+  // 本番で200を返し続けていた(#1039/#1060の変更も未反映)。難読化の狙いは同一ロジックが
+  // /widget.js として平文で配信されているため元々無意味で、かつ obfuscator の出力は
+  // ビルドごとに変わるため widget.js との一致を機械的に固定できない(このファイルが
+  // 過去に試みて撤去した経緯は git log 参照)。よって復活させず、撤去されたままであることと
+  // /widget.min.js が最新の /widget.js へリダイレクトされることをロックする。
+  it('public/widget.min.js が存在しない', () => {
+    const minPath = path.resolve(__dirname, '../../public/widget.min.js');
+    expect(fs.existsSync(minPath)).toBe(false);
   });
 
-  it('widget.min.js が構文的に有効なJavaScriptである（実行はしない — document等が無いnode環境のため）', () => {
-    const vm = require('vm');
-    expect(() => new vm.Script(minSrc)).not.toThrow();
+  it('SCRIPTS/build-widget.sh が存在しない（呼び出し元の無い生成スクリプトを復活させない）', () => {
+    const buildScriptPath = path.resolve(__dirname, '../../SCRIPTS/build-widget.sh');
+    expect(fs.existsSync(buildScriptPath)).toBe(false);
+  });
+
+  it('/widget.min.js へのアクセスを /widget.js へ301リダイレクトする経路が src/index.ts にある', () => {
+    const indexSrc = fs.readFileSync(path.resolve(__dirname, '../../src/index.ts'), 'utf8');
+    expect(indexSrc).toMatch(
+      /app\.get\(\s*['"]\/widget\.min\.js['"]\s*,\s*\(_req,\s*res\)\s*=>\s*res\.redirect\(\s*301\s*,\s*['"]\/widget\.js['"]\s*\)\s*\)/,
+    );
   });
 });
 
