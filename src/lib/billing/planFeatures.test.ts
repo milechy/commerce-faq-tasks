@@ -14,6 +14,7 @@ import {
   queryTenantPlanResult,
   resolveShareForPlan,
   resolveShareForTenantPlan,
+  planShowsAdPromo,
 } from "./planFeatures";
 import type { GatedFeature } from "./planFeatures";
 
@@ -428,5 +429,37 @@ describe("resolveShareForTenantPlan(queryTenantPlanResult + resolveShareForPlan�
       forced: false,
       default: false,
     });
+  });
+});
+
+// AD-2: free_ad プラン限定でR2C自身の広告帯を掲出するかどうかの判定。
+// fail-safe の向きが planHasFeature/hide_branding とは逆(未知/nullはfalse=掲出しない)であることを
+// 明示的に固定する(有料テナントのサイトに誤って広告が出る事故を避けるため)。
+describe("planShowsAdPromo", () => {
+  it("free_ad のみ true", () => {
+    expect(planShowsAdPromo("free_ad")).toBe(true);
+  });
+
+  it.each(["starter", "standard", "growth", "enterprise"] as const)(
+    "%s は false",
+    (plan) => {
+      expect(planShowsAdPromo(plan)).toBe(false);
+    },
+  );
+
+  it("null は false(fail-safe: 判定不能時は掲出しない)", () => {
+    expect(planShowsAdPromo(null)).toBe(false);
+  });
+
+  it("undefined は false(fail-safe: 判定不能時は掲出しない)", () => {
+    expect(planShowsAdPromo(undefined)).toBe(false);
+  });
+
+  it("未知の文字列は false(fail-safe: free_ad へ『昇格』させない)", () => {
+    expect(planShowsAdPromo("gold")).toBe(false);
+  });
+
+  it("空文字は false", () => {
+    expect(planShowsAdPromo("")).toBe(false);
   });
 });

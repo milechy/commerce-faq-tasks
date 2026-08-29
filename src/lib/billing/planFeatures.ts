@@ -178,6 +178,21 @@ export async function tenantHasFeature(tenantId: string, feature: GatedFeature):
   return planHasFeature(plan, feature);
 }
 
+/**
+ * free_ad プランか(= R2Cの広告帯を掲出するか)。
+ *
+ * ★FEATURE_MIN_PLAN に入れてはいけない★
+ * planHasFeature は rank(plan) >= rank(min) の「以上」判定なので、
+ * 「free_ad のときだけ true」という逆向きの述語は表現できない。
+ *
+ * ★fail-safe の向きが planHasFeature と逆★
+ * 未知/null は false(掲出しない)へ倒す。有料テナントのサイトに
+ * 誤って広告が出る方が、無料テナントで掲出漏れが起きるより重い。
+ */
+export function planShowsAdPromo(plan: string | null | undefined): boolean {
+  return plan === "free_ad";
+}
+
 // ---------------------------------------------------------------------------
 // S4(共有学習プールの参加モデル): プラン別の share(共有プール参加)既定値・強制。
 //

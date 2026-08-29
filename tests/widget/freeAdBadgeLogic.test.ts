@@ -12,6 +12,12 @@ function shouldRenderBadge(showBrandingBadge: unknown, badgeUrl: unknown): boole
   return Boolean(showBrandingBadge && badgeUrl);
 }
 
+// public/widget.js: if (showAdPromo && adPromoUrl) { ... } else if (showBrandingBadge && badgeUrl) { ... }
+// の描画判定。広告帯とバッジは同一パネル最終要素の1枠を奪い合う排他関係。
+function shouldRenderAdPromo(showAdPromo: unknown, adPromoUrl: unknown): boolean {
+  return Boolean(showAdPromo && adPromoUrl);
+}
+
 // public/widget.js: catch (err) 内の plan_upgrade_required 分岐。
 // 「表示すべきか」と「以降のフラグの値」を分離して返す(widget.js側は
 // freeAdQuotaMessageShown を直接書き換えるが、ここではロジックのみ抽出する)。
@@ -60,6 +66,78 @@ describe("widget.js shouldRenderBadge", () => {
     it("両方falsy → 描画しない", () => {
       expect(shouldRenderBadge(false, null)).toBe(false);
       expect(shouldRenderBadge(undefined, undefined)).toBe(false);
+    });
+  });
+});
+
+describe("widget.js shouldRenderAdPromo", () => {
+  describe("正常系", () => {
+    it("showAdPromo=true かつ adPromoUrl あり → 描画する", () => {
+      expect(shouldRenderAdPromo(true, "https://api.r2c.biz/lp/from-chat/?r2c_ref=t")).toBe(true);
+    });
+
+    it("showAdPromo=false → adPromoUrlがあっても描画しない(free_ad以外)", () => {
+      expect(shouldRenderAdPromo(false, "https://api.r2c.biz/lp/from-chat/?r2c_ref=t")).toBe(false);
+    });
+  });
+
+  describe("境界値・異常系(fail-safeの向きがバッジと逆であることの固定)", () => {
+    it("adPromoUrl=null → showAdPromo=trueでも描画しない(config欠落時)", () => {
+      expect(shouldRenderAdPromo(true, null)).toBe(false);
+    });
+
+    it("adPromoUrl=undefined → 描画しない", () => {
+      expect(shouldRenderAdPromo(true, undefined)).toBe(false);
+    });
+
+    it("adPromoUrl=空文字 → falsyのため描画しない", () => {
+      expect(shouldRenderAdPromo(true, "")).toBe(false);
+    });
+
+    it("showAdPromo=undefined(_rajiuceTenantCfgが空オブジェクトの静的埋め込み・判定不能経路) → 描画しない。" +
+      "widget.js側の変数宣言自体が `=== true` でfalse側に倒れるため、バッジ(true側に倒れる)とは逆の安全側になる", () => {
+      expect(shouldRenderAdPromo(undefined, "https://api.r2c.biz/lp/from-chat/")).toBe(false);
+    });
+
+    it("両方falsy → 描画しない", () => {
+      expect(shouldRenderAdPromo(false, null)).toBe(false);
+      expect(shouldRenderAdPromo(undefined, undefined)).toBe(false);
+    });
+  });
+
+  describe("バッジとの排他(同時に出さない)", () => {
+    it("広告帯が描画される条件下では、else if 構造上バッジは評価されない(free_adテナント)", () => {
+      const showAdPromo = true;
+      const adPromoUrl = "https://api.r2c.biz/lp/from-chat/?r2c_ref=t";
+      const showBrandingBadge = true; // free_ad は hide_branding を満たさずtrueのまま
+      const badgeUrl = "https://api.r2c.biz/lp/from-chat/?r2c_ref=t";
+      const adPromoRendered = shouldRenderAdPromo(showAdPromo, adPromoUrl);
+      // widget.js は else if のため、広告帯が真なら badge 側の条件式自体は評価されない。
+      const badgeRendered = adPromoRendered ? false : shouldRenderBadge(showBrandingBadge, badgeUrl);
+      expect(adPromoRendered).toBe(true);
+      expect(badgeRendered).toBe(false);
+    });
+
+    it("free_ad以外のテナントは広告帯が偽になり、バッジ側の判定にフォールバックする", () => {
+      const showAdPromo = false;
+      const adPromoUrl = null;
+      const showBrandingBadge = true; // starter
+      const badgeUrl = "https://api.r2c.biz/lp/from-chat/?r2c_ref=t";
+      const adPromoRendered = shouldRenderAdPromo(showAdPromo, adPromoUrl);
+      const badgeRendered = adPromoRendered ? false : shouldRenderBadge(showBrandingBadge, badgeUrl);
+      expect(adPromoRendered).toBe(false);
+      expect(badgeRendered).toBe(true);
+    });
+
+    it("growth以上はどちらも出ない", () => {
+      const showAdPromo = false;
+      const adPromoUrl = null;
+      const showBrandingBadge = false; // growth: hide_branding を満たす
+      const badgeUrl = "https://api.r2c.biz/lp/from-chat/?r2c_ref=t";
+      const adPromoRendered = shouldRenderAdPromo(showAdPromo, adPromoUrl);
+      const badgeRendered = adPromoRendered ? false : shouldRenderBadge(showBrandingBadge, badgeUrl);
+      expect(adPromoRendered).toBe(false);
+      expect(badgeRendered).toBe(false);
     });
   });
 });

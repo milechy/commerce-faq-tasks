@@ -275,6 +275,56 @@ describe('public/widget.js バッジ描画条件 — 抽出ロジックとの契
     expect(rel).not.toContain('noreferrer');
   });
 
+  // AD-2: free_ad プラン限定の広告帯。バッジと排他で、広告帯が優先される。
+  describe('R2C自身の広告帯(free_ad限定) — 抽出ロジックとの契約(freeAdBadgeLogic.test.ts)', () => {
+    it('広告帯は showAdPromo && adPromoUrl の両方が真のときだけ描画し、バッジとは else if で排他になっている', () => {
+      expect(WIDGET_SRC).toMatch(
+        /if\s*\(\s*showAdPromo\s*&&\s*adPromoUrl\s*\)\s*\{[\s\S]*?\}\s*else if\s*\(\s*showBrandingBadge\s*&&\s*badgeUrl\s*\)\s*\{/
+      );
+    });
+
+    it('showAdPromo の既定値は fail-safe で false 側(=== true)に倒れる(showBrandingBadgeと逆向き)', () => {
+      expect(WIDGET_SRC).toMatch(/showAdPromo\s*=\s*_rajiuceTenantCfg\.showAdPromo\s*===\s*true;/);
+    });
+
+    it('adPromoUrl 未注入では null になり描画されない', () => {
+      expect(WIDGET_SRC).toMatch(/adPromoUrl\s*=\s*_rajiuceTenantCfg\.adPromoUrl\s*\|\|\s*null;/);
+    });
+
+    it('widgetGeneratorの既定値は showBrandingBadge(true側)と逆で、false/nullに倒れる', () => {
+      expect(WIDGET_SRC).not.toMatch(/adPromoUrl\s*=\s*_rajiuceTenantCfg\.adPromoUrl\s*\?\?\s*true/);
+    });
+
+    it('広告帯のクリック・インプレッションは _tracker が未初期化(null)でも例外を投げないガードを持つ', () => {
+      expect(WIDGET_SRC).toMatch(/if\s*\(\s*_tracker\s*\)\s*_tracker\.track\(\s*['"]ad_promo_click['"]/);
+      expect(WIDGET_SRC).toMatch(/if\s*\(\s*_tracker\s*\)\s*_tracker\.track\(\s*['"]ad_promo_impression['"]/);
+    });
+
+    it('広告帯リンクにも rel="nofollow sponsored noopener" が付与されている（link scheme対策）', () => {
+      const matches = [...WIDGET_SRC.matchAll(/rel:\s*['"]([^'"]+)['"]/g)];
+      expect(matches.length).toBeGreaterThanOrEqual(2);
+      matches.forEach((m) => {
+        expect(m[1]).toContain('nofollow');
+        expect(m[1]).toContain('sponsored');
+        expect(m[1]).toContain('noopener');
+        expect(m[1]).not.toContain('noreferrer');
+      });
+    });
+
+    it('広告帯とバッジの CSS が別クラス(.r2c-ad-promo / .r2c-badge)で定義され、min-height 44px のタップ領域を維持する', () => {
+      expect(WIDGET_SRC).toMatch(/'\.r2c-ad-promo \{'/);
+      expect(WIDGET_SRC).toMatch(/'\.r2c-ad-promo a \{'/);
+      const idx = WIDGET_SRC.indexOf("'.r2c-ad-promo a {'");
+      const block = WIDGET_SRC.slice(idx, idx + 400);
+      expect(block).toMatch(/min-height:\s*44px/);
+    });
+
+    it('確定文言(見出し/CTA)が変わっていない', () => {
+      expect(WIDGET_SRC).toContain('このAI接客は R2C で作れます');
+      expect(WIDGET_SRC).toContain('無料で試す');
+    });
+  });
+
   // E3b: お客様の回答評価(👍👎)。要件Rj/F5。
   describe('answer_feedback (回答評価)', () => {
     it('event_tracking とは独立に判定している(event_trackingが無効でも動く)', () => {

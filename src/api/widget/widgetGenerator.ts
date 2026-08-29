@@ -20,6 +20,10 @@ export interface TenantWidgetConfig {
   showBrandingBadge?: boolean;
   /** バッジのリンク先（着地ページ、UTM + テナント識別子付き） */
   badgeUrl?: string;
+  /** R2C自身の広告帯を表示するか（free_adプラン限定。fail-safeで未設定時はfalse側） */
+  showAdPromo?: boolean;
+  /** 広告帯のリンク先（着地ページ、UTM + テナント識別子付き） */
+  adPromoUrl?: string;
 }
 
 const WIDGET_SRC_PATH = path.resolve(process.cwd(), "public", "widget.js");
@@ -71,6 +75,10 @@ export async function generateWidgetJs(config: TenantWidgetConfig): Promise<stri
     abVariant: ${JSON.stringify(config.abVariant ?? null)},
     showBrandingBadge: ${JSON.stringify(config.showBrandingBadge ?? true)},
     badgeUrl: ${JSON.stringify(config.badgeUrl ?? null)},
+    // showBrandingBadge(fail-safe: 未設定時true)とは既定値が逆。広告は判定不能時に
+    // 掲出しない側へ倒す(有料テナントへの誤掲出の方が無料テナントの掲出漏れより重い)。
+    showAdPromo: ${JSON.stringify(config.showAdPromo ?? false)},
+    adPromoUrl: ${JSON.stringify(config.adPromoUrl ?? null)},
     _wt: ${JSON.stringify(token)}
   };
   if (typeof window !== "undefined") {

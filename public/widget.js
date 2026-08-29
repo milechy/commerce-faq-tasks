@@ -50,6 +50,11 @@
   // （plan判定不能時は「表示する」が安全なデフォルト）。badgeUrl が無ければ描画しない。
   var showBrandingBadge = _rajiuceTenantCfg.showBrandingBadge !== false;
   var badgeUrl = _rajiuceTenantCfg.badgeUrl || null;
+  // R2C自身の広告帯（free_adプラン限定）。showBrandingBadgeとはfail-safeの向きが逆で、
+  // _rajiuceTenantCfgが空オブジェクト（判定不能）のときは `=== true` により false 側に倒れる
+  // （有料テナントのサイトに誤って広告が出る事故を避けるため）。adPromoUrlが無ければ描画しない。
+  var showAdPromo = _rajiuceTenantCfg.showAdPromo === true;
+  var adPromoUrl = _rajiuceTenantCfg.adPromoUrl || null;
   var _abExposureSent = false;
   var accentColor = currentScript ? (currentScript.getAttribute('data-accent-color') || '#2563eb') : '#2563eb';
   var greetingText = currentScript ? (currentScript.getAttribute('data-greeting') || 'ご質問はお気軽にどうぞ') : 'ご質問はお気軽にどうぞ';
@@ -582,6 +587,27 @@
     '}',
     '.r2c-badge a:hover { color: #64748b; }',
     '.r2c-badge a:focus-visible { outline: 2px solid #93c5fd; outline-offset: 2px; border-radius: 4px; }',
+    /* free_adプラン向け「R2C自身の広告帯」。バッジより主張の強い見た目にする（タップ領域は同じ44px） */
+    '.r2c-ad-promo {',
+    '  padding: 6px 12px;',
+    '  text-align: center;',
+    '  background: #f8fafc;',
+    '  border-top: 1px solid #e2e8f0;',
+    '  flex-shrink: 0;',
+    '}',
+    '.r2c-ad-promo a {',
+    '  display: flex;',
+    '  flex-direction: column;',
+    '  align-items: center;',
+    '  justify-content: center;',
+    '  min-height: 44px;',
+    '  padding: 4px 10px;',
+    '  text-decoration: none;',
+    '}',
+    '.r2c-ad-promo .r2c-ad-promo-title { font-size: 12px; color: #334155; font-weight: 600; }',
+    '.r2c-ad-promo .r2c-ad-promo-cta { font-size: 11px; color: #2563eb; font-weight: 500; }',
+    '.r2c-ad-promo a:hover .r2c-ad-promo-cta { color: #1d4ed8; }',
+    '.r2c-ad-promo a:focus-visible { outline: 2px solid #93c5fd; outline-offset: 2px; border-radius: 4px; }',
     'textarea {',
     '  flex: 1;',
     '  min-height: 44px;',
@@ -1119,15 +1145,33 @@
   var inputArea = el('div', { className: 'input-area', role: 'form', 'aria-label': 'メッセージ入力フォーム' }, [textarea, micBtn, sendBtn]);
   panel.appendChild(inputArea);
 
-  /* --- 「Powered by R2C」バッジ（パネル最終要素。tab順は入力欄より後） ---
-   * showBrandingBadge / badgeUrl は widgetGenerator.ts が plan 判定込みで注入する
-   * fail-safe な値（判定不能時は表示する側に倒れる）。badgeUrl が無ければ描画しない。
+  /* --- R2C自身の広告帯 / 「Powered by R2C」バッジ（パネル最終要素。tab順は入力欄より後） ---
+   * showAdPromo / adPromoUrl と showBrandingBadge / badgeUrl は widgetGenerator.ts が
+   * plan 判定込みで注入する。fail-safe の向きは逆で、showBrandingBadge は判定不能時に
+   * 「表示する」側、showAdPromo は判定不能時に「掲出しない」側に倒れる
+   * （有料テナントのサイトに誤って広告が出る事故の方が重いため）。
+   * 広告帯とバッジは同時に出さない（掲出面はパネル最終要素の1枠のみ）。
    * EU AI Act 第50条の「AIと対話している」開示も兼ねる文言にする。
    * rel="nofollow sponsored" は widget が多数のテナントサイトに配布される link scheme
    * 対策として必須（付けないと r2c.biz 側が Google のペナルティ対象になる）。
    * noreferrer は付けない（Referer が消えて流入計測が片肺になるため）。
    */
-  if (showBrandingBadge && badgeUrl) {
+  if (showAdPromo && adPromoUrl) {
+    var adPromoLink = el('a', {
+      href: adPromoUrl,
+      target: '_blank',
+      rel: 'nofollow sponsored noopener',
+      'aria-label': 'このAI接客は R2C で作れます（R2Cのサイトを新しいタブで開きます）',
+    }, [
+      el('span', { className: 'r2c-ad-promo-title' }, 'このAI接客は R2C で作れます'),
+      el('span', { className: 'r2c-ad-promo-cta' }, '無料で試す'),
+    ]);
+    adPromoLink.addEventListener('click', function () {
+      if (_tracker) _tracker.track('ad_promo_click', { tenant_id: tenantId });
+    });
+    var adPromoRow = el('div', { className: 'r2c-ad-promo' }, [adPromoLink]);
+    panel.appendChild(adPromoRow);
+  } else if (showBrandingBadge && badgeUrl) {
     var badgeLink = el('a', {
       href: badgeUrl,
       target: '_blank',
@@ -2643,6 +2687,12 @@
     textarea.focus();
     emitToHost('widget:opened', {});
     capturePostHog('widget_opened', { page_url: window.location.href.slice(0, 2048) });
+    // R2C自身の広告帯（free_adプラン限定）のインプレッション。パネル構築時点では
+    // _tracker が未初期化（fetch(/api/widget/features)完了前）なため、実際にユーザーへ
+    // 見える瞬間であるここ（openPanel）で計測する。
+    if (showAdPromo && adPromoUrl) {
+      if (_tracker) _tracker.track('ad_promo_impression', { tenant_id: tenantId });
+    }
     if (avatarMode === 'animated') {
       // LiveKit/Anam へは一切接続しない軽量デモモード。
       // 設計判断（意図的）: panel.classList.add('avatar-active') はここでは付与しない。
