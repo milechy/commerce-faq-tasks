@@ -4,6 +4,8 @@ import { pool as pg } from "../lib/db";
 
 // Phase33 C: 言語別インデックス解決
 import { toSupportedLang, resolveFallbackIndices, DEFAULT_LANG, type SupportedLang } from "./langIndex";
+// P1: global / r2c_docs 合流のテナント別オプトイン判定(唯一の入口)
+import { shouldIncludeGlobalKnowledge, shouldIncludeR2cDocs } from "./globalKnowledgeFlag";
 
 export interface Hit {
   id: string;
@@ -97,10 +99,22 @@ export async function hybridSearch(
       ? resolveFallbackIndices(tenantId, resolvedLang)
       : [`faq_${tenantId ?? "demo"}`];
     const esIndexPrimary = esIndices[0]; // まずプライマリを試す
-    // r2c_docs グローバル知識ベースを常に含める（自テナントでない場合のみ追加）
-    const esIndex = tenantId && tenantId !== 'r2c_docs'
+    // P1: r2c_docs(社内ドキュメント)の index 合流をテナント別オプトインで判定する。
+    // 既定(env 未設定)は従来どおり合流。opt-in 有効時は allowlist 外テナントから faq_r2c_docs を外す。
+    const includeR2cDocs = !!tenantId && shouldIncludeR2cDocs(tenantId);
+    const esIndex = tenantId && tenantId !== 'r2c_docs' && includeR2cDocs
       ? `${esIndexPrimary},faq_r2c_docs`
       : esIndexPrimary;
+
+    // P1: 回答に global / r2c_docs を混ぜてよいかで tenant_id should 節を組み立てる。
+    // 既定は self + global + r2c_docs(従来どおり)。opt-in 有効時は allowlist で絞る。
+    const tenantShould: Array<{ term: { tenant_id: string } }> = tenantId
+      ? [
+          { term: { tenant_id: tenantId } },
+          ...(shouldIncludeGlobalKnowledge(tenantId) ? [{ term: { tenant_id: "global" } }] : []),
+          ...(includeR2cDocs ? [{ term: { tenant_id: "r2c_docs" } }] : []),
+        ]
+      : [];
 
     const esRes = await es.search(
       {
@@ -112,11 +126,7 @@ export async function hybridSearch(
                 must: { multi_match: { query: q, fields: ["question", "answer", "text"] } },
                 filter: {
                   bool: {
-                    should: [
-                      { term: { tenant_id: tenantId } },
-                      { term: { tenant_id: "global" } },
-                      { term: { tenant_id: "r2c_docs" } },
-                    ],
+                    should: tenantShould,
                     minimum_should_match: 1,
                     must: [
                       {

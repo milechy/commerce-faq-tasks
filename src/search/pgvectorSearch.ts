@@ -5,6 +5,7 @@ import { decryptText } from "../lib/crypto/textEncrypt";
 import { pool } from "../lib/db";
 import { logger } from '../lib/logger';
 import { FAQ_VISIBILITY_JOIN, FAQ_VISIBILITY_WHERE } from "./pgvector";
+import { shouldIncludeGlobalKnowledge, shouldIncludeR2cDocs } from "./globalKnowledgeFlag";
 
 export type PgvectorSearchParams = {
   tenantId: string;
@@ -48,6 +49,21 @@ export async function searchPgVector(
     ? `AND fe.id::text != ALL($4::text[])`
     : "";
 
+  // P1: global(書籍等) / r2c_docs(社内ドキュメント) をこのテナントの回答検索に
+  // 混ぜてよいかをテナント別オプトインで判定する(globalKnowledgeFlag.ts が唯一の入口)。
+  // 既定(env 未設定)は従来どおり両方引く。opt-in 有効時は allowlist 外テナントから除外。
+  const includeGlobal = shouldIncludeGlobalKnowledge(tenantId);
+  const includeR2cDocs = shouldIncludeR2cDocs(tenantId);
+  // 両方引く場合は従来と完全一致の文字列を維持する(静的検査 pgvectorSearchVisibility.test.ts
+  // が本ファイル文字列の "OR fe.tenant_id = 'global'" / "OR fe.tenant_id = 'r2c_docs'" を参照)。
+  const tenantScope = includeGlobal && includeR2cDocs
+    ? `fe.tenant_id = $2 OR fe.tenant_id = 'global' OR fe.tenant_id = 'r2c_docs'`
+    : [
+        "fe.tenant_id = $2",
+        includeGlobal ? "fe.tenant_id = 'global'" : null,
+        includeR2cDocs ? "fe.tenant_id = 'r2c_docs'" : null,
+      ].filter(Boolean).join(" OR ");
+
   // 非公開にしたFAQを回答に混ぜないため、faq_docs の可視性判定を必ず通す。
   // 判定は pgvector.ts の 1 実装を共有する(第2の解釈を書かない)。
   // エイリアスは fe / fd に揃える必要がある(FAQ_VISIBILITY_* の前提)。
@@ -59,7 +75,7 @@ export async function searchPgVector(
         1 - (fe.embedding <-> $1::vector) / 2 AS score
       FROM faq_embeddings fe
       ${FAQ_VISIBILITY_JOIN}
-      WHERE (fe.tenant_id = $2 OR fe.tenant_id = 'global' OR fe.tenant_id = 'r2c_docs')
+      WHERE (${tenantScope})
         AND (fe.is_excluded_from_search IS NULL OR fe.is_excluded_from_search = false)
         AND ${FAQ_VISIBILITY_WHERE}
         ${excludeClause}

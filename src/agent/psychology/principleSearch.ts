@@ -11,6 +11,8 @@ import {
   buildPrincipleWhereClause,
 } from './principleSchemaMap';
 import { PRINCIPLE_MAX_DISTANCE } from '../config/ragLimits';
+// P1: 心理学原則チャンク(source='book' = 'global' 由来)の合流をテナント別オプトインで制御。
+import { shouldIncludeGlobalKnowledge } from '../../search/globalKnowledgeFlag';
 
 export interface PrincipleChunk {
   chunkId: number;
@@ -96,12 +98,19 @@ export async function searchPrincipleChunks(
     // 固定列なので PRINCIPLE_FIELDS には含めない。
     const selectClause = PRINCIPLE_FIELDS.map(buildFieldSelect).join(',\n        ');
 
+    // P1: 共有 'global' 書籍チャンクをこのテナントの回答へ注入してよいかを判定する。
+    // 既定(env 未設定)は従来どおり global を含める。opt-in 有効かつ allowlist 外なら
+    // 自テナントの book チャンクのみに絞る(= 他社/社内書籍の外部露出を止める)。
+    const tenantScope = shouldIncludeGlobalKnowledge(tenantId)
+      ? `tenant_id = $1 OR tenant_id = 'global'`
+      : `tenant_id = $1`;
+
     const result = await pool.query<RawRow>(
       `SELECT
         id,
         ${selectClause}
        FROM faq_embeddings
-       WHERE (tenant_id = $1 OR tenant_id = 'global')
+       WHERE (${tenantScope})
          AND metadata->>'source' = 'book'
          AND ${buildPrincipleWhereClause()}
          AND (is_excluded_from_search IS NULL OR is_excluded_from_search = false)
