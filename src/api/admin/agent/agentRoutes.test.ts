@@ -4814,6 +4814,17 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(result).toContain('2件のFAQ案を作成しました');
       expect(result).toContain('送料はいくらですか');
 
+      // GID 1217972976609524 (H-5): 構造化カード(faq_import_preview)。text の自然文だけでなく、
+      // copilot-preview がそのまま一覧描画できる件数一致のデータを持つこと。
+      const card = res.body.actions[0].card;
+      expect(card.kind).toBe('faq_import_preview');
+      expect(card.source).toBe('text');
+      expect(card.total).toBe(2);
+      expect(card.truncated).toBe(false);
+      expect(card.faqs).toHaveLength(2);
+      expect(card.faqs[0]).toMatchObject({ question: faq1.question, answer: faq1.answer, duplicate: false, sourceUrl: null });
+      expect(card.errorUrls).toEqual([]);
+
       const staged = getStagedFaqImport('tenant-abc', 'sess-fi-01');
       expect(staged).not.toBeNull();
       expect(staged?.kind).toBe('text');
@@ -4851,8 +4862,75 @@ describe('POST /v1/admin/agent/chat', () => {
       const result = res.body.actions[0].result as string;
       expect(result).toContain('2件のURLから合計2件のFAQ案を作成しました');
 
+      // GID 1217972976609524 (H-5): sourceUrl でどのURL由来かを店主が追える。
+      const card = res.body.actions[0].card;
+      expect(card.kind).toBe('faq_import_preview');
+      expect(card.source).toBe('urls');
+      expect(card.total).toBe(2);
+      expect(card.faqs).toEqual([
+        expect.objectContaining({ question: faq1.question, sourceUrl: 'https://example.com/p/1' }),
+        expect.objectContaining({ question: faq2.question, sourceUrl: 'https://example.com/p/2' }),
+      ]);
+      expect(card.errorUrls).toEqual([]);
+
       const staged = getStagedFaqImport('tenant-abc', 'sess-fi-05');
       expect(staged?.kind).toBe('scrape');
+    });
+
+    it('suggest_faq_import_from_urls: 一部URLの取得が失敗しても、カードの件数と実際に生成されたFAQ数が一致する', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fi-5b', 'suggest_faq_import_from_urls', { urls: ['https://example.com/p/1', 'https://example.com/broken'] }))
+        .mockResolvedValueOnce(makeGroqResponse('取得できたページからプレビューを作成しました。'));
+
+      // duplicate 判定込みのFAQと、取得失敗item(faqsは空)が混在するケース。
+      const dupFaq = { question: '営業時間は？', answer: '10-18時です。', category: 'store_info', duplicate: { existingQuestion: '営業時間を教えて', existingAnswer: '10-18時です。' } };
+      mockGenerateScrapeFaqPreview.mockResolvedValueOnce([
+        { url: 'https://example.com/p/1', faqs: [faq1, dupFaq] },
+        { url: 'https://example.com/broken', faqs: [], error: 'ページの取得に失敗しました' },
+      ]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'このURLたちからFAQを作って', sessionId: 'sess-fi-05b' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('取得できなかったURL: 1件');
+
+      const card = res.body.actions[0].card;
+      // 黙って切らない: 表示件数(card.faqs.length)は実際に生成された件数と一致する。
+      expect(card.total).toBe(2);
+      expect(card.faqs).toHaveLength(2);
+      expect(card.faqs.find((f: any) => f.question === dupFaq.question)?.duplicate).toBe(true);
+      expect(card.faqs.find((f: any) => f.question === faq1.question)?.duplicate).toBe(false);
+      expect(card.errorUrls).toEqual([{ url: 'https://example.com/broken', error: 'ページの取得に失敗しました' }]);
+    });
+
+    it('suggest_faq_import_from_text: 20件上限で打ち切られても、カードのtotalに切り詰め前の件数が残る', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fi-3t', 'suggest_faq_import_from_text', { text: '十分な長さの商品説明文です。'.repeat(5) }))
+        .mockResolvedValueOnce(makeGroqResponse('プレビューを作成しました。'));
+
+      const manyFaqs = Array.from({ length: 25 }, (_, i) => ({
+        question: `質問${i}`,
+        answer: `回答${i}`,
+        category: 'store_info',
+        duplicate: null,
+      }));
+      mockGenerateTextFaqPreview.mockResolvedValueOnce(manyFaqs);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'このテキストからFAQを作って', sessionId: 'sess-fi-03t' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('上限(20件)を超えたため');
+
+      const card = res.body.actions[0].card;
+      expect(card.total).toBe(25); // 切り詰め前の生成数(黙って切らない)
+      expect(card.faqs).toHaveLength(20); // 実際に登録対象になる件数
+      expect(card.truncated).toBe(true);
     });
 
     it('suggest_faq_import_from_urls: urlsが6件以上ならエラーを返しgenerateScrapeFaqPreviewは呼ばない', async () => {

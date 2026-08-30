@@ -30,7 +30,7 @@ import {
   AGENT_CHAT_HISTORY_MAX_ENTRIES,
   useAgentChatTransport,
 } from "../../lib/useAgentChatTransport";
-import type { AnsweredFrom, WeeklySummaryAgentActionCard, RuleEffectAgentActionCard, AnalyticsTrendAgentActionCard, AbTestResultsAgentActionCard, KnowledgeAttributionAgentActionCard, BillingSummaryAgentActionCard } from "../../lib/useAgentChatTransport";
+import type { AnsweredFrom, WeeklySummaryAgentActionCard, RuleEffectAgentActionCard, AnalyticsTrendAgentActionCard, AbTestResultsAgentActionCard, KnowledgeAttributionAgentActionCard, BillingSummaryAgentActionCard, FaqImportPreviewAgentActionCard } from "../../lib/useAgentChatTransport";
 // アバター画像候補のプロンプト組み立ては旧UIウィザードと同じ関数を使う(再実装しない)。
 // チャットは選択肢を集めないため、固定の標準的な選択で呼ぶ。
 import { buildAvatarPrompt, type AvatarPromptInput } from "../../lib/buildAvatarPrompt";
@@ -237,6 +237,10 @@ type Card =
       gaps: Array<{ id: number; userQuestion: string; ragHitCount: number }>;
       totalCount: number;
     }
+  // GID 1217972976609524 (H-5): suggest_faq_import_from_text / suggest_faq_import_from_urls
+  // が返す、DB未登録のFAQ案一覧。フィールド形状は
+  // FaqImportPreviewAgentActionCard(useAgentChatTransport.ts)と同一に保つ(weeklySummaryと同じ作法)。
+  | ({ kind: "faqImportPreview" } & Omit<FaqImportPreviewAgentActionCard, "kind">)
   // AI品質評価(get_conversation_evaluation)。4軸ラベルはサーバ側で確定済みのものを
   // そのまま描画する(旧UIの JudgeEvaluationSection.tsx と同一語彙)。
   | {
@@ -917,6 +921,10 @@ export default function CopilotPreviewPage() {
         const { gaps, totalCount } = a.card;
         return { id: nextId(), role: "ai", card: { kind: "knowledgeGapsList", gaps, totalCount } };
       }
+      if (a.card?.kind === "faq_import_preview") {
+        const { source, total, truncated, faqs, errorUrls } = a.card;
+        return { id: nextId(), role: "ai", card: { kind: "faqImportPreview", source, total, truncated, faqs, errorUrls } };
+      }
       if (a.card?.kind === "weekly_summary") {
         const { asOf, sessions, avgScore, conversions, faq, pendingTuningRules, gaps, learned } = a.card;
         return {
@@ -1024,6 +1032,10 @@ export default function CopilotPreviewPage() {
     const industryTemplatePendingConfirm = data.actions?.some(
       (a) => a.tool === "import_industry_faq_templates" && a.result.includes("よろしければ登録しますか"),
     );
+    // H-5: suggest_faq_import_from_text/urls のFAQ案一覧カードが出たら、そのまま
+    // 登録できるチップを添える(旧UIのプレビュー画面が持っていた「候補を見て選ぶ」を
+    // 自由入力頼みにしない)。文字列マッチではなくcard種別で判定する(sessionListCard等と同じ作法)。
+    const faqImportPreviewSuggested = data.actions?.some((a) => a.card?.kind === "faq_import_preview");
     // オンボ 是正B-1: publish_faq_draftsだけ確認チップが無く、下書き公開の動線が
     // 自由入力頼みになっていた(request_sai_task等の既存パターンに揃える)。
     const publishDraftsPendingConfirm = data.actions?.some(
@@ -1077,6 +1089,11 @@ export default function CopilotPreviewPage() {
       ? [
           { label: "登録して", action: "__real:登録してください", tone: "primary" },
           { label: "あとで", action: "__real:あとでにします", tone: "ghost" },
+        ]
+      : faqImportPreviewSuggested
+      ? [
+          { label: "登録して", action: "__real:登録してください", tone: "primary" },
+          { label: "やめておく", action: "__real:やめておきます", tone: "ghost" },
         ]
       : publishDraftsPendingConfirm
       ? [
@@ -3012,6 +3029,49 @@ function CardView({
               )}
             </div>
           ))}
+        </CardShell>
+      );
+    // H-5: suggest_faq_import_from_text/urls のFAQ案一覧。件数は「全total件中faqs.length件」
+    // で20件上限の切り詰めを黙って隠さない(chatSessionListと同じ作法)。登録/取り消しの
+    // 実行導線はカード内ボタンではなく、メッセージのchips(登録して/やめておく)側に持たせる
+    // (sessionListCard・weeklySummary等の他カードと同じく、実行はチップ、カードは提示に徹する)。
+    case "faqImportPreview":
+      return (
+        <CardShell hd={<><span>📥</span>FAQ取り込み候補（全{card.total}件中{card.faqs.length}件）</>}>
+          {card.faqs.map((f, i) => (
+            <div key={i} style={{ display: "flex", flexDirection: "column", gap: 4, paddingBottom: 10, borderBottom: "1px solid var(--border)" }}>
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 8, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 16, fontWeight: 600, color: "var(--foreground)" }}>{f.question}</span>
+                {f.duplicate && (
+                  <span style={{ padding: "1px 8px", borderRadius: 999, fontSize: 12.5, fontWeight: 600, background: "rgba(251,191,36,0.15)", border: "1px solid rgba(251,191,36,0.3)", color: "#b45309", flexShrink: 0 }}>
+                    重複の可能性
+                  </span>
+                )}
+              </div>
+              <div style={{ fontSize: 15, color: "var(--muted-foreground)" }}>{f.answer}</div>
+              {f.sourceUrl && (
+                <div style={{ fontSize: 12.5, color: "var(--muted-foreground)", wordBreak: "break-all" }}>取得元: {f.sourceUrl}</div>
+              )}
+            </div>
+          ))}
+          {card.errorUrls.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: "#dc2626" }}>取得できなかったURL（{card.errorUrls.length}件）</div>
+              {card.errorUrls.map((e) => (
+                <div key={e.url} style={{ fontSize: 12.5, color: "var(--muted-foreground)", wordBreak: "break-all" }}>
+                  {e.url}（{e.error}）
+                </div>
+              ))}
+            </div>
+          )}
+          {card.truncated && (
+            <div style={{ fontSize: 12.5, color: "var(--muted-foreground)" }}>
+              ※ 生成数が上限を超えたため、先頭{card.faqs.length}件のみを対象にしています。
+            </div>
+          )}
+          <div style={{ fontSize: 12.5, color: "var(--muted-foreground)" }}>
+            下のボタンから登録するか決められます。
+          </div>
         </CardShell>
       );
     default:
