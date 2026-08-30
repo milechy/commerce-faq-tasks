@@ -39,9 +39,13 @@ const GROQ_API_BASE = 'https://api.groq.com/openai/v1/chat/completions';
 /**
  * Phase(Anam usage tracking): Groqストリーミング応答のusageをusage_logsへ記録する。
  * fire-and-forget(trackUsage内部でsetImmediate)、レスポンスをブロックしない。
- * requestId は req.requestId(requestIdMiddlewareが全リクエストに付与する安定キー)を使う。
- * usage_logs は request_id UNIQUE + ON CONFLICT DO NOTHING のため、同一requestIdで
- * 複数回呼ばれても(再接続・エラー後の二重呼び出し等)二重計上されない。
+ * requestId は req.requestId(requestIdMiddlewareがサーバ新規採番する正規ID)を使う。
+ * 同一HTTPリクエスト内で複数回呼ばれても req.requestId は固定なので二重計上されない
+ * (usage_logs の request_id UNIQUE + ON CONFLICT DO NOTHING が backstop)。
+ * ★注意★ req.requestId はクライアントの X-Request-ID ヘッダに依存しない(セキュリティ上、
+ * request-id.ts が受信ヘッダを再利用しないよう変更済み)。したがって別々のHTTPリクエストと
+ * して再POSTされた場合は別 request_id となり各回計上される。これは意図的なトレードオフで、
+ * 固定ヘッダの再利用による課金すり抜け(旧挙動の穴)を塞ぐ方を優先している。
  */
 function trackAnamChatUsage(params: {
   tenantId: string;
@@ -354,8 +358,10 @@ export function registerAnamChatStreamRoutes(app: Express, apiStack: RequestHand
         // 中断時も保留分を取りこぼさない(伏せ字化は flushPending 内で適用済み)。
         flushPending(true);
         // ストリームが正常完了/中断のどちらでも、ここまでに得たusage(未取得ならundefined)で計上する。
-        // requestId(req.requestId)は1リクエストにつき固定なので、再接続で二重にPOSTされない限り
-        // 二重計上は発生しない。二重POST自体はusage_logsのrequest_id UNIQUE制約で防がれる。
+        // requestId(req.requestId)は1つのHTTPリクエスト内では固定なので、同一リクエスト内の
+        // 二重呼び出し(finally経由など)では二重計上されない。別リクエストとしての再POSTは
+        // 別のサーバ採番IDになるため各回計上される(request-id.ts のコメント参照。クライアント
+        // ヘッダ再利用による課金すり抜けを塞ぐための意図的挙動)。
         trackAnamChatUsage({ tenantId, requestId: req.requestId, model: resolvedModel, inputTokens, outputTokens });
       }
 
