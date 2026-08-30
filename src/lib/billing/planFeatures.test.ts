@@ -1,6 +1,9 @@
 // src/lib/billing/planFeatures.test.ts
 // LP料金表(Starter/Growth/Enterprise)に対応するプラン別機能制限のテスト
 
+import { readFileSync } from "fs";
+import { join } from "path";
+
 const mockQuery = jest.fn();
 jest.mock("../db", () => ({
   getPool: () => ({ query: mockQuery }),
@@ -18,7 +21,7 @@ import {
   resolveShareForTenantPlan,
   planShowsAdPromo,
 } from "./planFeatures";
-import type { GatedFeature } from "./planFeatures";
+import type { GatedFeature, TenantPlan } from "./planFeatures";
 
 // ゲート一覧を各テストで書き写すと、新しいゲートを足したときに片方だけ更新されて
 // 「新ゲートだけ fail-safe が検証されていない」状態になる。1箇所に置く。
@@ -302,17 +305,28 @@ describe("queryTenantPlanOrThrow", () => {
   });
 });
 
-// ★queryTenantPlan と queryTenantPlanOrThrow のドリフト検知★
-// 2つの関数は allowlist を独立に実装しているため、片方だけプラン段を追加/修正して
-// もう片方を取り残す事故が起きうる(このファイルの他のdescribeが個別に固定している
-// 内容と重複するが、ここでは「同じ入力に対し両者が常に同じ結論を出す」という
-// 関係性そのものをテーブル駆動で1箇所に集約して固定する)。
-// DB例外時だけは意図的に向きが違う(queryTenantPlanはfree_ad、OrThrow版はthrow)ため
-// このテーブルには含めない(例外時の挙動は上のdescribeでそれぞれ個別に固定済み)。
-describe("queryTenantPlan と queryTenantPlanOrThrow のドリフト検知(DB例外以外)", () => {
+// ★queryTenantPlan と queryTenantPlanOrThrow と queryTenantPlanResult のドリフト検知★
+// 3つの関数は「文字列 → TenantPlan」の判定ロジックを共有関数(parseKnownPlan)に
+// 集約済みだが、将来また分岐してしまう事故を防ぐため、ここでは実装詳細に依らず
+// 「同じ入力に対し3者が常に同じ結論を出す」という関係性そのものをテーブル駆動で
+// 1箇所に集約して固定する(このファイルの他のdescribeが個別に固定している内容と
+// 重複するが、これは意図的な二重検証)。
+// DB例外時だけは意図的に向きが違う(queryTenantPlanはfree_ad、OrThrowはthrow、
+// Resultはnull)ため、このテーブルには含めない(例外時の挙動は上のdescribeで
+// それぞれ個別に固定済み)。
+//
+// queryTenantPlanResult は戻り値の型が TenantPlan | null で他の2関数(TenantPlan)と
+// 異なるため、そのままでは比較できない。「未確定(null)」と「free_adへ丸められた
+// 結果」を同一視して比較できるよう、null は "free_ad" へ正規化してから比較する
+// (これは「既知の5値かどうかの判定が一致しているか」だけを見るためであり、
+// queryTenantPlanResult のfail-safeの向き自体は他のdescribeで別途固定済み)。
+describe("queryTenantPlan と queryTenantPlanOrThrow と queryTenantPlanResult のドリフト検知(DB例外以外)", () => {
   beforeEach(() => {
     mockQuery.mockReset();
   });
+
+  // queryTenantPlanResult は null を "free_ad" とみなして比較する(上記コメント参照)。
+  const normalize = (plan: TenantPlan | null): TenantPlan => plan ?? "free_ad";
 
   it.each([
     "free_ad",
@@ -325,24 +339,35 @@ describe("queryTenantPlan と queryTenantPlanOrThrow のドリフト検知(DB例
     "STANDARD",
     " growth ",
     "enterprise_trial",
-  ])("plan=%p で queryTenantPlan と queryTenantPlanOrThrow が同じ結論を返す", async (plan) => {
-    mockQuery.mockResolvedValueOnce({ rows: [{ plan }] });
-    const viaThrow = await queryTenantPlanOrThrow({ query: mockQuery }, "tenant-a");
+  ])(
+    "plan=%p で queryTenantPlan・queryTenantPlanOrThrow・queryTenantPlanResult が同じ結論を返す",
+    async (plan) => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan }] });
+      const viaThrow = await queryTenantPlanOrThrow({ query: mockQuery }, "tenant-a");
 
-    mockQuery.mockResolvedValueOnce({ rows: [{ plan }] });
-    const viaCatch = await queryTenantPlan({ query: mockQuery }, "tenant-a");
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan }] });
+      const viaCatch = await queryTenantPlan({ query: mockQuery }, "tenant-a");
 
-    expect(viaThrow).toBe(viaCatch);
-  });
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan }] });
+      const viaResult = await queryTenantPlanResult({ query: mockQuery }, "tenant-a");
 
-  it("テナント行が存在しない(rowsが空)場合も両者が同じ結論(free_ad)を返す", async () => {
+      expect(viaThrow).toBe(viaCatch);
+      expect(normalize(viaResult)).toBe(viaCatch);
+    },
+  );
+
+  it("テナント行が存在しない(rowsが空)場合も3者が同じ結論(free_ad相当)を返す", async () => {
     mockQuery.mockResolvedValueOnce({ rows: [] });
     const viaThrow = await queryTenantPlanOrThrow({ query: mockQuery }, "tenant-a");
 
     mockQuery.mockResolvedValueOnce({ rows: [] });
     const viaCatch = await queryTenantPlan({ query: mockQuery }, "tenant-a");
 
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    const viaResult = await queryTenantPlanResult({ query: mockQuery }, "tenant-a");
+
     expect(viaThrow).toBe(viaCatch);
+    expect(normalize(viaResult)).toBe(viaCatch);
   });
 });
 
@@ -565,5 +590,27 @@ describe("planShowsAdPromo", () => {
 
   it("空文字は false", () => {
     expect(planShowsAdPromo("")).toBe(false);
+  });
+});
+
+// 再発防止: 「文字列 → TenantPlan」の5値allowlistは parseKnownPlan 1箇所にのみ
+// 存在するべきで、queryTenantPlan/queryTenantPlanOrThrow/queryTenantPlanResult が
+// それぞれ独自にコピペし直す(2026-08-30に実際に起きていた状態)ことを禁止する。
+// 将来また別の関数がコピペで増えたら、このテストが落ちる。
+describe("プラン文字列のallowlistが1箇所に集約されている(再発防止)", () => {
+  const source = readFileSync(join(__dirname, "planFeatures.ts"), "utf-8");
+
+  it("5値の allowlist チェーンはファイル内に1回しか出現しない", () => {
+    const allowlistChain =
+      /plan === "free_ad"\s*\|\|\s*plan === "starter"\s*\|\|\s*plan === "standard"\s*\|\|\s*plan === "growth"\s*\|\|\s*plan === "enterprise"/g;
+    const matches = source.match(allowlistChain) ?? [];
+    expect(matches).toHaveLength(1);
+  });
+
+  it("queryTenantPlan/queryTenantPlanOrThrow/queryTenantPlanResultは共有のparseKnownPlanを呼ぶ(独自allowlistを持たない)", () => {
+    expect(source).toMatch(/function parseKnownPlan\(/);
+    expect(source).toMatch(/export async function queryTenantPlan\([\s\S]*?parseKnownPlan\(/);
+    expect(source).toMatch(/export async function queryTenantPlanOrThrow\([\s\S]*?parseKnownPlan\(/);
+    expect(source).toMatch(/export async function queryTenantPlanResult\([\s\S]*?parseKnownPlan\(/);
   });
 });
