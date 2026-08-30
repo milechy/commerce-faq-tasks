@@ -622,3 +622,133 @@ describe('E5: RAGを介さない回答経路の封鎖', () => {
     expect(res.status).toBe(401);
   });
 });
+
+describe('POST /api/avatar/chat-stream — L8 出力ガード(guardOutput: PII/システムプロンプト片/過長RAG抜粋)', () => {
+  const ORIGINAL_ENV = { ...process.env };
+
+  afterEach(() => {
+    process.env = { ...ORIGINAL_ENV };
+    process.env.GROQ_API_KEY = 'test-groq-key';
+  });
+
+  /** ストリーム応答(改行区切りJSON)の content フィールドを結合して返す。 */
+  function collectStreamContent(body: string): string {
+    return body
+      .split('\n')
+      .filter((l) => l.trim().length > 0)
+      .map((l) => JSON.parse(l) as { content?: string; error?: string })
+      .map((o) => o.content ?? '')
+      .join('');
+  }
+
+  it('チャンク境界で分割されたPII(電話番号)も、全文再ガードによりマスクされる', async () => {
+    process.env.OUTPUT_GUARD_ENABLED = 'true';
+    // 電話番号がGroqのdeltaチャンク境界で割れて届くケース。
+    (global as any).fetch = jest
+      .fn()
+      .mockResolvedValue(makeGroqStreamResponse(['お電話は ', '03-1234', '-5678', ' までどうぞ。']));
+
+    const res = await request(makeApp('carnation', 'req-pii'))
+      .post('/api/avatar/chat-stream')
+      .send({ messages: [{ role: 'user', content: '電話番号は' }], sessionId: 'sess-pii' });
+
+    expect(res.status).toBe(200);
+    const streamed = collectStreamContent(res.text);
+    expect(streamed).not.toContain('03-1234-5678');
+    expect(streamed).toContain('[個人情報のため非表示]');
+
+    // 保存されるassistant本文もマスク済み(漏洩をログにも残さない)。
+    const assistantSave = mockSaveMessage.mock.calls.find((c) => c[0].role === 'assistant');
+    expect(assistantSave![0].content).not.toContain('03-1234-5678');
+    expect(assistantSave![0].content).toContain('[個人情報のため非表示]');
+  });
+
+  it('システムプロンプト片(スニペット)が応答に混入するとマスクされる', async () => {
+    process.env.OUTPUT_GUARD_ENABLED = 'true';
+    (global as any).fetch = jest
+      .fn()
+      .mockResolvedValue(
+        makeGroqStreamResponse(['内部実装では ', 'ragExcerpt.slice(0, 200)', ' を使います。']),
+      );
+
+    const res = await request(makeApp('carnation', 'req-snippet'))
+      .post('/api/avatar/chat-stream')
+      .send({ messages: [{ role: 'user', content: '仕組みを教えて' }], sessionId: 'sess-snippet' });
+
+    expect(res.status).toBe(200);
+    const streamed = collectStreamContent(res.text);
+    expect(streamed).not.toContain('ragExcerpt.slice(0, 200)');
+    expect(streamed).toContain('[内部情報が検出されたため非表示]');
+  });
+
+  it('過長なRAG抜粋(区切り無しの長い塊)は上限で切り詰められる', async () => {
+    process.env.OUTPUT_GUARD_ENABLED = 'true';
+    process.env.MAX_RAG_EXCERPT_LENGTH = '20';
+    // 句読点・改行を含まない50文字の塊 → 20文字 + '...' に切り詰められる。
+    (global as any).fetch = jest
+      .fn()
+      .mockResolvedValue(makeGroqStreamResponse(['あ'.repeat(50)]));
+
+    const res = await request(makeApp('carnation', 'req-rag'))
+      .post('/api/avatar/chat-stream')
+      .send({ messages: [{ role: 'user', content: '詳しく' }], sessionId: 'sess-rag' });
+
+    expect(res.status).toBe(200);
+    const streamed = collectStreamContent(res.text);
+    expect(streamed).toBe('あ'.repeat(20) + '...');
+  });
+
+  it('正常な応答はガードで書き換わらず素通りする(結合後に元の全文と一致)', async () => {
+    process.env.OUTPUT_GUARD_ENABLED = 'true';
+    (global as any).fetch = jest
+      .fn()
+      .mockResolvedValue(
+        makeGroqStreamResponse(['こんにちは、', '本日はどのような', 'ご用件でしょうか。']),
+      );
+
+    const res = await request(makeApp('carnation', 'req-normal'))
+      .post('/api/avatar/chat-stream')
+      .send({ messages: [{ role: 'user', content: 'こんにちは' }], sessionId: 'sess-normal' });
+
+    expect(res.status).toBe(200);
+    const streamed = collectStreamContent(res.text);
+    expect(streamed).toBe('こんにちは、本日はどのようなご用件でしょうか。');
+
+    const assistantSave = mockSaveMessage.mock.calls.find((c) => c[0].role === 'assistant');
+    expect(assistantSave![0].content).toBe('こんにちは、本日はどのようなご用件でしょうか。');
+  });
+
+  it('OUTPUT_GUARD_ENABLED未設定でも、本番相当(NODE_ENV=production)では既定ONでPIIがマスクされる(顧客chatと同じfail-safe)', async () => {
+    process.env.NODE_ENV = 'production';
+    delete process.env.OUTPUT_GUARD_ENABLED;
+    (global as any).fetch = jest
+      .fn()
+      .mockResolvedValue(makeGroqStreamResponse(['ご連絡先は ', '03-9876-5432', ' です。']));
+
+    const res = await request(makeApp('carnation', 'req-failsafe'))
+      .post('/api/avatar/chat-stream')
+      .send({ messages: [{ role: 'user', content: '連絡先を教えてください' }], sessionId: 'sess-failsafe' });
+
+    expect(res.status).toBe(200);
+    const streamed = collectStreamContent(res.text);
+    expect(streamed).not.toContain('03-9876-5432');
+    expect(streamed).toContain('[個人情報のため非表示]');
+  });
+
+  it('社内用語(redactInternalTerms)はguardOutputフラグに関係なく常に伏せられる', async () => {
+    // OUTPUT_GUARD_ENABLED は既定OFF(NODE_ENV=test)のまま。それでも社内用語は伏せる。
+    delete process.env.OUTPUT_GUARD_ENABLED;
+    (global as any).fetch = jest
+      .fn()
+      .mockResolvedValue(makeGroqStreamResponse(['これは ', 'RAJIUCEの法則', ' に基づきます。']));
+
+    const res = await request(makeApp('carnation', 'req-internal'))
+      .post('/api/avatar/chat-stream')
+      .send({ messages: [{ role: 'user', content: '根拠は' }], sessionId: 'sess-internal' });
+
+    expect(res.status).toBe(200);
+    const streamed = collectStreamContent(res.text);
+    expect(streamed).not.toContain('RAJIUCE');
+    expect(streamed).toContain('独自の考え方');
+  });
+});

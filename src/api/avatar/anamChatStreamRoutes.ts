@@ -17,7 +17,7 @@ import { trackUsage } from '../../lib/billing/usageTracker';
 import { sanitizeInput as l5SanitizeInput, sessionHistoryStore } from '../../middleware/inputSanitizer';
 import { applyPromptFirewall } from '../../middleware/promptFirewall';
 import { checkTopic } from '../../middleware/topicGuard';
-import { redactInternalTerms, INTERNAL_TERM_HOLD_CHARS } from '../../middleware/outputGuard';
+import { redactInternalTerms, guardOutput, OUTPUT_GUARD_HOLD_CHARS } from '../../middleware/outputGuard';
 
 const MAX_ANAM_MESSAGES = 20;
 const MAX_ANAM_MESSAGE_LENGTH = 2000;
@@ -35,6 +35,27 @@ function isAnamChatStreamEnabled(): boolean {
 }
 
 const GROQ_API_BASE = 'https://api.groq.com/openai/v1/chat/completions';
+
+/**
+ * L8 ストリーミング送出境界。空白・改行・句読点で送出を区切る。
+ * guardOutput/redactInternalTerms のパターン(電話/メール/郵便番号/社内用語/
+ * システムプロンプト片)はいずれもこれらの境界文字を内部に含まないため、
+ * 「安全域内の最後の境界」までしか送出しないことで、まだ形成途中のトークンを
+ * 生のまま先出しして後からマスクできなくなる事故(特に可変長の email)を防ぐ。
+ */
+const EMIT_BOUNDARY_RE = /[\s。、！？.,!?]/;
+
+/**
+ * str の [floor, horizon) 範囲で最後に現れる境界文字の直後位置を返す。
+ * 見つからなければ floor(=何も新規送出しない)を返す。
+ */
+function lastEmitBoundary(str: string, horizon: number, floor: number): number {
+  const start = Math.min(horizon, str.length) - 1;
+  for (let i = start; i >= floor; i--) {
+    if (EMIT_BOUNDARY_RE.test(str[i]!)) return i + 1;
+  }
+  return floor;
+}
 
 /**
  * Phase(Anam usage tracking): Groqストリーミング応答のusageをusage_logsへ記録する。
@@ -303,16 +324,29 @@ export function registerAnamChatStreamRoutes(app: Express, apiStack: RequestHand
 
       const decoder = new TextDecoder();
       let buffer = '';
+      // 送出済みのガード済み本文(saveMessage/計測用)。
       let assistantContent = '';
-      // 社内用語がチャンク境界で分割されると素通りするため、最長パターン長を超える
-      // 末尾を送信保留し、用語が丸ごと揃った状態で伏せてから送出する。
-      let pendingOut = '';
-      const flushPending = (final: boolean): void => {
-        pendingOut = redactInternalTerms(pendingOut).text;
-        const cut = final ? pendingOut.length : pendingOut.length - INTERNAL_TERM_HOLD_CHARS;
-        if (cut <= 0) return;
-        const emit = pendingOut.slice(0, cut);
-        pendingOut = pendingOut.slice(cut);
+      // 受信した生の全文。チャンク境界で分割された社内用語/PII/システムプロンプト片/
+      // 過長RAG抜粋を取りこぼさないため、確定済み全文に対して毎回ガードを掛け直す。
+      // 顧客chat経路(/api/chat)と同じ guardOutput を適用し(既定ON、securityLayerConfig
+      // が NODE_ENV 不明時も fail-safe でON)、redactInternalTerms(フラグ非依存)も併用する。
+      let rawAccumulated = '';
+      // これまでに送出したガード済み文字数(ガード済み文字列は左→右で確定するため
+      // 既送出プレフィックスは後から変化しない=安定)。
+      let emittedLen = 0;
+      const flushGuarded = (final: boolean): void => {
+        // L8: 社内用語伏せ字(常時) + guardOutput(システムプロンプト片/PII/過長RAG抜粋、既定ON)。
+        const guarded = guardOutput(redactInternalTerms(rawAccumulated).text).sanitizedResponse;
+        // 未確定の末尾は保留。パターンは境界文字を含まないため、安全域(guarded.length -
+        // HOLD)内の最後の境界までに送出を限定すれば、形成途中のPII/社内用語/プロンプト片を
+        // 生のまま先出しすることはない(HOLD は最長固定パターンを覆う)。境界が無い長い連続列は
+        // final まで(または過長RAG抜粋の切り詰めまで)保留され、安全側に倒れる。
+        const safeCut = final
+          ? guarded.length
+          : lastEmitBoundary(guarded, guarded.length - OUTPUT_GUARD_HOLD_CHARS, emittedLen);
+        if (safeCut <= emittedLen) return;
+        const emit = guarded.slice(emittedLen, safeCut);
+        emittedLen = safeCut;
         assistantContent += emit;
         res.write(JSON.stringify({ content: emit }) + '\n');
       };
@@ -341,8 +375,8 @@ export function registerAnamChatStreamRoutes(app: Express, apiStack: RequestHand
               };
               const content = parsed.choices?.[0]?.delta?.content ?? '';
               if (content) {
-                pendingOut += content;
-                flushPending(false);
+                rawAccumulated += content;
+                flushGuarded(false);
               }
               // stream_options.include_usage時、最終チャンクはchoicesが空でusageのみを含む。
               if (typeof parsed.usage?.prompt_tokens === 'number' && typeof parsed.usage?.completion_tokens === 'number') {
@@ -355,8 +389,8 @@ export function registerAnamChatStreamRoutes(app: Express, apiStack: RequestHand
           }
         }
       } finally {
-        // 中断時も保留分を取りこぼさない(伏せ字化は flushPending 内で適用済み)。
-        flushPending(true);
+        // 中断時も保留分を取りこぼさない(ガードは flushGuarded 内で全文に適用済み)。
+        flushGuarded(true);
         // ストリームが正常完了/中断のどちらでも、ここまでに得たusage(未取得ならundefined)で計上する。
         // requestId(req.requestId)は1つのHTTPリクエスト内では固定なので、同一リクエスト内の
         // 二重呼び出し(finally経由など)では二重計上されない。別リクエストとしての再POSTは

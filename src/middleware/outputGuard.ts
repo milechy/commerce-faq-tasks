@@ -65,6 +65,20 @@ const INTERNAL_TERM_PATTERNS: RegExp[] = [
 export const INTERNAL_TERM_HOLD_CHARS = 16;
 
 /**
+ * ストリーミングで guardOutput を掛ける際に送信を保留すべき末尾文字数。
+ * システムプロンプト片(DEFAULT_SYSTEM_SNIPPETS)や社内用語がチャンク境界で
+ * 分割されても、確定前の断片を生のまま送らないよう、最長パターン長以上を保留する。
+ * PII の固定長パターン(電話 最大14文字/郵便番号8文字)もこの範囲に収まる。
+ * 既定スニペットが変わっても追従するよう、実データから最大長を算出する。
+ * (email は可変長のため hold 単独では覆えないが、送出は「安全域内の最後の境界」
+ *  までに限定するため、境界を含まない PII トークンは丸ごと保留される。呼び出し側参照)
+ */
+export const OUTPUT_GUARD_HOLD_CHARS = Math.max(
+  INTERNAL_TERM_HOLD_CHARS,
+  ...DEFAULT_SYSTEM_SNIPPETS.map((s) => s.length),
+);
+
+/**
  * 社内用語を伏せる。OUTPUT_GUARD_ENABLED に依存せず常に適用する
  * (フラグ無効化で社内用語が素通りする状態を作らないため)。
  */
