@@ -7,6 +7,7 @@ import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddlewa
 import { getPool } from "../../../lib/db";
 import { getSessions, getMessages, getActiveEscalations, resolveEscalation, saveMessage, normalizeSessionListParams, normalizeEscalationSourceFilter, getConversionTypes, recordOutcome } from "./chatHistoryRepository";
 import { deleteSession } from "./deleteSessionRepository";
+import { exportVisitorData, deleteVisitorData } from "./visitorDataRepository";
 import { logger } from '../../../lib/logger';
 import { isAllowedAdminRole, roleAuthMiddleware } from "../../middleware/roleAuth";
 import { z } from "zod";
@@ -213,6 +214,110 @@ export function registerChatHistoryRoutes(app: Express): void {
         }
         logger.warn("[DELETE /v1/admin/chat-history/sessions/:id]", err);
         return res.status(500).json({ error: "セッションの削除に失敗しました" });
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------------
+  // GDPR/個情法: visitor 単位のデータ開示(エクスポート)/削除
+  //
+  // visitor_id は (tenant_id, visitor_id) の複合でのみスコープする(単独では衝突する)。
+  // そのため super_admin であっても tenant の特定を必須にする(?tenant=xxx)。指定なしは
+  // 全テナントの同一 visitor_id を巻き込みかねないため 400 で弾く。
+  // -----------------------------------------------------------------------
+
+  // visitor スコープを解決する。解決できなければ { error, status } を返す。
+  function resolveVisitorTenant(
+    req: Request,
+    actorRole: string | undefined,
+  ): { tenantId: string } | { error: string; status: number } {
+    const su = (req as any).supabaseUser as Record<string, any> | undefined;
+    const jwtTenantId: string = su?.app_metadata?.tenant_id ?? "";
+    const isSuperAdmin = actorRole === "super_admin";
+    if (isSuperAdmin) {
+      const fromQuery = (req.query["tenant"] as string | undefined) || "";
+      if (!fromQuery.trim()) {
+        return { error: "super_admin は tenant の指定が必須です(?tenant=xxx)", status: 400 };
+      }
+      return { tenantId: fromQuery.trim() };
+    }
+    if (!jwtTenantId || jwtTenantId.trim() === "") {
+      return { error: "この操作を実行する権限がありません", status: 403 };
+    }
+    return { tenantId: jwtTenantId };
+  }
+
+  // GET /v1/admin/chat-history/visitors/:visitorId/export — 開示請求(JSON)
+  app.get(
+    "/v1/admin/chat-history/visitors/:visitorId/export",
+    async (req: Request, res: Response) => {
+      const visitorId: string = req.params["visitorId"] ?? "";
+      const su = (req as any).supabaseUser as Record<string, any> | undefined;
+      const actorRole = su?.app_metadata?.role;
+      if (!isAllowedAdminRole(actorRole)) {
+        return res.status(403).json({ error: "この操作を実行する権限がありません" });
+      }
+      if (!visitorId.trim()) {
+        return res.status(400).json({ error: "visitorId が必要です" });
+      }
+      const scope = resolveVisitorTenant(req, actorRole);
+      if ("error" in scope) {
+        return res.status(scope.status).json({ error: scope.error });
+      }
+
+      try {
+        const result = await exportVisitorData({
+          tenantId: scope.tenantId,
+          visitorId: visitorId.trim(),
+        });
+        return res.json(result);
+      } catch (err) {
+        logger.warn("[GET /v1/admin/chat-history/visitors/:id/export]", err);
+        return res.status(500).json({ error: "エクスポートに失敗しました" });
+      }
+    },
+  );
+
+  // DELETE /v1/admin/chat-history/visitors/:visitorId — 削除請求
+  // Body: { reason: string (5–500文字) }
+  app.delete(
+    "/v1/admin/chat-history/visitors/:visitorId",
+    async (req: Request, res: Response) => {
+      const visitorId: string = req.params["visitorId"] ?? "";
+      const su = (req as any).supabaseUser as Record<string, any> | undefined;
+      const actorRole = su?.app_metadata?.role;
+      if (!isAllowedAdminRole(actorRole)) {
+        return res.status(403).json({ error: "この操作を実行する権限がありません" });
+      }
+      const actorEmail: string = su?.email ?? su?.app_metadata?.email ?? "";
+      if (!visitorId.trim()) {
+        return res.status(400).json({ error: "visitorId が必要です" });
+      }
+      const scope = resolveVisitorTenant(req, actorRole);
+      if ("error" in scope) {
+        return res.status(scope.status).json({ error: scope.error });
+      }
+
+      const { reason } = (req.body ?? {}) as Record<string, unknown>;
+      if (typeof reason !== "string" || reason.trim().length < 5 || reason.trim().length > 500) {
+        return res.status(400).json({ error: "reason は5文字以上500文字以下の文字列が必要です" });
+      }
+
+      try {
+        const result = await deleteVisitorData({
+          tenantId: scope.tenantId,
+          visitorId: visitorId.trim(),
+          actorRole,
+          actorEmail,
+          reason: reason.trim(),
+        });
+        return res.json(result);
+      } catch (err) {
+        if ((err as { code?: string }).code === "55P03") {
+          return res.status(409).json({ error: "他の処理中のため、少し時間をおいて再度お試しください" });
+        }
+        logger.warn("[DELETE /v1/admin/chat-history/visitors/:id]", err);
+        return res.status(500).json({ error: "削除に失敗しました" });
       }
     },
   );

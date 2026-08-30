@@ -17,6 +17,7 @@ import { invalidateBillingPlanCache } from "../../../lib/billing/usageTracker";
 import { syncSubscriptionForTenant, needsBillingAttention, type SubscriptionSyncResult } from "../../../lib/billing/subscriptionSync";
 import { deriveOnboardingStage, type OnboardingStageStatus } from "../agent/onboardingStage";
 import { isValidOriginPattern } from "../../middleware/originCheck";
+import { purgeTenantChatData } from "../chat-history/retentionRepository";
 
 // free_ad(starterより下の最下段。広告原資の無料プラン)と
 // standard(starter と growth の間。既定アバターの利用を開放する段)を含む5値。
@@ -1084,6 +1085,92 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
     } catch (err) {
       logger.warn("[POST /v1/admin/tenants/:id/kill-switch]", err);
       return res.status(500).json({ error: "kill-switch の実行に失敗しました" });
+    }
+  });
+
+  // POST /v1/admin/tenants/:id/purge-chat-data — テナント退会時の会話データ消去(Super Admin専用)
+  //
+  // 会話データの一括消去は取り返しがつかないため、既定は「予約 → 猶予期間後にバッチ消去」。
+  // Body:
+  //   { mode: "schedule", reason }              → 消去を予約(chat_data_purge_requested_at=NOW)
+  //   { mode: "cancel" }                        → 予約を解除
+  //   { mode: "immediate", confirm: <id>, reason } → 即時全消去(confirm がテナントIDと一致必須)
+  app.post("/v1/admin/tenants/:id/purge-chat-data", tenantAuth, requireSuperAdmin, async (req: Request, res: Response) => {
+    const { id } = req.params;
+    const su = (req as AuthedReq).supabaseUser as Record<string, any> | undefined;
+    const actorRole = (su?.app_metadata?.role as string | undefined) ?? "super_admin";
+    const actorEmail = (su?.["email"] as string | undefined) ?? (su?.app_metadata?.email as string | undefined) ?? "";
+
+    const bodySchema = z.object({
+      mode: z.enum(["schedule", "cancel", "immediate"]),
+      reason: z.string().trim().min(5).max(500).optional(),
+      confirm: z.string().optional(),
+    });
+    const parsed = bodySchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: "invalid_request", details: parsed.error.issues });
+    }
+    const { mode, reason, confirm } = parsed.data;
+
+    try {
+      const check = await db.query("SELECT id FROM tenants WHERE id = $1", [id]);
+      if (check.rowCount === 0) {
+        return res.status(404).json({ error: "not_found", message: "テナントが見つかりません。" });
+      }
+
+      if (mode === "cancel") {
+        await db.query(
+          "UPDATE tenants SET chat_data_purge_requested_at = NULL, updated_at = NOW() WHERE id = $1",
+          [id],
+        );
+        await db.query(
+          `INSERT INTO audit_logs (tenant_id, action, actor_role, actor_email, target_type, target_id, metadata)
+           VALUES ($1, 'tenant_chat_data_purge_cancel', $2, $3, 'tenant', $1, '{}'::jsonb)`,
+          [id, actorRole, actorEmail],
+        );
+        return res.json({ ok: true, tenantId: id, mode, chat_data_purge_requested_at: null });
+      }
+
+      // schedule / immediate は reason 必須
+      if (!reason) {
+        return res.status(400).json({ error: "reason は5文字以上500文字以下の文字列が必要です" });
+      }
+
+      if (mode === "schedule") {
+        const upd = await db.query<{ chat_data_purge_requested_at: string }>(
+          "UPDATE tenants SET chat_data_purge_requested_at = NOW(), updated_at = NOW() WHERE id = $1 RETURNING chat_data_purge_requested_at",
+          [id],
+        );
+        await db.query(
+          `INSERT INTO audit_logs (tenant_id, action, actor_role, actor_email, target_type, target_id, metadata)
+           VALUES ($1, 'tenant_chat_data_purge_schedule', $2, $3, 'tenant', $1, $4)`,
+          [id, actorRole, actorEmail, JSON.stringify({ reason })],
+        );
+        return res.json({
+          ok: true,
+          tenantId: id,
+          mode,
+          chat_data_purge_requested_at: upd.rows[0]?.chat_data_purge_requested_at ?? null,
+        });
+      }
+
+      // mode === "immediate": 事故防止に confirm がテナントIDと完全一致すること
+      if (confirm !== id) {
+        return res.status(400).json({
+          error: "confirm_mismatch",
+          message: "即時消去には confirm にテナントIDを指定してください。",
+        });
+      }
+      const result = await purgeTenantChatData({
+        tenantId: id,
+        actorRole,
+        actorEmail,
+        reason,
+      });
+      return res.json({ ok: true, tenantId: id, mode, purged: result });
+    } catch (err) {
+      logger.warn("[POST /v1/admin/tenants/:id/purge-chat-data]", err);
+      return res.status(500).json({ error: "会話データ消去に失敗しました" });
     }
   });
 
