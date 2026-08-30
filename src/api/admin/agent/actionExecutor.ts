@@ -509,6 +509,34 @@ export type KnowledgeGapsListCardPayload = {
   totalCount: number;
 };
 
+// GID 1217972976609524 (H-5): suggest_faq_import_from_text / suggest_faq_import_from_urls
+// が返す、DB未登録のFAQ案一覧カード。旧UI(UrlScrapeTab.tsx等)の完動プレビュー画面と同じ
+// 「候補を見て選ぶ」体験をチャット(Surface B)側にも出すためのもの。
+// admin-ui/CLAUDE.md「カードは機能ごとに専用のCard.kindを増やさない」方針により、
+// テキスト取込/URL取込の2ツールで1つのkindを共有する(sourceで区別)。commit_faq_import/
+// discard_faq_import が実際に読むのはこのカードではなく knowledgeImportStaging.ts に
+// サーバー側で保存済みのプレビュー結果であり、このカードは店主向けの表示専用。
+export type FaqImportPreviewCardPayload = {
+  kind: 'faq_import_preview';
+  source: 'text' | 'urls';
+  // MAX_IMPORT_FAQS(20件)上限で切り詰める前の生成件数。表示は「全total件中faqs.length件」
+  // (D3の教訓: 黙って切ってはならない)。
+  total: number;
+  truncated: boolean;
+  faqs: Array<{
+    question: string;
+    answer: string;
+    category: string | null;
+    // 既存FAQとのバイグラム類似度が閾値以上で重複と判定されたもの。
+    // commitTextFaqs/commitScrapeFaqs 側でも同じ判定に基づき登録時にスキップされる。
+    duplicate: boolean;
+    // source==='urls' のときのみ埋まる。どのURLから生成されたFAQかを店主が追える。
+    sourceUrl: string | null;
+  }>;
+  // source==='urls' で取得に失敗したURLの一覧。source==='text' では常に空配列。
+  errorUrls: Array<{ url: string; error: string }>;
+};
+
 // GID 1217752900578379 (R4): ルール効果(DiD推定)カード。
 // ruleEffect.ts のAPIレスポンスはトップレベルsnake_case・comparison内camelCaseが
 // 混在しているが(既存の歪みでスコープ外)、カードはここで一貫したcamelCaseに吸収する。
@@ -674,6 +702,7 @@ export type ActionCardPayload =
   | ChatSessionMessagesCardPayload
   | ConversationEvaluationCardPayload
   | KnowledgeGapsListCardPayload
+  | FaqImportPreviewCardPayload
   | RuleEffectCardPayload
   | AnalyticsTrendCardPayload
   | AbTestResultsCardPayload
@@ -3289,7 +3318,8 @@ export async function executeToolCall(
           return truncate('FAQを生成できませんでした。テキストをもう少し詳しく入力してみてください');
         }
 
-        const truncated = faqs.length > MAX_IMPORT_FAQS;
+        const total = faqs.length;
+        const truncated = total > MAX_IMPORT_FAQS;
         if (truncated) faqs = faqs.slice(0, MAX_IMPORT_FAQS);
 
         setStagedFaqImport(tenantId, sessionId, {
@@ -3310,7 +3340,22 @@ export async function executeToolCall(
         ];
         if (truncated) lines.push(`※ 生成数が上限(${MAX_IMPORT_FAQS}件)を超えたため、先頭${MAX_IMPORT_FAQS}件のみを対象にしています。`);
         lines.push('登録してよろしければお知らせください。');
-        return truncate(lines.join('\n'));
+
+        const card: FaqImportPreviewCardPayload = {
+          kind: 'faq_import_preview',
+          source: 'text',
+          total,
+          truncated,
+          faqs: faqs.map((f) => ({
+            question: f.question,
+            answer: f.answer,
+            category: f.category ?? null,
+            duplicate: f.duplicate != null,
+            sourceUrl: null,
+          })),
+          errorUrls: [],
+        };
+        return { text: truncate(lines.join('\n')), card };
       } catch (err) {
         logger.warn('[actionExecutor] suggest_faq_import_from_text failed', err);
         return truncate('FAQ案の生成に失敗しました');
@@ -3347,6 +3392,9 @@ export async function executeToolCall(
           return truncate(`指定されたURLからFAQを生成できませんでした${detail}`);
         }
 
+        // カードの「全N件中M件」表示は切り詰め前の生成数を使う(D3の教訓: 黙って切らない)。
+        const originalTotalFaqs = totalFaqs;
+
         // 20件上限は item をまたいで先頭から詰める（末尾の item・faq から間引く）
         let truncated = false;
         if (totalFaqs > MAX_IMPORT_FAQS) {
@@ -3369,7 +3417,9 @@ export async function executeToolCall(
           createdAt: Date.now(),
         });
 
-        const allFaqs = items.flatMap((item) => item.faqs);
+        // sourceUrl を運ぶためにカード用は item.url を持たせる(重複件数/例文の算出は
+        // 従来どおりquestion/duplicateのみ参照するため、この拡張はそちらに影響しない)。
+        const allFaqs = items.flatMap((item) => item.faqs.map((f) => ({ ...f, sourceUrl: item.url })));
         const dupCount = allFaqs.filter((f) => f.duplicate).length;
         const examples = allFaqs.slice(0, 3).map((f) => `「${f.question.slice(0, 40)}」`).join('、');
         const lines = [
@@ -3380,7 +3430,22 @@ export async function executeToolCall(
         if (errorItems.length > 0) lines.push(`取得できなかったURL: ${errorItems.length}件`);
         if (truncated) lines.push(`※ 生成数が上限(${MAX_IMPORT_FAQS}件)を超えたため、先頭${MAX_IMPORT_FAQS}件のみを対象にしています。`);
         lines.push('登録してよろしければお知らせください。');
-        return truncate(lines.join('\n'));
+
+        const card: FaqImportPreviewCardPayload = {
+          kind: 'faq_import_preview',
+          source: 'urls',
+          total: originalTotalFaqs,
+          truncated,
+          faqs: allFaqs.map((f) => ({
+            question: f.question,
+            answer: f.answer,
+            category: f.category ?? null,
+            duplicate: f.duplicate != null,
+            sourceUrl: f.sourceUrl,
+          })),
+          errorUrls: errorItems.map((item) => ({ url: item.url, error: item.error ?? '取得に失敗しました' })),
+        };
+        return { text: truncate(lines.join('\n')), card };
       } catch (err) {
         logger.warn('[actionExecutor] suggest_faq_import_from_urls failed', err);
         return truncate('FAQ案の生成に失敗しました');

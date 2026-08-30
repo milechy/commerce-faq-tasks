@@ -71,6 +71,24 @@ export type KnowledgeGapsListAgentActionCard = {
   totalCount: number;
 };
 
+// GID 1217972976609524 (H-5): suggest_faq_import_from_text / suggest_faq_import_from_urls
+// が返す、DB未登録のFAQ案一覧カード。フィールド形状はactionExecutor.tsの
+// FaqImportPreviewCardPayloadと1対1に保つ。
+export type FaqImportPreviewAgentActionCard = {
+  kind: "faq_import_preview";
+  source: "text" | "urls";
+  total: number;
+  truncated: boolean;
+  faqs: Array<{
+    question: string;
+    answer: string;
+    category: string | null;
+    duplicate: boolean;
+    sourceUrl: string | null;
+  }>;
+  errorUrls: Array<{ url: string; error: string }>;
+};
+
 export type AvatarPresetAgentActionCard = {
   kind: "avatar_preset";
   presetId: string;
@@ -279,6 +297,7 @@ export type AgentActionCard =
   | ChatSessionMessagesAgentActionCard
   | ConversationEvaluationAgentActionCard
   | KnowledgeGapsListAgentActionCard
+  | FaqImportPreviewAgentActionCard
   | RuleEffectAgentActionCard
   | AnalyticsTrendAgentActionCard
   | AbTestResultsAgentActionCard
