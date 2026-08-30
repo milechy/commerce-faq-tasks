@@ -13,6 +13,7 @@ import type { AuthedRequest } from '../../agent/http/authMiddleware';
 import { pool as globalPool } from '../../lib/db';
 import { logger } from '../../lib/logger';
 import { trackUsage } from '../../lib/billing/usageTracker';
+import { queryBillingAccess, blocksPaidFeature } from '../../lib/billing/suspensionGate';
 
 const ANAM_API_BASE = 'https://api.anam.ai';
 
@@ -42,6 +43,16 @@ export function registerAnamRoutes(app: Express, apiStack: RequestHandler[]): vo
       if (tenantResult.rows[0].features?.avatar !== true) {
         logger.warn(`[anamRoutes] avatar feature disabled for tenant: ${tenantId}`);
         return res.status(403).json({ error: 'Avatar not enabled for this tenant' });
+      }
+
+      // fix/unpaid-suspension [P0]: 未払・退会テナントの有料機能停止ゲート。
+      // anam アバターセッションも従量原価が出る経路。livekit と同じく restricted/
+      // suspended で止め、判定不能は原価保護のため止める(blocksPaidFeature)。
+      // migration 未適用は 42703 を fail-open するため従来どおり起動する。
+      const billingAccess = await queryBillingAccess(pool, tenantId);
+      if (blocksPaidFeature(billingAccess)) {
+        logger.warn(`[anamRoutes] billing suspended/restricted for tenant: ${tenantId} (access=${billingAccess})`);
+        return res.json({ enabled: false, avatarProvider: 'lemonslice', reason: 'billing_suspended' });
       }
 
       // アクティブなavatar_configを取得

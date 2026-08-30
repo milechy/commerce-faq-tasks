@@ -18,6 +18,7 @@ import { RoomServiceClient, AgentDispatchClient, JobRestartPolicy } from "liveki
 import type { AuthedRequest } from "../../agent/http/authMiddleware";
 import { logger } from '../../lib/logger';
 import { queryTenantPlan, planHasFeature } from "../../lib/billing/planFeatures";
+import { resolveBillingAccess, blocksPaidFeature } from "../../lib/billing/suspensionGate";
 
 // ─── LiveKit JWT 生成 ─────────────────────────────────────────────────────────
 
@@ -104,8 +105,17 @@ export function registerLiveKitTokenRoutes(
     }
 
     try {
+      // fix/unpaid-suspension: 停止ゲート判定に必要な billing 列も同じ SELECT で引く
+      // (最高頻度でない経路だが、追加のラウンドトリップを増やさないため既存クエリに相乗り)。
+      // subscription_status / delinquent_since が未適用(42703)の場合は、下の
+      // catch が migration_required を返す(既存の 42703 ハンドリングと同じ・原価安全側)。
       const result = await pool.query(
-        `SELECT features, lemonslice_agent_id, is_active FROM tenants WHERE id = $1`,
+        `SELECT t.features, t.lemonslice_agent_id, t.is_active,
+                t.plan, t.subscription_status, t.delinquent_since,
+                s.is_active AS sub_active
+           FROM tenants t
+           LEFT JOIN stripe_subscriptions s ON s.tenant_id = t.id
+          WHERE t.id = $1`,
         [tenantId]
       );
 
@@ -118,6 +128,10 @@ export function registerLiveKitTokenRoutes(
         features: { avatar?: boolean; voice?: boolean; rag?: boolean; pre_dispatch?: boolean } | null;
         lemonslice_agent_id: string | null;
         is_active: boolean;
+        plan: string | null;
+        subscription_status: string | null;
+        delinquent_since: Date | string | null;
+        sub_active: boolean | null;
       };
 
       // 診断ログ（問題特定後に削除可）
@@ -139,6 +153,22 @@ export function registerLiveKitTokenRoutes(
       if (!avatarEnabled) {
         logger.warn(`[livekitTokenRoutes] avatar feature disabled for tenant: ${tenantId}`);
         return res.status(403).json({ error: 'Avatar not enabled for this tenant', enabled: false, reason: "avatar_disabled" });
+      }
+
+      // fix/unpaid-suspension [P0]: 未払・退会テナントの有料機能停止ゲート。
+      // avatar は LiveKit セッション時間で従量原価が出る経路。restricted(猶予超過)・
+      // suspended(未払/退会)の両方で止める。上の SELECT で引いた row から純関数で判定
+      // (追加クエリ無し)。free_ad/enterprise/未知プランは resolveBillingAccess が
+      // active を返すため従来どおり起動する。
+      const billingAccess = resolveBillingAccess({
+        plan: row.plan,
+        subscriptionStatus: row.subscription_status,
+        subActive: row.sub_active,
+        delinquentSince: row.delinquent_since,
+      });
+      if (blocksPaidFeature(billingAccess)) {
+        logger.warn(`[livekitTokenRoutes] billing suspended/restricted for tenant: ${tenantId} (access=${billingAccess})`);
+        return res.status(402).json({ enabled: false, reason: "billing_suspended" });
       }
 
       // LiveKit 環境変数チェック

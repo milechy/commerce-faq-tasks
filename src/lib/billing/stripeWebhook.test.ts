@@ -58,6 +58,11 @@ function makeDb(overrides: Record<string, (sql: string, params: unknown[]) => un
     "billing_status = 'failed'": () => ({ rowCount: 1, rows: [] }),
     'SET completed_at':          () => ({ rowCount: 1, rows: [] }),
     'is_active = false':         () => ({ rowCount: 1, rows: [] }),
+    // fix/unpaid-suspension: subscription.created/updated/deleted の新規経路。
+    'is_active = $2':            () => ({ rowCount: 1, rows: [] }), // UPDATE stripe_subscriptions(upserted)
+    'SET plan = $2':             () => ({ rowCount: 1, rows: [{ id: 'tenant-1' }] }), // price→plan反映
+    'subscription_status = $2':  () => ({ rowCount: 1, rows: [] }), // upserted の status焼き付け
+    "subscription_status = 'canceled'": () => ({ rowCount: 1, rows: [] }), // deleted の status焼き付け
     ...overrides,
   };
   return {
@@ -390,6 +395,210 @@ describe('createStripeWebhookHandler', () => {
       expect.objectContaining({ subscriptionId: 'sub_deleted_001' }),
       expect.any(String)
     );
+  });
+
+  // ★fix/unpaid-suspension★ customer.subscription.created / updated の反映。
+  describe('customer.subscription.updated / created', () => {
+    function makeSubscription(overrides: Record<string, unknown> = {}) {
+      return {
+        id: 'sub_x',
+        status: 'active',
+        metadata: { tenant_id: 'tenant-1' },
+        items: { data: [] as any[] },
+        ...overrides,
+      };
+    }
+    function subEvent(type: 'customer.subscription.updated' | 'customer.subscription.created', subscription: any) {
+      return { id: `evt_${type}_${subscription.id}`, type, data: { object: subscription } };
+    }
+
+    beforeEach(() => {
+      process.env.STRIPE_PRICE_STANDARD_BASE_MONTHLY = 'price_std_base';
+      process.env.STRIPE_PRICE_GROWTH_BASE_MONTHLY = 'price_growth_base';
+      process.env.STRIPE_PRICE_STARTER_TEXT = 'price_starter_text';
+    });
+    afterEach(() => {
+      delete process.env.STRIPE_PRICE_STANDARD_BASE_MONTHLY;
+      delete process.env.STRIPE_PRICE_GROWTH_BASE_MONTHLY;
+      delete process.env.STRIPE_PRICE_STARTER_TEXT;
+    });
+
+    it('past_due は subscription_status を焼き付け delinquent_since を COALESCE で開始する(猶予の起点)', async () => {
+      const sub = makeSubscription({ id: 'sub_pd', status: 'past_due', metadata: { tenant_id: 'tenant-1' } });
+      const event = subEvent('customer.subscription.updated', sub);
+      mockConstructEventOnce(event);
+
+      const db = makeDb();
+      const handler = createStripeWebhookHandler(db as any, mockLogger);
+      const { req, res } = makeReqRes({
+        body: Buffer.from(JSON.stringify(event)),
+        headers: { 'stripe-signature': 'valid_sig' },
+      });
+
+      await handler(req, res);
+
+      expect(res._status).toBe(200);
+      // status 焼き付け(past_due)。delinquent_since は SQL の CASE(COALESCE)で管理する。
+      const statusCall = db.query.mock.calls.find(
+        ([sql]: [string]) => typeof sql === 'string' && sql.includes('subscription_status = $2')
+      );
+      expect(statusCall).toBeTruthy();
+      expect(statusCall[1]).toEqual(['tenant-1', 'past_due']);
+      expect(statusCall[0]).toMatch(/COALESCE\(delinquent_since, NOW\(\)\)/);
+      // subscription はまだ生きている(past_due は terminal ではない)→ is_active=true
+      const subCall = db.query.mock.calls.find(
+        ([sql]: [string]) => typeof sql === 'string' && sql.includes('UPDATE stripe_subscriptions') && sql.includes('is_active = $2')
+      );
+      expect(subCall[1]).toEqual(['sub_pd', true, null]);
+    });
+
+    it('active は delinquent_since を NULL に戻し(回復)、price→plan を tenants.plan に反映する', async () => {
+      const sub = makeSubscription({
+        id: 'sub_up',
+        status: 'active',
+        metadata: { tenant_id: 'tenant-1' },
+        items: { data: [{ price: { id: 'price_growth_base' } }, { price: { id: 'price_growth_text' } }] },
+      });
+      const event = subEvent('customer.subscription.updated', sub);
+      mockConstructEventOnce(event);
+
+      const db = makeDb();
+      const handler = createStripeWebhookHandler(db as any, mockLogger);
+      const { req, res } = makeReqRes({
+        body: Buffer.from(JSON.stringify(event)),
+        headers: { 'stripe-signature': 'valid_sig' },
+      });
+
+      await handler(req, res);
+
+      expect(res._status).toBe(200);
+      // price(base=growth) → plan=growth を反映
+      expect(db.query).toHaveBeenCalledWith(
+        expect.stringMatching(/SET plan = \$2/),
+        ['tenant-1', 'growth']
+      );
+      // status=active は CASE で delinquent_since=NULL
+      const statusCall = db.query.mock.calls.find(
+        ([sql]: [string]) => typeof sql === 'string' && sql.includes('subscription_status = $2')
+      );
+      expect(statusCall[1]).toEqual(['tenant-1', 'active']);
+      expect(statusCall[0]).toMatch(/WHEN \$2 IN \('active', 'trialing'\) THEN NULL/);
+    });
+
+    it('canceled は stripe_subscriptions.is_active=false(terminal)にし status を canceled にする', async () => {
+      const sub = makeSubscription({ id: 'sub_cx', status: 'canceled', metadata: { tenant_id: 'tenant-1' } });
+      const event = subEvent('customer.subscription.updated', sub);
+      mockConstructEventOnce(event);
+
+      const db = makeDb();
+      const handler = createStripeWebhookHandler(db as any, mockLogger);
+      const { req, res } = makeReqRes({
+        body: Buffer.from(JSON.stringify(event)),
+        headers: { 'stripe-signature': 'valid_sig' },
+      });
+
+      await handler(req, res);
+
+      expect(res._status).toBe(200);
+      const subCall = db.query.mock.calls.find(
+        ([sql]: [string]) => typeof sql === 'string' && sql.includes('UPDATE stripe_subscriptions') && sql.includes('is_active = $2')
+      );
+      expect(subCall[1]).toEqual(['sub_cx', false, null]);
+      const statusCall = db.query.mock.calls.find(
+        ([sql]: [string]) => typeof sql === 'string' && sql.includes('subscription_status = $2')
+      );
+      expect(statusCall[1]).toEqual(['tenant-1', 'canceled']);
+    });
+
+    it('未知の price(enterprise個別price等)は plan を書き換えない(COALESCEで現状維持)', async () => {
+      const sub = makeSubscription({
+        id: 'sub_ent',
+        status: 'active',
+        metadata: { tenant_id: 'tenant-1' },
+        items: { data: [{ price: { id: 'price_enterprise_custom' } }] },
+      });
+      const event = subEvent('customer.subscription.updated', sub);
+      mockConstructEventOnce(event);
+
+      const db = makeDb();
+      const handler = createStripeWebhookHandler(db as any, mockLogger);
+      const { req, res } = makeReqRes({
+        body: Buffer.from(JSON.stringify(event)),
+        headers: { 'stripe-signature': 'valid_sig' },
+      });
+
+      await handler(req, res);
+
+      expect(res._status).toBe(200);
+      expect(db.query).not.toHaveBeenCalledWith(
+        expect.stringMatching(/SET plan = \$2/),
+        expect.anything()
+      );
+    });
+
+    it('tenant を metadata でも stripe_subscriptions でも解決できなければ記録せずスキップ(後続で追いつく)', async () => {
+      const sub = makeSubscription({ id: 'sub_orphan', status: 'active', metadata: {} });
+      const event = subEvent('customer.subscription.created', sub);
+      mockConstructEventOnce(event);
+
+      const db = makeDb({
+        'SELECT tenant_id FROM stripe_subscriptions': () => ({ rowCount: 0, rows: [] }),
+      });
+      const handler = createStripeWebhookHandler(db as any, mockLogger);
+      const { req, res } = makeReqRes({
+        body: Buffer.from(JSON.stringify(event)),
+        headers: { 'stripe-signature': 'valid_sig' },
+      });
+
+      await handler(req, res);
+
+      expect(res._status).toBe(200);
+      expect(db.query).not.toHaveBeenCalledWith(
+        expect.stringContaining('subscription_status = $2'),
+        expect.anything()
+      );
+      expect(db.query).not.toHaveBeenCalledWith(
+        expect.stringMatching(/UPDATE stripe_subscriptions/),
+        expect.anything()
+      );
+    });
+
+    it('subscription_status 列が未適用(42703)でも 500 にせず、stripe_subscriptions と plan の反映は完了する', async () => {
+      const sub = makeSubscription({
+        id: 'sub_nomig',
+        status: 'past_due',
+        metadata: { tenant_id: 'tenant-1' },
+        items: { data: [{ price: { id: 'price_std_base' } }] },
+      });
+      const event = subEvent('customer.subscription.updated', sub);
+      mockConstructEventOnce(event);
+
+      const db = makeDb({
+        'subscription_status = $2': () => {
+          const err: any = new Error('column "subscription_status" does not exist');
+          err.code = '42703';
+          throw err;
+        },
+      });
+      const handler = createStripeWebhookHandler(db as any, mockLogger);
+      const { req, res } = makeReqRes({
+        body: Buffer.from(JSON.stringify(event)),
+        headers: { 'stripe-signature': 'valid_sig' },
+      });
+
+      await handler(req, res);
+
+      // 42703 は fail-open。webhook 全体は 200 で完了し、既存列の反映は行われる。
+      expect(res._status).toBe(200);
+      expect(db.query).toHaveBeenCalledWith(
+        expect.stringMatching(/SET plan = \$2/),
+        ['tenant-1', 'standard']
+      );
+      const subCall = db.query.mock.calls.find(
+        ([sql]: [string]) => typeof sql === 'string' && sql.includes('UPDATE stripe_subscriptions') && sql.includes('is_active = $2')
+      );
+      expect(subCall[1]).toEqual(['sub_nomig', true, 'price_std_base']);
+    });
   });
 
   describe('checkout.session.completed', () => {

@@ -92,26 +92,38 @@ beforeEach(() => {
 });
 
 describe("POST /api/chat — free_ad プランの月次上限", () => {
-  it("正常系: free_ad以外(starter)のテナントは usage_logs集計を一切見ずに通る(既存動作を変えない)", async () => {
+  // fix/unpaid-suspension: 有料セルフサービス(starter/standard/growth)は提供停止ゲートの
+  // ため tenants の状態を1本引くようになった(usage_logs集計=free_ad上限は引かないまま)。
+  const healthyBillingRow = { rows: [{ plan: "starter", subscription_status: "active", delinquent_since: null, sub_active: true }] };
+  const ranUsageLogsCount = () =>
+    mockPoolQuery.mock.calls.some(([sql]: [string]) => typeof sql === "string" && sql.includes("feature_used = 'chat'"));
+
+  it("正常系: free_ad以外(starter)は free_ad の usage_logs集計は見ない(停止ゲートの状態確認1本のみ)", async () => {
     mockGetTenantPlan.mockResolvedValue("starter");
+    mockPoolQuery.mockResolvedValue(healthyBillingRow); // 停止ゲートの状態確認 → active
 
     const res = await request(makeApp())
       .post("/api/chat")
       .send({ message: "こんにちは" });
 
     expect(res.status).toBe(200);
-    expect(mockPoolQuery).not.toHaveBeenCalled();
+    expect(ranUsageLogsCount()).toBe(false); // free_ad上限の集計は走らない(既存動作を変えない)
     expect(mockRunDialogTurn).toHaveBeenCalledTimes(1);
   });
 
-  it("正常系: growth/enterpriseも同様にusage_logs集計を見ない", async () => {
-    for (const plan of ["growth", "enterprise"]) {
-      mockGetTenantPlan.mockResolvedValue(plan);
-      const res = await request(makeApp())
-        .post("/api/chat")
-        .send({ message: "こんにちは" });
-      expect(res.status).toBe(200);
-    }
+  it("正常系: growth は停止ゲートの状態確認のみ・enterprise は追加DBを一切見ない", async () => {
+    // growth: 停止ゲートの状態確認1本(healthy) → 通す
+    mockGetTenantPlan.mockResolvedValue("growth");
+    mockPoolQuery.mockResolvedValue(healthyBillingRow);
+    const resGrowth = await request(makeApp()).post("/api/chat").send({ message: "こんにちは" });
+    expect(resGrowth.status).toBe(200);
+    expect(ranUsageLogsCount()).toBe(false);
+
+    // enterprise: 自動停止の対象外 → 追加のDB問い合わせを一切しない
+    mockPoolQuery.mockClear();
+    mockGetTenantPlan.mockResolvedValue("enterprise");
+    const resEnt = await request(makeApp()).post("/api/chat").send({ message: "こんにちは" });
+    expect(resEnt.status).toBe(200);
     expect(mockPoolQuery).not.toHaveBeenCalled();
   });
 
@@ -343,8 +355,10 @@ describe("POST /api/chat — free_ad プランの月次上限", () => {
     mockGetTenantPlan.mockResolvedValueOnce("growth");
     const res2 = await request(app).post("/api/chat").send({ message: "2回目" });
     expect(res2.status).toBe(200);
-    // growth判定時はusage_logs集計を追加で見ない(1回目の1コールのみのまま)
-    expect(mockPoolQuery).toHaveBeenCalledTimes(1);
+    // growth判定時は free_ad の usage_logs集計は見ない。ただし fix/unpaid-suspension で
+    // 提供停止ゲートの状態確認を1本引くようになったため、合計は 1回目の集計1本 +
+    // 2回目の状態確認1本 = 2本(2回目の状態確認は未モックで例外→fail-openで素通り)。
+    expect(mockPoolQuery).toHaveBeenCalledTimes(2);
   });
 
   it("イレギュラー: 1回目starter(素通り)→管理者がfree_adへ変更(既に上限超過)→2回目は即座に403になる", async () => {

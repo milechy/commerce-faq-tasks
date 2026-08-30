@@ -237,6 +237,47 @@ export function getSubscriptionItemPrices(
   return { ok: true, prices: { base, text, avatarOverage } };
 }
 
+/**
+ * price ID → plan の逆引き(fix/unpaid-suspension)。
+ *
+ * getSubscriptionItemPrices が「plan → price」を env から引く唯一の出どころなのに対し、
+ * こちらは Stripe の customer.subscription.updated が運ぶ実itemのpriceから、
+ * テナントが現在どのプラン相当のsubscriptionを持っているかを逆算する。
+ * 「作った item と送り先」を1箇所に集約するのと同じ理由で、逆引きの対応も
+ * ここ(順引きと同じファイル・同じenv)に置く。順引き側のenv名を変えたら
+ * ここも同じ env を読むので自動的に追随する。
+ *
+ * ★base(licensed)priceだけがプラン段を一意に決める★
+ * standard/growth の subscription は base + text_overage + avatar_overage の3itemを持つが、
+ * text_overage / avatar_overage の price は starter の従量price とは別物なので、
+ * それらから plan を引こうとすると取り違える。段を決めるのは base price のみ。
+ * starter は base を持たず従量price 1本なので、base一致が無いときだけ starter を見る。
+ *
+ * 未知のprice(enterpriseの個別price・旧price・環境変数未設定)は null を返す。
+ * 呼び出し元(webhook)は null のとき plan を書き換えない(COALESCEで現状維持)。
+ * これにより enterprise の手動設定プランが webhook で勝手に降格されない。
+ */
+export function planFromSubscriptionPriceIds(
+  priceIds: Array<string | null | undefined>,
+): 'starter' | 'standard' | 'growth' | null {
+  const standardBase = process.env.STRIPE_PRICE_STANDARD_BASE_MONTHLY;
+  const growthBase   = process.env.STRIPE_PRICE_GROWTH_BASE_MONTHLY;
+  const starterText  = process.env.STRIPE_PRICE_STARTER_TEXT || process.env.STRIPE_METERED_PRICE_ID;
+
+  // base(段を一意に決める)を最優先で走査する。
+  for (const pid of priceIds) {
+    if (!pid) continue;
+    if (standardBase && pid === standardBase) return 'standard';
+    if (growthBase && pid === growthBase) return 'growth';
+  }
+  // base一致が無かったときのみ starter(純従量・base無し)を見る。
+  for (const pid of priceIds) {
+    if (!pid) continue;
+    if (starterText && pid === starterText) return 'starter';
+  }
+  return null;
+}
+
 /** SubscriptionItemPrices を Stripe subscriptions.create の items 配列へ落とす。 */
 export function toSubscriptionItems(prices: SubscriptionItemPrices): Array<{ price: string }> {
   return [prices.base, prices.text, prices.avatarOverage]

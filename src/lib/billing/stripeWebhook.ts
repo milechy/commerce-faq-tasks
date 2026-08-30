@@ -3,6 +3,8 @@
 
 import type pino from 'pino';
 import type { Request, Response } from 'express';
+import { planFromSubscriptionPriceIds } from './planPricing';
+import { invalidateTenantPlanCache } from './planFeatures';
 
 function getStripeClient(): any {
   const secret = process.env.STRIPE_SECRET_KEY;
@@ -109,6 +111,10 @@ async function _handleStripeEvent(event: any, db: any, logger: pino.Logger): Pro
       break;
     case 'invoice.payment_failed':
       await _handlePaymentFailed(event.data.object, db, logger);
+      break;
+    case 'customer.subscription.created':
+    case 'customer.subscription.updated':
+      await _handleSubscriptionUpserted(event.data.object, db, logger, event.type);
       break;
     case 'customer.subscription.deleted':
       await _handleSubscriptionDeleted(event.data.object, db, logger);
@@ -247,6 +253,146 @@ async function _handlePaymentFailed(invoice: any, db: any, logger: pino.Logger):
   );
 }
 
+/** stripe_subscription 由来のイベントから price ID の一覧を取り出す。 */
+function _priceIdsOfSubscription(subscription: any): string[] {
+  const items: any[] = subscription?.items?.data ?? [];
+  const ids: string[] = [];
+  for (const item of items) {
+    const price = item?.price;
+    const id = typeof price === 'string' ? price : price?.id;
+    if (typeof id === 'string' && id.length > 0) ids.push(id);
+  }
+  return ids;
+}
+
+// subscription が「まだ生きている(item構成を持つ)」とみなせる status。
+// canceled / incomplete_expired は終了状態なので stripe_subscriptions.is_active=false へ。
+// unpaid / paused / past_due は subscription 自体は存在し続ける(is_active=true のまま)。
+// 停止判定は suspensionGate 側が subscription_status を見て行うので、ここは
+// 「行が実在するか」を is_active に反映するだけ。
+const _TERMINAL_SUBSCRIPTION_STATUSES: ReadonlySet<string> = new Set([
+  'canceled',
+  'incomplete_expired',
+]);
+
+/**
+ * customer.subscription.created / updated を処理する。
+ *
+ * ★従来これらが未処理だった穴★
+ * Stripe 側でプランや支払い状態(active/past_due/unpaid 等)が変わっても、
+ * webhook が created/updated を握っていなかったため tenants に一切反映されず、
+ * 提供停止も plan 追随も起きなかった。ここで
+ *   1. tenants.subscription_status(生 status)と delinquent_since(past_due 起点)を焼き付ける
+ *   2. price → plan を逆引きして tenants.plan を Stripe の実態に追随させる
+ *   3. stripe_subscriptions.is_active / stripe_price_id を更新する
+ * を行う。停止「判定」自体は suspensionGate.ts が subscription_status を読んで行う
+ * (この関数は状態を記録するだけで、chat/avatar を直接止めはしない)。
+ *
+ * ★tenant の解決★
+ * subscription.metadata.tenant_id(subscriptionSync が付ける)を優先し、無ければ
+ * stripe_subscriptions.stripe_subscription_id から逆引きする。どちらでも引けない
+ * (created が checkout.session.completed より先に届き、まだ行が無い等)場合は
+ * 記録せず warn して抜ける。後続の updated、または checkout 完了時の記録で追いつく。
+ */
+async function _handleSubscriptionUpserted(
+  subscription: any,
+  db: any,
+  logger: pino.Logger,
+  eventType: string
+): Promise<void> {
+  const subscriptionId = subscription?.id as string | undefined;
+  const status = typeof subscription?.status === 'string' ? subscription.status : null;
+  if (!subscriptionId) {
+    logger.warn({ eventType }, '[webhook] subscription.upserted: no subscription id');
+    return;
+  }
+
+  // tenant を解決する。
+  let tenantId: string | undefined = subscription?.metadata?.tenant_id;
+  if (!tenantId) {
+    const r = await db.query(
+      `SELECT tenant_id FROM stripe_subscriptions WHERE stripe_subscription_id = $1 LIMIT 1`,
+      [subscriptionId]
+    );
+    tenantId = r.rows[0]?.tenant_id as string | undefined;
+  }
+  if (!tenantId) {
+    // まだ行が無い(checkout 完了前の created 等)。記録できないが、これは正常系。
+    logger.info(
+      { subscriptionId, eventType, status },
+      '[webhook] subscription.upserted: tenant未解決のためスキップ(後続イベント/checkout完了で追いつく)'
+    );
+    return;
+  }
+
+  const priceIds = _priceIdsOfSubscription(subscription);
+  const mappedPlan = planFromSubscriptionPriceIds(priceIds); // 'starter'|'standard'|'growth'|null
+  const representativePriceId = priceIds[0] ?? null;
+  const subIsActive = status === null ? true : !_TERMINAL_SUBSCRIPTION_STATUSES.has(status);
+
+  // (1) stripe_subscriptions の is_active / stripe_price_id を追随(既存列のみ・常に安全)。
+  //     行が無い(metadata経由でtenantだけ解決できた)場合は 0 行更新で無害。
+  const subUpdate = await db.query(
+    `UPDATE stripe_subscriptions
+     SET is_active = $2,
+         stripe_price_id = COALESCE($3, stripe_price_id),
+         updated_at = NOW()
+     WHERE stripe_subscription_id = $1`,
+    [subscriptionId, subIsActive, representativePriceId]
+  );
+
+  // (2) price → plan を tenants.plan に反映(既存列のみ)。mappedPlan が null
+  //     (enterprise の個別price・未知price)なら書き換えない。実際に変わった行が
+  //     あるときだけ plan キャッシュを飛ばす。
+  if (mappedPlan) {
+    const planUpdate = await db.query(
+      `UPDATE tenants SET plan = $2, updated_at = NOW()
+       WHERE id = $1 AND plan <> $2 AND plan NOT IN ('enterprise')
+       RETURNING id`,
+      [tenantId, mappedPlan]
+    );
+    if ((planUpdate.rowCount ?? 0) > 0) {
+      invalidateTenantPlanCache(tenantId);
+      logger.info(
+        { tenantId, subscriptionId, plan: mappedPlan },
+        '[webhook] subscription.upserted: price→plan を tenants.plan に反映した'
+      );
+    }
+  }
+
+  // (3) subscription_status / delinquent_since を焼き付ける(新規列)。
+  //     migration 未適用(42703)は fail-open: 停止ゲートの材料が無いだけで、
+  //     (1)(2) の反映と webhook 自体の成功は保つ。
+  try {
+    await db.query(
+      `UPDATE tenants SET
+         subscription_status = $2,
+         delinquent_since = CASE
+           WHEN $2 = 'past_due' THEN COALESCE(delinquent_since, NOW())
+           WHEN $2 IN ('active', 'trialing') THEN NULL
+           ELSE delinquent_since
+         END,
+         updated_at = NOW()
+       WHERE id = $1`,
+      [tenantId, status]
+    );
+  } catch (err: any) {
+    if (err?.code === '42703') {
+      logger.warn(
+        { tenantId, subscriptionId },
+        '[webhook] subscription.upserted: subscription_status 列が無い(migration未適用)ため停止ゲート材料の記録をスキップ'
+      );
+    } else {
+      throw err; // それ以外のDB例外は 500 で再送に委ねる。
+    }
+  }
+
+  logger.info(
+    { tenantId, subscriptionId, eventType, status, mappedPlan, subUpdated: subUpdate.rowCount },
+    '[webhook] subscription.upserted: 状態を反映した'
+  );
+}
+
 async function _handleSubscriptionDeleted(
   subscription: any,
   db: any,
@@ -261,8 +407,28 @@ async function _handleSubscriptionDeleted(
     [subscriptionId]
   );
 
+  // 提供停止ゲート(suspensionGate.ts)が subscription_status からも suspended を
+  // 判定できるよう、tenants にも 'canceled' を焼き付ける。subActive=false 単独でも
+  // suspended になるが、status を残しておくと運用画面/監査で理由が読める。
+  // subscription からは stripe_subscription_id → tenant_id を逆引きする。
+  const subRow = await db.query(
+    `SELECT tenant_id FROM stripe_subscriptions WHERE stripe_subscription_id = $1 LIMIT 1`,
+    [subscriptionId]
+  );
+  const tenantId = subRow.rows[0]?.tenant_id as string | undefined;
+  if (tenantId) {
+    try {
+      await db.query(
+        `UPDATE tenants SET subscription_status = 'canceled', updated_at = NOW() WHERE id = $1`,
+        [tenantId]
+      );
+    } catch (err: any) {
+      if (err?.code !== '42703') throw err; // 未適用はスキップ、それ以外は再送へ
+    }
+  }
+
   logger.warn(
-    { subscriptionId, updatedRows: result.rowCount },
+    { subscriptionId, tenantId, updatedRows: result.rowCount },
     '[webhook] subscription.deleted: deactivated'
   );
 
