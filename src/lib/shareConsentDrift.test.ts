@@ -32,84 +32,14 @@
 // -> と 'true'::jsonb で行う形に修正して一致させた。
 
 import { resolveLearningConsentFromFeatures, shareConsentSqlPredicate } from './hermesConsent';
+// ケース表は src/api/hermes-mcp/hermesConsentSqlIntegration.test.ts (実Postgresに
+// 対して同じ表を実行し、ここでの「実測済み」という前提そのものを検証する)と
+// 共有するため、fixtures ファイルへ切り出してある(二重管理防止)。
+import { CASES } from './shareConsentDrift.fixtures';
 
 jest.mock('./logger', () => ({
   logger: { warn: jest.fn(), info: jest.fn(), error: jest.fn(), debug: jest.fn() },
 }));
-
-/**
- * features の形状ごとの期待値。
- * expectedShare は「JSとSQLの双方がこの値を返さなければならない」という契約。
- * SQL 側の値は上記のとおり本番 Postgres で実測済み。
- */
-const CASES: Array<{ label: string; features: unknown; expectedShare: boolean; note: string }> = [
-  {
-    label: 'A',
-    features: { learning: { learn: true, share: true } },
-    expectedShare: true,
-    note: '正常: 新形式で share=true',
-  },
-  {
-    label: 'B',
-    features: { learning: { learn: true, share: false } },
-    expectedShare: false,
-    note: '正常: 新形式で share=false',
-  },
-  {
-    label: 'C',
-    features: { hermes_raw_data_consent: true },
-    expectedShare: true,
-    note: '後方互換: learning 未設定 + 旧フラグ true',
-  },
-  {
-    label: 'D',
-    features: { hermes_raw_data_consent: false },
-    expectedShare: false,
-    note: '後方互換: learning 未設定 + 旧フラグ false',
-  },
-  {
-    label: 'E',
-    features: { learning: { learn: true, share: 'true' } },
-    expectedShare: false,
-    note: 'share が boolean ではなく文字列 "true"。緩い ->> 比較だと true に化けた実績あり',
-  },
-  {
-    label: 'F',
-    features: { learning: { share: true } },
-    expectedShare: false,
-    note: 'learn 欠落で形が不正。緩い比較だと true に化けた実績あり',
-  },
-  {
-    label: 'G',
-    features: { learning: null, hermes_raw_data_consent: true },
-    expectedShare: false,
-    note: 'learning が JSON null。旧フラグへはフォールバックしない(SQL の IS NULL も false)',
-  },
-  {
-    label: 'H',
-    features: { learning: {} },
-    expectedShare: false,
-    note: 'learning が空オブジェクト',
-  },
-  {
-    label: 'I',
-    features: { learning: 'x' },
-    expectedShare: false,
-    note: 'learning が文字列',
-  },
-  {
-    label: 'J',
-    features: { learning: [1, 2] },
-    expectedShare: false,
-    note: 'learning が配列',
-  },
-  {
-    label: 'K',
-    features: {},
-    expectedShare: false,
-    note: 'features が空(新規テナント相当)',
-  },
-];
 
 describe('share 判定: JS と SQL のドリフト検知', () => {
   describe('JS 側(resolveLearningConsentFromFeatures)がケース表どおりに解決する', () => {

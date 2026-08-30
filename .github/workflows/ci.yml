@@ -78,6 +78,11 @@ jobs:
 
     env:
       BILLING_SQL_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/billing_sql_test
+      # hermes-mcp のSQL越境防止テストも同じ使い捨てPostgres・同じDBを使い回す
+      # (billingとhermes-mcpのテーブル群はFKで繋がっておらず、各テストファイルの
+      # beforeEachが自分の使うテーブルだけTRUNCATEするため、専用サービスを
+      # 新設せずジョブ全体のコストを増やさない)。
+      HERMES_MCP_SQL_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/billing_sql_test
 
     steps:
       - uses: actions/checkout@v4
@@ -109,6 +114,24 @@ jobs:
 
       - name: Test billing SQL against real Postgres
         run: pnpm jest --runInBand src/lib/billing/billingSqlIntegration.test.ts
+
+      # GET /v1/hermes-mcp/proposals の越境防止(shareConsentSqlPredicate)と、
+      # searchConversationsの「発話ゼロセッションがlimitを食い潰さない」挙動は
+      # SQLの意味論(jsonb_typeof・DESC時のNULLの既定位置)そのものが検証対象で、
+      # モックしたDBでは原理的に再現できない(各テストファイル冒頭のコメント参照)。
+      # ★前提: tenants本体はci-billing-schema.shが作成済み。ここではその上に
+      # features列とhermes-mcp固有のテーブルだけ追加する(SCRIPTS/ci-hermes-schema.sh参照)。
+      - name: Apply hermes-mcp schema migrations
+        env:
+          DATABASE_URL: ${{ env.HERMES_MCP_SQL_TEST_DATABASE_URL }}
+        run: bash SCRIPTS/ci-hermes-schema.sh
+
+      - name: Test hermes-mcp SQL against real Postgres
+        run: |
+          pnpm jest --runInBand \
+            src/api/hermes-mcp/hermesConsentSqlIntegration.test.ts \
+            src/api/hermes-mcp/hermesProposalsWriteSqlIntegration.test.ts \
+            src/api/hermes-mcp/hermesMcpRepositorySqlIntegration.test.ts
 
   admin-ui-build:
     name: Gate 3 — admin-ui typecheck + test + build

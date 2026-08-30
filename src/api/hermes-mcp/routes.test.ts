@@ -156,6 +156,47 @@ describe("GET /v1/hermes-mcp/conversations", () => {
     expect(res.status).toBe(400);
   });
 
+  // [穴4] 外部エージェントが送りうる乱暴なlimit値。同意チェックより後で
+  // 落ちる想定だが、いずれもsearchConversationsを呼ばず400で止まることを固定する。
+  it.each([["0", "0"], ["-1", "負数"], ["1.5", "小数"], ["abc", "数値でない文字列"]])(
+    "不正なlimit(%s: %s)は400でsearchConversationsを呼ばない",
+    async (value, _label) => {
+      mockIsConsentGranted.mockResolvedValue(true);
+      const res = await authedGet(`/v1/hermes-mcp/conversations?tenant_id=carnation&limit=${value}`);
+      expect(res.status).toBe(400);
+      expect(mockSearchConversations).not.toHaveBeenCalled();
+    },
+  );
+
+  it("limitを配列で渡す(?limit=1&limit=2)は数値パースされず既定値にフォールバックする(クラッシュしない)", async () => {
+    mockIsConsentGranted.mockResolvedValue(true);
+    mockSearchConversations.mockResolvedValue([]);
+    const res = await authedGet("/v1/hermes-mcp/conversations?tenant_id=carnation&limit=1&limit=2");
+    expect(res.status).toBe(200);
+    expect(mockSearchConversations).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: undefined }),
+    );
+  });
+
+  it("tenant_idが空文字は400(同意チェックより前で弾かれる)", async () => {
+    const res = await authedGet("/v1/hermes-mcp/conversations?tenant_id=");
+    expect(res.status).toBe(400);
+    expect(mockIsConsentGranted).not.toHaveBeenCalled();
+  });
+
+  it("tenant_idを配列で渡す(?tenant_id=a&tenant_id=b)は400(文字列以外を同意チェックに渡さない)", async () => {
+    const res = await authedGet("/v1/hermes-mcp/conversations?tenant_id=a&tenant_id=b");
+    expect(res.status).toBe(400);
+    expect(mockIsConsentGranted).not.toHaveBeenCalled();
+  });
+
+  it("min_judge_scoreが数値でない文字列は400", async () => {
+    mockIsConsentGranted.mockResolvedValue(true);
+    const res = await authedGet("/v1/hermes-mcp/conversations?tenant_id=carnation&min_judge_score=abc");
+    expect(res.status).toBe(400);
+    expect(mockSearchConversations).not.toHaveBeenCalled();
+  });
+
   it("converted_only=trueがsearchConversationsに伝搬する", async () => {
     mockIsConsentGranted.mockResolvedValue(true);
     mockSearchConversations.mockResolvedValue([]);
@@ -392,6 +433,105 @@ describe("GET /v1/hermes-mcp/proposals", () => {
     // 区別できないと、Hermesが「効果ゼロ」と誤読するため)
     expect(proposals[10]!.effect).toEqual({ status: "not_computed", reason: "effect_limit_exceeded" });
     expect(proposals[10]!.effect).not.toBeNull();
+  });
+
+  it("active提案が0件(pending/rejectedのみ)のときgetRuleEffectは一度も呼ばれない", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    const res = await authedGet("/v1/hermes-mcp/proposals");
+    expect(res.status).toBe(200);
+    expect(mockGetRuleEffect).not.toHaveBeenCalled();
+  });
+
+  // [穴2] 既存の「effect計算は上限10件で打ち切り」テストはstatus='active'のみ
+  // 11件という均一な行で検証しており、「上限10はactiveだけを数えるか」は
+  // 未検証だった。pending/rejectedがactiveの間に挟まった状態(=作成日時降順の
+  // 実際のSQL結果でありうる並び)で、pendingがeffect計算のスロットを消費しない
+  // ことをここで固定する。もしpending/rejectedもカウントしていると、
+  // 本来10件計算できるはずのactiveがそれより少ない件数しか計算されず、
+  // Hermesから見て「未計算」が静かに増える(効果ゼロとは誤読しないが、
+  // 承認判断に使える情報が理由なく減る)。
+  it("上限10件はstatus='active'の行だけを数える。pending/rejectedが間に挟まってもactiveの計算対象は10件のまま", async () => {
+    const activeRow = (id: number) => ({ ...ACTIVE_TENANT_ROW, id, dedup_key: `tenant:carnation:rule-${id}` });
+    const pendingRow = (id: number) => ({ ...PENDING_TENANT_ROW, id, dedup_key: `tenant:carnation:pending-${id}` });
+
+    // created_at DESC(SQL側のORDER BY)で返ってくる想定の並び: pending/rejectedが
+    // 随所に混ざった状態でactiveが合計11件(id: 1〜11)ある。
+    const rows = [
+      pendingRow(100),
+      activeRow(1),
+      activeRow(2),
+      activeRow(3),
+      pendingRow(101),
+      activeRow(4),
+      activeRow(5),
+      activeRow(6),
+      activeRow(7),
+      activeRow(8),
+      pendingRow(102),
+      activeRow(9),
+      activeRow(10),
+      activeRow(11), // 上限超過分(11件目のactive)
+      pendingRow(103),
+    ];
+    mockQuery.mockResolvedValueOnce({ rows });
+    mockGetRuleEffect.mockResolvedValue({ status: "ok", comparison: {} });
+
+    const res = await authedGet("/v1/hermes-mcp/proposals");
+
+    expect(res.status).toBe(200);
+    // pendingが4件挟まっていても、activeの計算回数は10件のまま変わらない
+    expect(mockGetRuleEffect).toHaveBeenCalledTimes(10);
+
+    const proposals = res.body.proposals as Array<{
+      proposal_id: string;
+      status: string;
+      effect: unknown;
+    }>;
+    const activeProposals = proposals.filter((p) => p.status === "active");
+    const pendingProposals = proposals.filter((p) => p.status === "pending");
+
+    expect(activeProposals).toHaveLength(11);
+    // 上限内の10件は実計算結果
+    for (const p of activeProposals.slice(0, 10)) {
+      expect(p.effect).toEqual({ status: "ok", comparison: {} });
+    }
+    // 11件目のactiveだけが「未計算」マーカー
+    expect(activeProposals[10]!.effect).toEqual({ status: "not_computed", reason: "effect_limit_exceeded" });
+
+    // pendingは常にeffect: null(未計算マーカーとは異なる。pending/rejectedは
+    // そもそも効果測定の対象外であり、上限超過とは区別する)
+    expect(pendingProposals).toHaveLength(4);
+    for (const p of pendingProposals) {
+      expect(p.effect).toBeNull();
+    }
+  });
+
+  it("limit=0は無効(400)でクエリを発行しない", async () => {
+    const res = await authedGet("/v1/hermes-mcp/proposals?limit=0");
+    expect(res.status).toBe(400);
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  it("limitが負数は400でクエリを発行しない", async () => {
+    const res = await authedGet("/v1/hermes-mcp/proposals?limit=-1");
+    expect(res.status).toBe(400);
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  it("limitが小数(整数でない)は400", async () => {
+    const res = await authedGet("/v1/hermes-mcp/proposals?limit=1.5");
+    expect(res.status).toBe(400);
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  it("limitを配列で渡す(?limit=1&limit=2)と数値パースされず既定値50にフォールバックする(クラッシュしない)", async () => {
+    // expressはクエリパラメータが重複すると配列にする。typeof rawLimit === "string"の
+    // チェックに落ちるため、意図せず無効化された形になる(400にはならず既定値になる)。
+    // 想定外の入力形でも500やクラッシュにならないことを固定する。
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    const res = await authedGet("/v1/hermes-mcp/proposals?limit=1&limit=2");
+    expect(res.status).toBe(200);
+    expect(mockQuery.mock.calls[0]![1]).toEqual([50]);
   });
 
   it("limit未指定は既定50、200を超える指定は400でクエリを発行しない", async () => {
