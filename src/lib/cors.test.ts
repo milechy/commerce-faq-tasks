@@ -119,6 +119,49 @@ describe("corsMiddleware", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
+  it("returns Allow-Credentials only to an origin in the global allowlist", () => {
+    const mw = createCorsMiddleware({ defaultAllowedOrigins: ["https://admin.r2c.biz"] });
+    const req = mockReq({ headers: { origin: "https://admin.r2c.biz" } });
+    const res = mockRes();
+    mw(req, res, nextFn);
+    expect(res.headers["Access-Control-Allow-Origin"]).toBe("https://admin.r2c.biz");
+    expect(res.headers["Access-Control-Allow-Credentials"]).toBe("true");
+  });
+
+  it("returns Allow-Credentials to a known tenant origin", () => {
+    const mw = createCorsMiddleware({
+      defaultAllowedOrigins: [],
+      isKnownTenantOrigin: (origin) => origin === "https://tenant.example.com",
+    });
+    const req = mockReq({ headers: { origin: "https://tenant.example.com" } });
+    const res = mockRes();
+    mw(req, res, nextFn);
+    expect(res.headers["Access-Control-Allow-Origin"]).toBe("https://tenant.example.com");
+    expect(res.headers["Access-Control-Allow-Credentials"]).toBe("true");
+  });
+
+  it("does NOT return Allow-Credentials to an origin not in any allowlist", () => {
+    const mw = createCorsMiddleware({ defaultAllowedOrigins: ["https://admin.r2c.biz"] });
+    const req = mockReq({ headers: { origin: "https://evil.example" } });
+    const res = mockRes();
+    mw(req, res, nextFn);
+    expect(res.headers["Access-Control-Allow-Origin"]).toBeUndefined();
+    expect(res.headers["Access-Control-Allow-Credentials"]).toBeUndefined();
+  });
+
+  it("does NOT return Allow-Credentials for a dev-wildcard reflected origin (no allowlist, development/test)", () => {
+    // env 1変数の事故(ALLOWED_ORIGINS 未設定 + NODE_ENV=development/test 誤認)でも、
+    // 反射された任意 origin が credentials 付きで全開放される経路を塞ぐ。
+    process.env.NODE_ENV = "test";
+    const mw = createCorsMiddleware({ defaultAllowedOrigins: [] });
+    const req = mockReq({ headers: { origin: "https://anything.example" } });
+    const res = mockRes();
+    mw(req, res, nextFn);
+    // origin は反射されるが credentials は付かない
+    expect(res.headers["Access-Control-Allow-Origin"]).toBe("https://anything.example");
+    expect(res.headers["Access-Control-Allow-Credentials"]).toBeUndefined();
+  });
+
   it("does not warn when ALLOWED_ORIGINS is configured", () => {
     process.env.NODE_ENV = "production";
     const warn = jest.fn();

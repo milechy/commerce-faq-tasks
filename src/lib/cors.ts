@@ -77,18 +77,40 @@ export function createCorsMiddleware(opts: CorsOptions = {}) {
   ): void {
     const origin = req.headers.origin;
 
-    const isAllowed =
+    // 明示allowlist一致: env ALLOWED_ORIGINS もしくは「いずれかのテナントに登録済み」の
+    // origin。credentials(Access-Control-Allow-Credentials:true)を返してよいのは
+    // この経路で一致した origin だけに限定する。
+    const isExplicitlyAllowed =
       !!origin &&
       (allowedSet.has(origin) ||
-        (opts.isKnownTenantOrigin?.(origin) ?? false) ||
-        (allowedSet.size === 0 && isDevWildcardModeActive()));
+        (opts.isKnownTenantOrigin?.(origin) ?? false));
+
+    // dev wildcard: allowlist が全く未設定(=ALLOWED_ORIGINS env未設定)のときだけ、
+    // development/test で任意 origin を echo-back してローカル開発を通す。ただしこの
+    // 経路は credentials を絶対に付けない(下記参照)。よって production が誤って
+    // development/test を名乗る env でも、未検証 origin が credentials 付きで
+    // クロスオリジン読み取りを成立させることはできない(fail-safe)。
+    const isDevWildcard =
+      !isExplicitlyAllowed &&
+      !!origin &&
+      allowedSet.size === 0 &&
+      isDevWildcardModeActive();
+
+    const isAllowed = isExplicitlyAllowed || isDevWildcard;
 
     if (isAllowed) {
       res.setHeader("Access-Control-Allow-Origin", origin as string);
       res.setHeader("Vary", "Origin");
     }
 
-    res.setHeader("Access-Control-Allow-Credentials", "true");
+    // credentials は「明示allowlist一致」origin にのみ返す。dev wildcard で反射した
+    // だけの origin には Allow-Origin は返るが Allow-Credentials は返さない。これにより
+    // ALLOWED_ORIGINS 設定漏れ + NODE_ENV 誤認という env 1変数の事故でも、任意 origin が
+    // credentials 付きで全開放される経路(fail-open)を塞ぐ。NODE_ENV に依存せず一貫して
+    // 安全側に倒す。
+    if (isExplicitlyAllowed) {
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+    }
     res.setHeader("Access-Control-Allow-Headers", ALLOWED_HEADERS);
     res.setHeader("Access-Control-Expose-Headers", EXPOSED_HEADERS);
     res.setHeader(
