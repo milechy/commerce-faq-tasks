@@ -416,12 +416,18 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
     1 会話が複数 variant にまたがると勝敗判定が無意味になる。割当は `sessionId` で固定し、
     `chat_sessions.prompt_variant_id` に必ず記録する（記録しないと統計が常に空になる）。
 37. **`starter` より下のプラン段を足すときに、fail-safe の落とし先を直さない。**
-    `planFeatures.ts` は「取得失敗・未設定時は最も制限の強い段」を不変条件として
-    3 箇所で `starter` に倒している（`rank()` の `?? PLAN_RANK.starter` / `queryTenantPlan` の
-    allowlist / その `catch` 返り値）。最下段を入れ替えると、この 3 箇所が
-    **DB 障害時に無料テナントを Starter へ「昇格」させる経路に反転する**。
-    型チェックもテストも通り、障害時にしか発現しないため気づけない。
-    プラン段を増やすときは**必ず 3 箇所を同時に直し、3 箇所それぞれにテストを書く**。
+    `planFeatures.ts` は「取得失敗・未設定時は最も制限の強い段」を不変条件としている。
+    2026-08-30 に allowlist（既知の5値の羅列）は `queryTenantPlan` /
+    `queryTenantPlanOrThrow` / `queryTenantPlanResult` の3箇所への個別コピペから
+    `parseKnownPlan`（純粋関数）1箇所への集約に統合済み。DB例外時にどう倒すか
+    （`queryTenantPlan`＝free_ad へ丸める／`queryTenantPlanOrThrow`＝そのままthrow／
+    `queryTenantPlanResult`＝null）は各関数の呼び出し元側にそれぞれ残るため、
+    この統合で fail-safe の向きは変えていない。最下段を入れ替える際に直すべきは
+    **`rank()` の `?? PLAN_RANK.free_ad` と `parseKnownPlan` の2箇所**。
+    どちらか片方でも取り残すと、型チェックもテストも通ったまま
+    **DB 障害時に無料テナントが上位段へ「昇格」する経路に反転する**
+    （障害時にしか発現しないため気づけない）。プラン段を増やすときは
+    **必ずこの2箇所を同時に直し、テストを書く**。
 38. **ウィジェットの配布経路が 2 系統あり、24 時間キャッシュされる事実を無視した設計をする。**
     ①`GET /widget/:tenantSlug.js`（`src/api/widget/routes.ts`）— テナント設定を注入する動的版。
     ②`public/widget.js` + `data-tenant` 属性 — プラン判定を一切経由しない静的版。
@@ -540,8 +546,10 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
 55. **プランを 1 段増やすときに、影響箇所を分けて直す。**
     プランは `PLAN_RANK` / `PLAN_MULTIPLIERS` / `FEATURE_MIN_PLAN` / DB の CHECK 制約 /
     `admin-ui` 側のミラー（`admin-ui/src/lib/planFeatures.ts`・`PLAN_OPTIONS`）に**分散して定義されている**。
-    さらに fail-safe の落とし先が 3 箇所ある（`rank()` の既定値 / `queryTenantPlan` の allowlist /
-    その catch 返り値）。**これらを同じ PR で同時に直さないと、型チェックもテストも通ったまま
+    さらに fail-safe の落とし先が `rank()` の既定値と `parseKnownPlan`（プラン文字列の
+    検証。`queryTenantPlan`/`queryTenantPlanOrThrow`/`queryTenantPlanResult` が共通で使う。
+    2026-08-30 に3関数個別のallowlistから1箇所へ統合済み。→37）の2箇所ある。
+    **これらを同じ PR で同時に直さないと、型チェックもテストも通ったまま
     障害時にだけ発現する**（free_ad 追加時に「最も危険な変更」と位置づけられたのと同型）。
     段の間に挿入する場合は特に、既存プランの `PLAN_RANK` の相対順序が崩れていないかを必ず確認する。
 56. **アバターを「回数」で課金する／テキストを「リクエスト」で課金する。**
