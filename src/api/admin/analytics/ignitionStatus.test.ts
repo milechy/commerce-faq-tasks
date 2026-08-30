@@ -155,7 +155,14 @@ describe("buildIgnitionStatus — judge_x_memory_intersection(ナレッジ配線
 });
 
 describe("buildIgnitionStatus — hermes_raw_data_consent(H-1: 点火状態の同意表示ドリフト是正)", () => {
-  it("1) 新形式 learning={learn:true,share:true} → 同意済み", () => {
+  // 各ケースは「旧実装 featureFlagOn(t.features, 'hermes_raw_data_consent') に戻すと
+  // 必ず結果が割れる」入力になるよう調整してある(前任者の申告: 2件しか赤くならなかった
+  // 反省)。featureFlagOn は "hermes_raw_data_consent" キーだけを見て learning を一切
+  // 見ないので、各ケースで旧実装が拾ってしまう hermes_raw_data_consent の値をわざと
+  // 用意し、新実装(resolveLearningConsentFromFeatures)が正しくそれを上書き/無視する
+  // ことを固定している。
+
+  it("1) 新形式 learning={learn:true,share:true}、旧フラグは未設定 → 同意済み(旧実装は未設定キーを拾えず未同意になり割れる)", () => {
     const res = buildIgnitionStatus(
       [{ id: "t", features: { learning: { learn: true, share: true } } }],
       deps(),
@@ -163,15 +170,20 @@ describe("buildIgnitionStatus — hermes_raw_data_consent(H-1: 点火状態の�
     expect(cell(res, "t", "hermes_raw_data_consent").enabled).toBe(true);
   });
 
-  it("2) 旧フラグのみ(learning 未設定 + hermes_raw_data_consent=true) → 同意済み（後方互換）", () => {
+  it('2) 旧フラグの緩い文字列一致("true")は同意にしない(featureFlagOn同等の緩い比較に戻すと"true"文字列も同意扱いになり割れる)', () => {
+    // hermesConsent.ts の resolveLearningConsentFromFeatures は
+    // features?.hermes_raw_data_consent === true という strict boolean 比較のみを
+    // 同意として扱う(shareConsentSqlPredicate の jsonb_typeof 厳格化と揃える)。
+    // 一方 featureFlagOn は dialogAgent.ts の ->> 文字列比較に合わせて "true" 文字列も
+    // 同意として扱うため、ここで判定が割れる。
     const res = buildIgnitionStatus(
-      [{ id: "t", features: { hermes_raw_data_consent: true } }],
+      [{ id: "t", features: { hermes_raw_data_consent: "true" } }],
       deps(),
     );
-    expect(cell(res, "t", "hermes_raw_data_consent").enabled).toBe(true);
+    expect(cell(res, "t", "hermes_raw_data_consent").enabled).toBe(false);
   });
 
-  it("3) 新形式 learning={learn:true,share:false} + 旧フラグ true → 未同意（新形式が優先される）", () => {
+  it("3) 新形式 learning={learn:true,share:false} + 旧フラグ true → 未同意（新形式が優先される。旧実装に戻すと旧フラグを拾って同意扱いに反転し割れる）", () => {
     const res = buildIgnitionStatus(
       [
         {
@@ -184,11 +196,87 @@ describe("buildIgnitionStatus — hermes_raw_data_consent(H-1: 点火状態の�
     expect(cell(res, "t", "hermes_raw_data_consent").enabled).toBe(false);
   });
 
-  it("4) learning が壊れた形（文字列/配列/不完全オブジェクト）→ fail-safeで未同意", () => {
+  it("4) learning が壊れた形（文字列/配列/不完全オブジェクト）→ 旧フラグが同意済みでも fail-safeで未同意（旧実装に戻すと壊れたlearningを無視して旧フラグをそのまま拾い同意扱いに反転し割れる）", () => {
     for (const broken of ["true", ["learn"], { learn: true }]) {
-      const res = buildIgnitionStatus([{ id: "t", features: { learning: broken } }], deps());
+      const res = buildIgnitionStatus(
+        [{ id: "t", features: { learning: broken, hermes_raw_data_consent: true } }],
+        deps(),
+      );
       expect(cell(res, "t", "hermes_raw_data_consent").enabled).toBe(false);
     }
+  });
+});
+
+describe("buildIgnitionStatus — hermes_raw_data_consent の reason 文言(判定根拠を新形式/旧フラグで区別する)", () => {
+  it("新形式(features.learning が定義済み)で判定した場合は reason に「新形式」と出て「旧フラグ」は出ない", () => {
+    const enabled = buildIgnitionStatus(
+      [{ id: "t", features: { learning: { learn: true, share: true } } }],
+      deps(),
+    );
+    expect(cell(enabled, "t", "hermes_raw_data_consent").reason).toContain("新形式");
+    expect(cell(enabled, "t", "hermes_raw_data_consent").reason).not.toContain("旧フラグ");
+
+    const disabled = buildIgnitionStatus(
+      [{ id: "t", features: { learning: { learn: true, share: false } } }],
+      deps(),
+    );
+    expect(cell(disabled, "t", "hermes_raw_data_consent").reason).toContain("新形式");
+    expect(cell(disabled, "t", "hermes_raw_data_consent").reason).not.toContain("旧フラグ");
+  });
+
+  it("旧フラグ判定(features.learning 未設定)の場合は reason に「旧フラグ」と出て「新形式」は出ない", () => {
+    const enabled = buildIgnitionStatus(
+      [{ id: "t", features: { hermes_raw_data_consent: true } }],
+      deps(),
+    );
+    expect(cell(enabled, "t", "hermes_raw_data_consent").reason).toContain("旧フラグ");
+    expect(cell(enabled, "t", "hermes_raw_data_consent").reason).not.toContain("新形式");
+
+    const disabled = buildIgnitionStatus([{ id: "t", features: null }], deps());
+    expect(cell(disabled, "t", "hermes_raw_data_consent").reason).toContain("旧フラグまたは未設定");
+    expect(cell(disabled, "t", "hermes_raw_data_consent").reason).not.toContain("新形式");
+  });
+});
+
+describe("buildIgnitionStatus — hermes_raw_data_consent は share のみで判定する(learnは判定に無関係)", () => {
+  it("zodでは拒否される learn:false かつ share:true の組み合わせがDB上の既存データとして残っていても、shareだけを見て同意済みと判定する", () => {
+    // src/api/admin/tenants/routes.ts の zod は learn:false/share:true の新規保存を拒否するが、
+    // 過去に別経路で書き込まれた既存行がこの組み合わせを持つ可能性は排除できない。
+    // ignitionStatus は「今のDBの値をそのまま見せる」画面なので、learnの値に関わらず
+    // shareだけで判定できることを固定する。
+    const res = buildIgnitionStatus(
+      [{ id: "t", features: { learning: { learn: false, share: true } } }],
+      deps(),
+    );
+    expect(cell(res, "t", "hermes_raw_data_consent").enabled).toBe(true);
+  });
+
+  it("share:false のとき、learnがtrue/falseどちらでも判定結果は変わらない", () => {
+    const learnTrue = buildIgnitionStatus(
+      [{ id: "t", features: { learning: { learn: true, share: false } } }],
+      deps(),
+    );
+    const learnFalse = buildIgnitionStatus(
+      [{ id: "t", features: { learning: { learn: false, share: false } } }],
+      deps(),
+    );
+    expect(cell(learnTrue, "t", "hermes_raw_data_consent").enabled).toBe(false);
+    expect(cell(learnFalse, "t", "hermes_raw_data_consent").enabled).toBe(false);
+  });
+});
+
+describe("buildIgnitionStatus — hermes_raw_data_consent は即時反映(60秒TTLキャッシュ経由ではない)", () => {
+  it("同じテナントIDでも features が変われば直前の呼び出し結果に関わらず即座に新しい値を返す(getCachedShareConsentのようなTTLキャッシュを経由しているとこの2回目呼び出しで古い値が残りうる)", () => {
+    const before = buildIgnitionStatus(
+      [{ id: "carnation", features: { hermes_raw_data_consent: false } }],
+      deps(),
+    );
+    const after = buildIgnitionStatus(
+      [{ id: "carnation", features: { hermes_raw_data_consent: true } }],
+      deps(),
+    );
+    expect(cell(before, "carnation", "hermes_raw_data_consent").enabled).toBe(false);
+    expect(cell(after, "carnation", "hermes_raw_data_consent").enabled).toBe(true);
   });
 });
 
@@ -372,5 +460,12 @@ describe("フラグ解釈を再実装していないことの機械的ガード"
     expect(src).toMatch(
       /import\s*\{[^}]*resolveLearningConsentFromFeatures[^}]*\}\s*from\s*".*hermesConsent"/s,
     );
+  });
+
+  it("同意判定に60秒TTLキャッシュ(getCachedShareConsent)を使っていない(即時反映が要件)", () => {
+    // getCachedShareConsent は /api/chat のような高頻度経路向けのTTLキャッシュで、
+    // 同意変更そのものを扱うこの画面で使うと最大60秒古い値を表示しうる。
+    // resolveLearningConsentFromFeatures を直接呼ぶことを固定する。
+    expect(src).not.toMatch(/getCachedShareConsent/);
   });
 });
