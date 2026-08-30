@@ -91,12 +91,30 @@
       document.getElementById('hidden-car-name').value = carName || '';
 
       var summary = document.getElementById('car-summary');
-      summary.innerHTML =
-        '<div class="card" style="margin-bottom: 24px; border: 1px solid #2563eb;">' +
-          '<div style="font-size: 13px; color: #9ca3af; margin-bottom: 6px;">購入対象車両</div>' +
-          '<div style="font-size: 18px; font-weight: 700; color: #f9fafb; margin-bottom: 4px;">' + displayName + '</div>' +
-          (displayPrice ? '<div style="font-size: 26px; font-weight: 800; color: #3b82f6;">' + displayPrice + '</div>' : '') +
-        '</div>';
+      // URLクエリ由来の値(displayName)は textContent で挿入し reflected XSS を防ぐ
+      var card = document.createElement('div');
+      card.className = 'card';
+      card.style.cssText = 'margin-bottom: 24px; border: 1px solid #2563eb;';
+
+      var label = document.createElement('div');
+      label.style.cssText = 'font-size: 13px; color: #9ca3af; margin-bottom: 6px;';
+      label.textContent = '購入対象車両';
+      card.appendChild(label);
+
+      var nameEl = document.createElement('div');
+      nameEl.style.cssText = 'font-size: 18px; font-weight: 700; color: #f9fafb; margin-bottom: 4px;';
+      nameEl.textContent = displayName;
+      card.appendChild(nameEl);
+
+      if (displayPrice) {
+        var priceEl = document.createElement('div');
+        priceEl.style.cssText = 'font-size: 26px; font-weight: 800; color: #3b82f6;';
+        priceEl.textContent = displayPrice;
+        card.appendChild(priceEl);
+      }
+
+      summary.innerHTML = '';
+      summary.appendChild(card);
     }
 
     document.getElementById('purchase-form').addEventListener('submit', function(e) {

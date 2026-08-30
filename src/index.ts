@@ -188,6 +188,12 @@ app.use(
       "Content-Security-Policy",
       [
         "default-src 'self'",
+        // TODO(security): script-src の 'unsafe-inline' を撤去したい。ただし public 配下は
+        // widget.js の埋め込み(#1039で inline 消失→本番チャット全停止の前例あり)と LP/デモの
+        // inline <script> に広く依存しており、一律撤去は破壊的。carnation-demo は本コミットで
+        // クエリ由来値の innerHTML sink を除去済み(reflected XSS の能動的経路は閉塞)なので、
+        // ここでの 'unsafe-inline' は現状「多層防御の一段」に留まる。恒久対応は inline を外部
+        // ファイル化 or nonce/hash 化してパス単位で段階的に締める(別タスク)。
         "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdn.tailwindcss.com",
         "style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com",
         "img-src 'self' data: https://cdn.leonardo.ai https://rpqrwifbrhlebbelyqog.supabase.co",

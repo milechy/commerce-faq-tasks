@@ -68,8 +68,15 @@
       document.getElementById('hidden-car-id').value = carId;
       if (carName) {
         var banner = document.getElementById('car-banner');
-        banner.innerHTML =
-          '<div class="selected-car-banner">お問い合わせ車両: <span>' + decodeURIComponent(carName) + '</span></div>';
+        // URLクエリ由来の値は textContent で挿入し reflected XSS を防ぐ(innerHTML連結を廃止)
+        var wrap = document.createElement('div');
+        wrap.className = 'selected-car-banner';
+        wrap.appendChild(document.createTextNode('お問い合わせ車両: '));
+        var nameEl = document.createElement('span');
+        nameEl.textContent = decodeURIComponent(carName);
+        wrap.appendChild(nameEl);
+        banner.innerHTML = '';
+        banner.appendChild(wrap);
       }
     }
 
