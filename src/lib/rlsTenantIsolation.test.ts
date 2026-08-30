@@ -59,13 +59,17 @@ d("phase76 RLS テナント越境遮断（実 Postgres・非オーナーロー�
     await owner.query(
       `GRANT SELECT, INSERT, UPDATE, DELETE ON chat_sessions, chat_messages TO ${APP_ROLE}`,
     );
-    await owner.query(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${APP_ROLE}`);
+    await owner.query(
+      `GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${APP_ROLE}`,
+    );
 
     // 3) appPool は接続確立ごとに SET ROLE で非オーナーへ降格する。
     //    これで withTenant() が握るクライアントは RLS の対象になる。
     appPool = new Pool({ connectionString: DB_URL });
     appPool.on("connect", (client) => {
-      void client.query(`SET ROLE ${APP_ROLE}`);
+      void client.query(
+        `SET ROLE ${APP_ROLE}`,
+      );
     });
   });
 
