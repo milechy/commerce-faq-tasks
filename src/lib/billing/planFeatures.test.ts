@@ -22,6 +22,7 @@ import type { GatedFeature } from "./planFeatures";
 // 「新ゲートだけ fail-safe が検証されていない」状態になる。1箇所に置く。
 const ALL_GATED_FEATURES: readonly GatedFeature[] = [
   "avatar",
+  "voice",
   "avatar_customize",
   "voice_clone",
   "analytics",
@@ -64,6 +65,12 @@ describe("planHasFeature", () => {
     // 他は全て growth 以上のまま。★ここが Standard(¥9,800)の商品性そのもの★
     ["starter", "avatar", false],
     ["standard", "avatar", true],
+    // voice(TTS/ASR)は avatar と同格で Standard から開く。free_ad/starter は不可。
+    ["free_ad", "voice", false],
+    ["starter", "voice", false],
+    ["standard", "voice", true],
+    ["growth", "voice", true],
+    ["enterprise", "voice", true],
     ["standard", "avatar_customize", false],
     ["standard", "premium_avatar", false],
     ["standard", "analytics", true],
@@ -138,11 +145,12 @@ describe("PLAN_RANK の相対順序（standard を starter と growth の間に�
     expect(count("standard")).toBeLessThan(count("growth"));
   });
 
-  it("standard で開くのは avatar と analytics(値引きではなくアバター開放・会話分析が目的)", () => {
+  it("standard で開くのは avatar・voice と analytics(アバター開放・音声・会話分析が目的)", () => {
     const gained = ALL_GATED_FEATURES.filter(
       (f) => planHasFeature("standard", f) && !planHasFeature("starter", f),
     );
-    expect(gained).toEqual(["avatar", "analytics"]);
+    // voice は avatar 体験の一部(声で話す/聞く)なので avatar と同じ Standard 段で開く。
+    expect(gained).toEqual(["avatar", "voice", "analytics"]);
   });
 
   it("growth で追加されるものに avatar_customize が含まれる(Standardとの差別化の実体)", () => {

@@ -213,9 +213,9 @@ describe("planFeatureDelta（プラン変更の確認画面に出す増減）", 
   // Standard は「アバターと会話分析を開放するが、カスタム作成・成果分析は開放しない」段。
   // 確認画面がこの境界を取り違えると、テナントは「自社アバターを作れる」「成果分析も
   // 見られる」と誤解して契約する(CLAUDE.md 禁止54: 価格表記と実装を割らない)。
-  it("starter → standard で増えるのは avatar と analytics(avatar_customize / conversion は増えない)", () => {
+  it("starter → standard で増えるのは avatar・voice と analytics(avatar_customize / conversion は増えない)", () => {
     const { gained, lost } = planFeatureDelta("starter", "standard");
-    expect(gained).toEqual(["avatar", "analytics"]);
+    expect(gained).toEqual(["avatar", "voice", "analytics"]);
     expect(lost).toEqual([]);
   });
 

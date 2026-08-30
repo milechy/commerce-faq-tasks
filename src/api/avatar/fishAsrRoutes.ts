@@ -7,11 +7,41 @@ import crypto from 'node:crypto';
 import multer from 'multer';
 import type { Express, NextFunction, Request, Response, RequestHandler } from 'express';
 import type { AuthedRequest } from '../../agent/http/authMiddleware';
+import { getPool } from '../../lib/db';
 import { logger } from '../../lib/logger';
 import { trackUsage } from '../../lib/billing/usageTracker';
+import { queryTenantPlan, planHasFeature } from '../../lib/billing/planFeatures';
 import { parseWavDurationSeconds } from '../../lib/audio/wavDuration';
 
 const FISH_ASR_API = 'https://api.fish.audio/v1/asr';
+
+// GID(voice plan gate): ASR は Fish Audio 従量課金($0.36/audio hour)を発生させるため、
+// voice 機能を含むプラン(既定 Standard 以上)に限定する。free_ad(倍率0)/starter の
+// 公開api-keyから叩かれると請求不能な原価が会社負担になり、匿名コスト増幅DoSになる。
+// multer(最大20MBのメモリバッファ)の「前」に置くことで、未認可プランのリクエストに
+// 20MB のアップロードを buffer させない。fail-safe: queryTenantPlan は取得失敗時に
+// free_ad を返す(=403、原価は発生させない)。原価保護ゲートなので fail-closed が正しい。
+async function requireVoicePlan(req: Request, res: Response, next: NextFunction): Promise<void> {
+  const tenantId = (req as AuthedRequest).tenantId;
+  if (!tenantId) {
+    res.status(401).json({ error: 'unauthorized' });
+    return;
+  }
+  try {
+    const plan = await queryTenantPlan(getPool(), tenantId);
+    if (!planHasFeature(plan, 'voice')) {
+      logger.warn(`[fishAsr] plan=${plan} lacks voice feature — blocked tenant: ${tenantId}`);
+      res.status(403).json({ error: 'plan_upgrade_required', feature: 'voice' });
+      return;
+    }
+    next();
+  } catch (err) {
+    // queryTenantPlan は DB例外を内部で握って free_ad を返すため通常ここには来ないが、
+    // getPool() 自体(未設定など)が投げるケースに備え fail-closed(500)で止める。
+    logger.error({ err, tenantId }, '[fishAsr] plan gate failed');
+    res.status(500).json({ error: 'plan check failed' });
+  }
+}
 
 const audioUpload = multer({
   storage: multer.memoryStorage(),
@@ -57,6 +87,9 @@ export function registerFishAsrRoutes(app: Express, apiStack: RequestHandler[]):
   app.post(
     '/api/voice/asr',
     ...apiStack,
+    // プランゲートは multer(最大20MBバッファ)の前。未認可プランに巨大アップロードを
+    // buffer させず、Fish ASR 原価も発生させない。
+    requireVoicePlan,
     audioUpload.single('audio'),
     handleAsrUploadError,
     async (req: Request, res: Response) => {
