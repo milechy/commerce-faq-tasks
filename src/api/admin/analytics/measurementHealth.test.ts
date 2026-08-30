@@ -396,4 +396,61 @@ describe("fetchHermesAcceptanceRate", () => {
     expect(result.acceptanceRate).toEqual({ numerator: 0, denominator: 0, rate: null });
     expect(result.pendingCount).toBe(0);
   });
+
+  // 他の提案元(judge提案・evaluationのsuggested_rules/knowledge_gaps等)は同じ
+  // tuning_rules テーブルに同居している。SQL側のWHERE句が外れると、それらが
+  // 静かに母数へ混ざり込み「Hermesを止めるか続けるか」の判断そのものを誤らせる。
+  // ここではmakeDbがSQL文の中身を見ないモックのため実データでの遮断は検証できないが、
+  // WHERE句自体がクエリから失われていないことをテキストロックで固定する。
+  it("SQLはsource='hermes'で絞り込む(judge提案等の他sourceを母数に混ぜない)", async () => {
+    const db = makeDb([{ rows: [{ active: "3", rejected: "1", pending: "5" }] }]);
+
+    await fetchHermesAcceptanceRate(db);
+
+    const [sql] = db.query.mock.calls[0] as [string, unknown[]?];
+    expect(sql).toMatch(/WHERE\s+source\s*=\s*'hermes'/);
+    // source列に対する絞り込みがこの1箇所だけであること(WHERE句の外に
+    // source条件が漏れて二重定義になっていないか、逆に別の緩い条件に
+    // すり替わっていないかを1箇所の完全一致で固定する)
+    expect(sql.match(/source\s*=\s*'hermes'/g)?.length).toBe(1);
+  });
+
+  // 集計は全テナント横断の累計値(super_adminにのみ合成される。routes.tsの
+  // コメント・schemaHealthRoute.test.tsで確認済み)。tenant_id述語が紛れ込むと
+  // 一部テナントの提案だけを見て「Hermesの成果」を語ることになり、意図と異なる。
+  it("SQLはtenant_idで絞り込まない(全テナント横断の累計値であることを固定する)", async () => {
+    const db = makeDb([{ rows: [{ active: "3", rejected: "1", pending: "5" }] }]);
+
+    await fetchHermesAcceptanceRate(db);
+
+    const [sql] = db.query.mock.calls[0] as [string, unknown[]?];
+    expect(sql).not.toMatch(/tenant_id/);
+  });
+
+  // status='active'/'rejected'/'pending'以外の値(NULL・空文字・未知の文字列)の行は
+  // どのFILTERにも一致せずCOUNT(*)から漏れる。無条件の全件COUNTが別途あると、
+  // その「行方不明」の件数が別経路で母数に紛れ込む余地になるため、3つのFILTER付き
+  // COUNT(*)以外に無条件COUNT(*)が存在しないことも合わせて固定する。
+  it("SQLはstatus='active'/'rejected'/'pending'の完全一致FILTERのみで集計する(想定外statusの行はどのFILTERにも入らず母数を汚さない)", async () => {
+    const db = makeDb([{ rows: [{ active: "3", rejected: "1", pending: "5" }] }]);
+
+    await fetchHermesAcceptanceRate(db);
+
+    const [sql] = db.query.mock.calls[0] as [string, unknown[]?];
+    expect(sql).toMatch(/FILTER\s*\(WHERE\s+status\s*=\s*'active'\)/);
+    expect(sql).toMatch(/FILTER\s*\(WHERE\s+status\s*=\s*'rejected'\)/);
+    expect(sql).toMatch(/FILTER\s*\(WHERE\s+status\s*=\s*'pending'\)/);
+    expect(sql.match(/COUNT\(\*\)/g)?.length).toBe(3);
+  });
+
+  // CLAUDE.md 禁止16: AT TIME ZONE を片側だけ書く・サーバTZ依存の実装は本番でのみ
+  // ズレ、数値はもっともらしく出るため気づけない。asOfはSQLのAT TIME ZONEではなく
+  // JS Date#toISOString()(常にUTC・'Z'終端)で作るためprocess TZに依存しないことを固定する。
+  it("asOfはUTC('Z'終端)のISO文字列で、process TZに依存しない(禁止16)", async () => {
+    const db = makeDb([{ rows: [{ active: "1", rejected: "1", pending: "0" }] }]);
+
+    const result = await fetchHermesAcceptanceRate(db);
+
+    expect(result.asOf).toMatch(/Z$/);
+  });
 });

@@ -153,6 +153,12 @@ describe('GET /v1/admin/analytics/measurement-health のスキーマ整合', () 
       asOf: '2026-08-30T00:00:00.000Z',
     });
     expect(mockFetchHermesAcceptanceRate).toHaveBeenCalledTimes(1);
+    // 全テナント横断の累計値であることを固定する: 呼び出しにtenantIdを渡していない
+    // (渡してしまうと、fetchMeasurementHealthの他5指標のようにテナントで絞り込む
+    // 実装に将来変わっても検知できない)。fetchHermesAcceptanceRate(db)はdb1引数の
+    // シグネチャなので、呼び出し引数がpoolのみであることを確認する。
+    expect(mockFetchHermesAcceptanceRate).toHaveBeenCalledWith(expect.anything());
+    expect(mockFetchHermesAcceptanceRate.mock.calls[0]).toHaveLength(1);
   });
 
   it('母数不足(denominator=0)のときも rate:null をそのまま返す(0%に丸めない)', async () => {

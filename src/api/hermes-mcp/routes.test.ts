@@ -274,6 +274,34 @@ describe("POST /v1/hermes-mcp/proposals", () => {
     expect(mockCreateNotification).not.toHaveBeenCalled();
   });
 
+  // H-7(GID 1217972930945091): 採択率 = active / (active + rejected) の分母は
+  // Hermesが同じdedup_keyで再提案しても二重に増えてはいけない。ON CONFLICT DO
+  // NOTHINGは既存行を一切UPDATEしないため、却下済み(status='rejected')の行に
+  // 対して再投稿しても、その行はrejectedのまま(pendingに戻って母数の判定待ちに
+  // 逆戻りすることも、rejectedのままもう1行増えて母数が二重計上されることもない)。
+  // 上のテストと挙動は同じだが、ここではその「なぜそれでよいか」を明示するために
+  // 分けて固定する。INSERT文自体にUPDATEやstatus書き換えの経路が無いことも
+  // SQL文で確認する(欠陥があればここが失敗する)。
+  it("却下済み(rejected)の提案が同じdedup_keyで再投稿されても、既存行のstatusはDBに一切触れられない(pendingに復活せず、母数も二重に増えない)", async () => {
+    mockIsConsentGranted.mockResolvedValue(true);
+    // ON CONFLICT DO NOTHING が発火した体(=既存rejected行に一切触れず、
+    // 新しい行も挿入されない)を rows: [] で表現する。
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    const res = await authedPost("/v1/hermes-mcp/proposals", VALID_TENANT_PROPOSAL);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ duplicate: true });
+
+    const [sql] = mockQuery.mock.calls[0] as [string, unknown[]];
+    // INSERT ... ON CONFLICT ... DO NOTHING であること(DO UPDATEではない)。
+    // DO UPDATEだと既存rejected行のstatusが書き換わりうる。
+    expect(sql).toMatch(/INSERT INTO tuning_rules/);
+    expect(sql).toMatch(/ON CONFLICT \(tenant_id, dedup_key\)[\s\S]*DO NOTHING/);
+    expect(sql).not.toMatch(/DO UPDATE/);
+    // 通知も飛ばない(既存行への言及・再通知はしない)
+    expect(mockCreateNotification).not.toHaveBeenCalled();
+  });
+
   it("バリデーションエラー: 不正なscopeは400", async () => {
     const res = await authedPost("/v1/hermes-mcp/proposals", { ...VALID_GLOBAL_PROPOSAL, scope: "bogus" });
     expect(res.status).toBe(400);
