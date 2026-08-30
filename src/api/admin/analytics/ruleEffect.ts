@@ -271,7 +271,10 @@ export async function fetchRuleMeta(db: Db, ruleId: number): Promise<FetchRuleRe
   return { status: "found", rule };
 }
 
-interface CandidateSessionRow {
+// export: ruleEffectSqlIntegration.test.ts が「行がfirst_message_at降順で
+// 返ってくる」不変条件を直接検証するため(プラン非依存で決定的な検証。
+// getRuleEffect経由の集計値だけでは行順の情報が失われ検証できない)。
+export interface CandidateSessionRow {
   session_uuid: string;
   first_message: string;
   first_message_at: string;
@@ -297,7 +300,7 @@ interface CandidateSessionRow {
 export const CANDIDATE_SESSION_LIMIT = 5000;
 const CANDIDATE_SESSION_PER_SIDE_LIMIT = CANDIDATE_SESSION_LIMIT / 2;
 
-interface FetchCandidateSessionsResult {
+export interface FetchCandidateSessionsResult {
   rows: CandidateSessionRow[];
   truncated: boolean;
 }
@@ -316,7 +319,7 @@ interface FetchCandidateSessionsResult {
  * 直近(first_message_at DESC)を優先するため、上限に掛かると各側とも古い方から
  * 欠落する。
  */
-async function fetchCandidateSessions(
+export async function fetchCandidateSessions(
   db: Db,
   tenantId: string,
   sinceIso: string,
@@ -374,7 +377,23 @@ async function fetchCandidateSessions(
        EXISTS (SELECT 1 FROM conversion_attributions ca
                  WHERE ca.session_id = f.session_uuid) AS converted
      FROM limited f
-     JOIN chat_sessions cs ON cs.id = f.session_uuid`,
+     JOIN chat_sessions cs ON cs.id = f.session_uuid
+     -- ★このORDER BYは削除禁止★
+     -- before_limited/after_limitedそれぞれの内部にあるDESC降順+LIMIT句は、
+     -- 各CTEが「どの行をLIMITで選ぶか」を決めるだけで、UNION ALL + JOINを経た後に
+     -- Postgresが実際に返す行の並び順までは保証しない(CTEが常にmaterializeされる
+     -- 保証はPostgres 12以降無くなっており、インライン化されればなおさら順序は
+     -- 崩れうる。呼び出し側とのJOINでHash Joinが選ばれれば尚更順序は崩れる)。
+     -- 呼び出し側のfetchCandidateSessions()は
+     -- beforeRows.slice(0, CANDIDATE_SESSION_PER_SIDE_LIMIT) で
+     -- 「配列の先頭 = first_message_at降順(直近優先)」を前提にしており、
+     -- この前提はここで明示的にORDER BYしない限り成立しない。
+     -- 実際、このORDER BYを外し、chat_sessionsとのJOINでHash Joinを強制すると
+     -- (enable_nestloop/enable_mergejoinをoff)、まっさらなDBで5回連続で確実に
+     -- 順序が崩れることを確認済み(ruleEffectSqlIntegration.test.ts の
+     -- 「ORDER BYの不変条件を直接検証」テスト)。このORDER BYはプラン非依存の
+     -- 保証として必須。
+     ORDER BY f.first_message_at DESC`,
     [tenantId, sinceIso, approvedAtIso, CANDIDATE_SESSION_PER_SIDE_LIMIT + 1],
   );
 
