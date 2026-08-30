@@ -68,6 +68,11 @@ describe("MonitoringPage — 計測ヘルス", () => {
       expect(screen.getAllByText("判定に足りない").length).toBeGreaterThan(0);
     });
     expect(screen.queryByText("0%")).toBeNull();
+    // 禁止34: 母数不足時に出してはいけない表現の否定側アサーション
+    // (「判定に足りない」が出ていることの確認だけでは、他の禁止表現との
+    // 同時描画を見逃す)
+    expect(screen.queryByText("効果なし")).toBeNull();
+    expect(screen.queryByText(/[↑↓▲▼]/)).toBeNull();
   });
 
   it("母数が十分なとき、パーセンテージと実件数を表示する", async () => {
@@ -152,6 +157,9 @@ describe("MonitoringPage — Hermes提案の採択率", () => {
     });
     expect(screen.getAllByText("判定に足りない").length).toBeGreaterThan(0);
     expect(screen.queryByText("0%")).toBeNull();
+    // 禁止34: 母数不足時に出してはいけない表現の否定側アサーション
+    expect(screen.queryByText("効果なし")).toBeNull();
+    expect(screen.queryByText(/[↑↓▲▼]/)).toBeNull();
   });
 
   it("pendingのみ(active/rejectedが0件)のときも「判定に足りない」を表示する", async () => {
