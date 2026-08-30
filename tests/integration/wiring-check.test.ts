@@ -102,7 +102,7 @@ jest.mock("../../src/agent/gap/gapDetector", () => ({
 // ---------------------------------------------------------------------------
 
 import express from "express";
-import request from "supertest";
+import { request } from "../helpers/testServer";
 
 import { getPool } from "../../src/lib/db";
 import { rerank } from "../../src/search/rerank";

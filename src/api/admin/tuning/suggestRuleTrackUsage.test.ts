@@ -52,7 +52,7 @@ jest.mock('../../../lib/billing/usageTracker', () => ({
 }));
 
 import express from 'express';
-import request from 'supertest';
+import { request } from "../../../../tests/helpers/testServer";
 import { registerTuningRoutes } from './routes';
 
 const mockFetch = jest.fn();

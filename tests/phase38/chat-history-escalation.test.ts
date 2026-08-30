@@ -5,7 +5,7 @@ jest.mock("../../src/lib/db", () => ({ getPool: jest.fn() }));
 jest.mock("../../src/api/admin/chat-history/chatHistoryRepository");
 
 import express from "express";
-import request from "supertest";
+import { request } from "../helpers/testServer";
 import { getPool } from "../../src/lib/db";
 import { registerChatHistoryRoutes } from "../../src/api/admin/chat-history/routes";
 import {

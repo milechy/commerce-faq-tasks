@@ -1,7 +1,7 @@
 // tests/phase-a/hmacVerifier.test.ts
 import { createHmac } from "node:crypto";
 import express from "express";
-import request from "supertest";
+import { request } from "../helpers/testServer";
 import { internalHmacMiddleware, verifyHmacSignature } from "../../src/lib/crypto/hmacVerifier";
 
 const SECRET = "test-secret-for-jest";

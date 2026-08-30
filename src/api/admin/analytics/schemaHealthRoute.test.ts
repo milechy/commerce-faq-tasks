@@ -5,7 +5,7 @@
 // ここでは「R2C運用にだけ出す」ことと「新エンドポイントを作っていない」ことだけを固定する。
 
 import express from 'express';
-import request from 'supertest';
+import { request } from "../../../../tests/helpers/testServer";
 
 const mockFetchMeasurementHealth = jest.fn();
 const mockFetchSchemaHealth = jest.fn();

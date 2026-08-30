@@ -2,7 +2,7 @@
 // Phase38: 会話履歴API — モックExpressアプリを使ったユニットテスト
 
 import express from "express";
-import request from "supertest";
+import { request } from "../helpers/testServer";
 import { registerChatHistoryRoutes } from "../../src/api/admin/chat-history/routes";
 
 jest.mock("../../src/api/admin/chat-history/chatHistoryRepository");

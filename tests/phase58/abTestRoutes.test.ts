@@ -2,7 +2,7 @@
 // Phase58: A/Bテスト CRUD API テスト
 
 import express from 'express';
-import request from 'supertest';
+import { request } from "../helpers/testServer";
 import { registerAbTestRoutes, assignVariant } from '../../src/api/conversion/abTestRoutes';
 
 jest.mock('../../src/admin/http/supabaseAuthMiddleware', () => ({

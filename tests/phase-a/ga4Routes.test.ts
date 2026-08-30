@@ -1,6 +1,6 @@
 // tests/phase-a/ga4Routes.test.ts
 import express from "express";
-import request from "supertest";
+import { request } from "../helpers/testServer";
 import jwt from "jsonwebtoken";
 import { registerGa4TenantRoutes } from "../../src/api/admin/tenants/ga4Routes";
 

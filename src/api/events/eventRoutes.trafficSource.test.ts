@@ -3,7 +3,7 @@
 // chat_sessions.metadata.source と同じ判定基準(resolveTrafficSource)で記録することの検証。
 
 import express from 'express';
-import request from 'supertest';
+import { request } from "../../../tests/helpers/testServer";
 import { registerEventRoutes } from './eventRoutes';
 
 jest.mock('../../lib/logger', () => ({

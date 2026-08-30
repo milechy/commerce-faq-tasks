@@ -62,7 +62,7 @@ jest.mock('../../src/lib/gemini/client', () => ({
 
 // ─── 静的 import ──────────────────────────────────────────────────────────────
 import express from 'express';
-import supertest from 'supertest';
+import { request as supertest } from "../helpers/testServer";
 import { callGroq8bSuggest } from '../../src/api/admin/tuning/routes';
 import { generateRecommendations } from '../../src/agent/gap/gapRecommender';
 import { registerAdminAiAssistRoutes } from '../../src/api/admin/ai-assist/routes';

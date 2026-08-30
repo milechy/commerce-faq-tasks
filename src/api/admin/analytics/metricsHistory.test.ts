@@ -31,7 +31,7 @@ jest.mock('../../../admin/http/supabaseAuthMiddleware', () => ({
 }));
 
 import express from 'express';
-import request from 'supertest';
+import { request } from "../../../../tests/helpers/testServer";
 import { registerAnalyticsRoutes } from './routes';
 
 // ---------------------------------------------------------------------------

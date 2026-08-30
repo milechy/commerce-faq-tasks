@@ -6,7 +6,7 @@
 // 含まれているか」を検証する(cvAggregation.test.ts と同じモック手法)。
 
 import express from "express";
-import request from "supertest";
+import { request } from "../../../../tests/helpers/testServer";
 
 const mockQuery = jest.fn();
 jest.mock("../../../lib/db", () => ({

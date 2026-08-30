@@ -2,7 +2,7 @@
 // GID 1216978855735482: GET /widget/:tenantSlug.js のアバターA/Bテスト割当まわりの回帰テスト
 
 import express from 'express';
-import request from 'supertest';
+import { request } from "../../../tests/helpers/testServer";
 import { registerWidgetRoutes } from './routes';
 
 jest.mock('./widgetGenerator', () => ({

@@ -2,7 +2,7 @@
 // Phase68: ナレッジ別 CV 影響度集計 API のユニットテスト
 
 import express from 'express';
-import request from 'supertest';
+import { request } from "../../../../tests/helpers/testServer";
 
 // ---------------------------------------------------------------------------
 // DB モック

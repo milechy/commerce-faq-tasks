@@ -5,7 +5,7 @@
 // トラフィックソース判定に関係しない部分は全てモックし、saveMessage() 呼び出し引数のみを検証する。
 
 import express from "express";
-import request from "supertest";
+import { request } from "../../../tests/helpers/testServer";
 import pino from "pino";
 
 const mockSaveMessage = jest.fn().mockResolvedValue(undefined);

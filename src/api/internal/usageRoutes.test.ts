@@ -3,7 +3,7 @@
 // + 内部API HMAC 認証(P0: body.tenantId 全信用による偽課金の遮断)の検証
 
 import express from "express";
-import request from "supertest";
+import { request } from "../../../tests/helpers/testServer";
 import { createHmac } from "node:crypto";
 
 jest.mock("../../lib/logger", () => ({

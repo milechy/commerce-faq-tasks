@@ -9,7 +9,7 @@
 // 呼び出し引数のみを検証する。
 
 import express from "express";
-import request from "supertest";
+import { request } from "../../../tests/helpers/testServer";
 import pino from "pino";
 
 const mockSaveMessage = jest.fn().mockResolvedValue(undefined);

@@ -1,6 +1,7 @@
 import express from "express";
 import path from "path";
-import request from "supertest";
+import type { Response } from "supertest";
+import { request } from "../../tests/helpers/testServer";
 
 // 静的ファイル配信ミドルウェアと同じCSP設定を再現するテスト用アプリ
 function buildStaticApp() {
@@ -31,7 +32,7 @@ function buildStaticApp() {
 describe("static middleware CSP header", () => {
   const app = buildStaticApp();
 
-  function getCsp(res: request.Response): string {
+  function getCsp(res: Response): string {
     const val = res.headers["content-security-policy"];
     return Array.isArray(val) ? val.join(" ") : (val ?? "");
   }

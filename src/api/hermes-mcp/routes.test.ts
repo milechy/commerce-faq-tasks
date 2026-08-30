@@ -1,7 +1,7 @@
 // src/api/hermes-mcp/routes.test.ts
 
 import express from "express";
-import request from "supertest";
+import { request } from "../../../tests/helpers/testServer";
 import { registerHermesMcpRoutes } from "./routes";
 
 jest.mock("../../lib/hermesConsent", () => ({

@@ -2,7 +2,7 @@
 // Phase72-C: GET /v1/admin/analytics/flow-transitions テスト
 
 import express from 'express';
-import request from 'supertest';
+import { request } from "../../../../tests/helpers/testServer";
 
 // ---------------------------------------------------------------------------
 // DB モック

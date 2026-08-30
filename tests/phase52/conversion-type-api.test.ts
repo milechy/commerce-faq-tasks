@@ -2,7 +2,7 @@
 // Phase52f Phase A: コンバージョンタイプAPI + outcome記録APIのテスト
 
 import express from "express";
-import request from "supertest";
+import { request } from "../helpers/testServer";
 
 // ---------------------------------------------------------------------------
 // Mocks

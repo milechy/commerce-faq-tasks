@@ -2,7 +2,7 @@
 // Phase2 (Sai接続ブリッジ): try-sai / sai-task エンドポイントのテスト
 
 import express from 'express';
-import request from 'supertest';
+import { request } from "../../../../tests/helpers/testServer";
 import { registerOptionRoutes, checkSaiMonthlyCostCeiling } from './routes';
 import { logger } from '../../../lib/logger';
 

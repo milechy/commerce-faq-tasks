@@ -46,7 +46,7 @@ jest.mock('../../../lib/billing/usageTracker', () => ({
 }));
 
 import express from 'express';
-import request from 'supertest';
+import { request } from "../../../../tests/helpers/testServer";
 import { registerAdminAiAssistRoutes } from './routes';
 
 const mockFetch = jest.fn();

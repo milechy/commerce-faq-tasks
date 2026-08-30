@@ -2,7 +2,7 @@
 // Phase46: Variant CRUD API テスト
 
 import express from "express";
-import request from "supertest";
+import { request } from "../../../../tests/helpers/testServer";
 import { registerVariantRoutes } from "./routes";
 
 // ---------------------------------------------------------------------------

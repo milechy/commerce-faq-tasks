@@ -3,7 +3,7 @@
 // db可用性チェックの後段でplanを確認し、client_adminのみ対象とすることを検証する。
 
 import express from 'express';
-import request from 'supertest';
+import { request } from "../../../tests/helpers/testServer";
 import { registerConversionRoutes } from './conversionRoutes';
 import { registerAbTestRoutes } from './abTestRoutes';
 

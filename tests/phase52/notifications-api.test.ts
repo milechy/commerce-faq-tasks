@@ -2,7 +2,7 @@
 // Phase52h: 通知センター API テスト
 
 import express from "express";
-import request from "supertest";
+import { request } from "../helpers/testServer";
 
 // ---------------------------------------------------------------------------
 // Mocks

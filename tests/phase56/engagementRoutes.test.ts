@@ -2,7 +2,7 @@
 // Phase56: engagement CRUD API + Widget向けAPI テスト
 
 import express from 'express';
-import request from 'supertest';
+import { request } from "../helpers/testServer";
 import { registerEngagementRoutes } from '../../src/api/engagement/engagementRoutes';
 
 // supabaseAuthMiddleware をモック (req.supabaseUser を注入する形で実装)

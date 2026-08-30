@@ -1,6 +1,6 @@
 // tests/phase-a/ga4SyncRoutesAll.test.ts
 import express from "express";
-import request from "supertest";
+import { request } from "../helpers/testServer";
 import jwt from "jsonwebtoken";
 import { createHmac } from "node:crypto";
 import { registerInternalGa4SyncRoutes } from "../../src/api/internal/ga4SyncRoutes";

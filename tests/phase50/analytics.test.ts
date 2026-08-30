@@ -2,7 +2,7 @@
 // Phase50 Stream A: Analytics集計API tests
 
 import express from "express";
-import request from "supertest";
+import { request } from "../helpers/testServer";
 
 // ---------------------------------------------------------------------------
 // Mock the DB pool

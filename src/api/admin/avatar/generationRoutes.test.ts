@@ -3,7 +3,7 @@
 // 認可(403/権限)の網羅は avatarGenerationAuthGuard.test.ts が別途カバーする。
 
 import express from "express";
-import request from "supertest";
+import { request } from "../../../../tests/helpers/testServer";
 import { registerAvatarGenerationRoutes } from "./generationRoutes";
 
 jest.mock("../../../admin/http/supabaseAuthMiddleware", () => ({

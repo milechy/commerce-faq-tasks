@@ -8,7 +8,7 @@
 // incomplete で止まる。Checkout(mode: subscription)でカード入力をStripe側に任せる。
 
 import express from "express";
-import request from "supertest";
+import { request } from "../../../tests/helpers/testServer";
 import pino from "pino";
 import { registerBillingAdminRoutes } from "./billingApi";
 

@@ -10,7 +10,7 @@
 // session_idを入れ、できなければNULL」。
 
 import express from 'express';
-import request from 'supertest';
+import { request } from "../../../tests/helpers/testServer";
 import {
   registerEventRoutes,
   bridgeConversionEvents,

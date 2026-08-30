@@ -2,7 +2,7 @@
 // Phase45 Stream B: new evaluation route tests
 
 import express from "express";
-import request from "supertest";
+import { request } from "../helpers/testServer";
 
 // ---------------------------------------------------------------------------
 // Mock evaluationsRepository

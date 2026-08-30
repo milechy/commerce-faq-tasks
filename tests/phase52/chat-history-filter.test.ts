@@ -7,7 +7,7 @@ jest.mock('../../src/admin/http/supabaseAuthMiddleware', () => ({
 }));
 
 import express from 'express';
-import request from 'supertest';
+import { request } from "../helpers/testServer";
 import { getPool } from '../../src/lib/db';
 import { registerChatHistoryRoutes } from '../../src/api/admin/chat-history/routes';
 import { normalizeSessionListParams } from '../../src/api/admin/chat-history/chatHistoryRepository';

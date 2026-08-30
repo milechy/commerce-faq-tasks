@@ -2,7 +2,7 @@
 // Phase69-1: Right to Erasure — DELETE /v1/admin/chat-history/sessions/:sessionId
 
 import express from "express";
-import request from "supertest";
+import { request } from "../../../../tests/helpers/testServer";
 import { registerChatHistoryRoutes } from "./routes";
 
 jest.mock("./deleteSessionRepository");

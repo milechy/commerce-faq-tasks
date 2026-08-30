@@ -3,7 +3,7 @@
 // + 内部API HMAC 認証(P0: body.tenantId/sessionId 全信用による他テナント chat_messages 注入の遮断)
 
 import express from "express";
-import request from "supertest";
+import { request } from "../../../tests/helpers/testServer";
 import { createHmac } from "node:crypto";
 import { registerInternalAvatarTranscriptRoutes } from "./avatarTranscriptRoutes";
 

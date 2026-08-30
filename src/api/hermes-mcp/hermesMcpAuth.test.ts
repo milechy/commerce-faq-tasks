@@ -1,7 +1,7 @@
 // src/api/hermes-mcp/hermesMcpAuth.test.ts
 
 import express from "express";
-import request from "supertest";
+import { request } from "../../../tests/helpers/testServer";
 import { hermesMcpAuthMiddleware } from "./hermesMcpAuth";
 
 function makeApp() {

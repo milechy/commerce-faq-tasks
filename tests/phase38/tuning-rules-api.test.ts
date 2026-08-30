@@ -2,7 +2,7 @@
 // Phase38: チューニングルールAPI — モックExpressアプリを使ったユニットテスト
 
 import express from "express";
-import request from "supertest";
+import { request } from "../helpers/testServer";
 import { registerTuningRoutes } from "../../src/api/admin/tuning/routes";
 
 jest.mock("../../src/api/admin/tuning/tuningRulesRepository");

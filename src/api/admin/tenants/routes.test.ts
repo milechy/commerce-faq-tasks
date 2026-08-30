@@ -2,7 +2,7 @@
 // Phase72-A: 監査ログ INSERT と settings-history 取得エンドポイントのテスト
 
 import express from "express";
-import request from "supertest";
+import { request } from "../../../../tests/helpers/testServer";
 import { registerTenantAdminRoutes } from "./routes";
 import { registerTenant, setTenantApiKeyExpiry, revokeTenantApiKey, addTenantApiKey } from "../../../lib/tenant-context";
 

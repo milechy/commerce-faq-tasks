@@ -2,7 +2,7 @@
 // Phase52d: ナレッジの穴 AI回答案自動生成エンドポイントのテスト
 
 import express from "express";
-import request from "supertest";
+import { request } from "../helpers/testServer";
 
 // ---------------------------------------------------------------------------
 // Mocks

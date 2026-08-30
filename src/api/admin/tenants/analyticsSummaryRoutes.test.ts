@@ -10,7 +10,7 @@
 
 import express from "express";
 import type { Express } from "express";
-import request from "supertest";
+import { request } from "../../../../tests/helpers/testServer";
 import type { Pool } from "pg";
 import { registerAnalyticsSummaryRoutes } from "./analyticsSummaryRoutes";
 

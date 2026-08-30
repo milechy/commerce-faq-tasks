@@ -2,7 +2,7 @@
 // Phase59: ZIP PDFアップロード機能テスト
 
 import express from "express";
-import request from "supertest";
+import { request } from "../helpers/testServer";
 import AdmZip from "adm-zip";
 import { registerBookPdfRoutes } from "../../src/api/admin/knowledge/bookPdfRoutes";
 

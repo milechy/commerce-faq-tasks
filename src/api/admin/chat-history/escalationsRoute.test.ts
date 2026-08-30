@@ -3,7 +3,7 @@
 // パラメータ(e2e/内部テスト混入除外)の3点セット + 既定挙動テスト。
 
 import express from "express";
-import request from "supertest";
+import { request } from "../../../../tests/helpers/testServer";
 import { registerChatHistoryRoutes } from "./routes";
 
 // getActiveEscalations(DB依存)だけをモックし、normalizeEscalationSourceFilter は

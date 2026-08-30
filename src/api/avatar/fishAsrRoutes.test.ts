@@ -6,7 +6,7 @@
 // 呼ばれることを検証する。
 
 import express from 'express';
-import request from 'supertest';
+import { request } from "../../../tests/helpers/testServer";
 import { registerFishAsrRoutes } from './fishAsrRoutes';
 
 const mockTrackUsage = jest.fn();

@@ -36,7 +36,7 @@ jest.mock("../../agent/dialog/salesContextStore", () => ({
 }));
 
 import express from "express";
-import request from "supertest";
+import { request } from "../../../tests/helpers/testServer";
 import pino from "pino";
 import { createChatHandler } from "./route";
 import { requestIdMiddleware } from "../../lib/request-id";

@@ -2,7 +2,7 @@
 // POST /v1/admin/tuning/suggest-rule のテスト
 
 import express from "express";
-import request from "supertest";
+import { request } from "../helpers/testServer";
 
 // ---------------------------------------------------------------------------
 // Mock supabaseAuthMiddleware

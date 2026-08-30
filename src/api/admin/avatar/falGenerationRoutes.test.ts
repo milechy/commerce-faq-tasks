@@ -1,7 +1,7 @@
 // src/api/admin/avatar/falGenerationRoutes.test.ts
 
 import express from "express";
-import request from "supertest";
+import { request } from "../../../../tests/helpers/testServer";
 import { registerFalGenerationRoutes } from "./falGenerationRoutes";
 
 // ── モック ────────────────────────────────────────────────────────────────────

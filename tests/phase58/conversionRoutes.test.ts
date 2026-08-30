@@ -2,7 +2,7 @@
 // Phase58: コンバージョン帰属分析API テスト
 
 import express from 'express';
-import request from 'supertest';
+import { request } from "../helpers/testServer";
 import { registerConversionRoutes } from '../../src/api/conversion/conversionRoutes';
 
 jest.mock('../../src/admin/http/supabaseAuthMiddleware', () => ({
