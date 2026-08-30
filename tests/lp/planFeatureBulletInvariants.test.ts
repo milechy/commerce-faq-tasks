@@ -22,7 +22,16 @@
 //   「カスタム開発対応」等、ゲート(GatedFeature)に対応しない項目は対象外。
 // - voice_clone・pre_dispatch は FEATURE_MIN_PLAN には存在するが、料金表の
 //   箇条書きに一字一句対応する文言が無い(内部フラグ・文脈依存の説明のみ)ため、
-//   誤対応を避けてここでは対象外とする。
+//   誤対応を避けてここでは対象外とする(下記 EXCLUDED_FROM_LP_BULLETS 参照)。
+//
+// ★穴を塞ぐ仕組み(新しいGatedFeatureの書き忘れ検出)★
+// 上記の「対象外」は本来 FEATURE_BULLETS に載っていない全てのGatedFeatureと
+// 見分けが付かない(=新しいゲートを追加してLPへの反映を忘れても、単に
+// FEATURE_BULLETSに無いだけの状態と区別できず、このテストは静かに緑のまま
+// だった)。これを塞ぐため、GatedFeature型の全メンバーを
+// `FEATURE_BULLETS ∪ EXCLUDED_FROM_LP_BULLETS` で完全に被覆することを
+// 別テストで強制する。新しいゲートを追加したら、必ずどちらかに追記しないと
+// テストが落ちる。
 //
 // 検証の考え方(LPの累積表記に注意):
 // 料金表は「Standardの全機能」のように前段プランの機能を積み上げて表示するため、
@@ -63,6 +72,23 @@ function extractRecordLiteral(src: string, name: string): Record<string, string>
     .replace(/(\w+)\s*:/g, '"$1":')
     .replace(/,(\s*[}\]])/g, "$1");
   return JSON.parse(jsonish);
+}
+
+// `export type GatedFeature = | "a" | "b" | ...;` からユニオンの全メンバーを抽出する。
+// GatedFeatureは型(値ではない)なのでimportできず、FEATURE_MIN_PLANと同様に
+// ソーステキストを直接読む(この抽出方式が壊れる=GatedFeatureの定義形式が
+// 変わった場合は、後述のテストがマーカー未検出で落ちる)。
+function extractGatedFeatureUnionMembers(src: string): string[] {
+  const re = /export type GatedFeature\s*=\s*([\s\S]*?);/;
+  const match = src.match(re);
+  if (!match) {
+    throw new Error("GatedFeature のunion型定義が見つからない: 抽出用正規表現の更新が必要");
+  }
+  const members = [...match[1].matchAll(/"([a-zA-Z0-9_]+)"/g)].map((m) => m[1]);
+  if (members.length === 0) {
+    throw new Error("GatedFeature のunion型からメンバーを1つも抽出できなかった");
+  }
+  return members;
 }
 
 // 料金表(#pricing セクション)のプラン毎カードを切り出すための境界マーカー。
@@ -111,6 +137,12 @@ function extractPlanCardSections(src: string): Record<string, string> {
 // 「対応するGatedFeatureが存在する箇条書きのみ」を載せる(冒頭コメント参照)。
 const FEATURE_BULLETS: ReadonlyArray<{ feature: string; lpText: string }> = [
   { feature: "avatar", lpText: "AIアバター（既定アバター・顔・声）" },
+  // voice(音声入出力)はLP上、avatarと同じ箇条書き「AIアバター（既定アバター・顔・声）」の
+  // 「声」に内包されており、単独の箇条書きは存在しない。avatarと同じlpTextを
+  // 割り当てることで「1枚のカードにのみ出現」チェックはavatarと共有しつつ、
+  // FEATURE_MIN_PLAN.voice が avatar と食い違って動いた場合(例: 音声だけGrowthへ
+  // 引き上げたのにLPの表記をStandardカードのまま放置)を検出できるようにする。
+  { feature: "voice", lpText: "AIアバター（既定アバター・顔・声）" },
   { feature: "analytics", lpText: "詳しい分析レポート" },
   { feature: "avatar_customize", lpText: "アバターのカスタム作成（自社の顔・声）" },
   { feature: "conversion", lpText: "成果（購入・予約）の計測" },
@@ -118,6 +150,25 @@ const FEATURE_BULLETS: ReadonlyArray<{ feature: string; lpText: string }> = [
   { feature: "hide_branding", lpText: "「Powered by R2C」バッジの非表示" },
   { feature: "deep_research", lpText: "ディープリサーチ" },
   { feature: "sai_task", lpText: "R2Cエージェントによる設定代行" },
+];
+
+// FEATURE_BULLETSに載せない(=LPの箇条書きと突合しない)GatedFeatureの明示allowlist。
+// ここに無い、かつFEATURE_BULLETSにも無いGatedFeatureが増えたら、後述の
+// 「未網羅のGatedFeatureが無いこと」テストが落ちる(新しいゲートをLPにもallowlistにも
+// 反映し忘れて静かに緑のままになる穴を塞ぐため)。
+const EXCLUDED_FROM_LP_BULLETS: ReadonlyArray<{ feature: string; reason: string }> = [
+  {
+    feature: "voice_clone",
+    reason:
+      "FEATURE_MIN_PLANには存在するが、料金表の箇条書きに一字一句対応する文言が無い" +
+      "(内部フラグ・文脈依存の説明のみ)。誤対応を避けるため対象外。",
+  },
+  {
+    feature: "pre_dispatch",
+    reason:
+      "事前ディスパッチ(アバター高速表示)はLPの箇条書きとして独立掲載されておらず、" +
+      "FAQ等の文脈依存の説明のみ。誤対応を避けるため対象外。",
+  },
 ];
 
 describe("LP料金表(public/lp/index.html)とFEATURE_MIN_PLANの整合性", () => {
@@ -170,6 +221,48 @@ describe("LP料金表(public/lp/index.html)とFEATURE_MIN_PLANの整合性", () 
           );
         }
       }
+    }
+  });
+
+  it("GatedFeatureの全メンバーがFEATURE_BULLETS(LP対応)かEXCLUDED_FROM_LP_BULLETS(明示allowlist)のどちらかに載っている", () => {
+    // 新しいGatedFeatureを追加したとき、LPへの反映(FEATURE_BULLETS)を忘れても
+    // 「対象外として明示的に許可されている」ケースと区別が付かず、このファイルの
+    // 他のテストは静かに緑のままになる。それを防ぐため、GatedFeatureの全メンバーが
+    // 必ずどちらか一方に(重複なく)載っていることを強制する。
+    const allGatedFeatures = extractGatedFeatureUnionMembers(PLAN_FEATURES_SRC);
+    const coveredByBullets = new Set(FEATURE_BULLETS.map((b) => b.feature));
+    const coveredByAllowlist = new Set(EXCLUDED_FROM_LP_BULLETS.map((e) => e.feature));
+
+    const missing = allGatedFeatures.filter(
+      (f) => !coveredByBullets.has(f) && !coveredByAllowlist.has(f),
+    );
+    if (missing.length > 0) {
+      throw new Error(
+        `GatedFeatureに追加されたが、LP対応表(FEATURE_BULLETS)にも明示allowlist` +
+          `(EXCLUDED_FROM_LP_BULLETS)にも載っていない: [${missing.join(", ")}]。\n` +
+          "LPの箇条書きに対応する文言があるならFEATURE_BULLETSに追加し、" +
+          "無いなら理由を添えてEXCLUDED_FROM_LP_BULLETSに追加すること。",
+      );
+    }
+
+    const overlapping = allGatedFeatures.filter(
+      (f) => coveredByBullets.has(f) && coveredByAllowlist.has(f),
+    );
+    if (overlapping.length > 0) {
+      throw new Error(
+        `FEATURE_BULLETSとEXCLUDED_FROM_LP_BULLETSの両方に載っている(意図が矛盾する): [${overlapping.join(", ")}]`,
+      );
+    }
+
+    // allowlist側に、既にGatedFeatureから削除された古いキーが残っていないかも確認する
+    // (残存していても実害は無いが、削除漏れは「なぜ対象外なのか」の記録が陳腐化する)。
+    const staleAllowlistEntries = EXCLUDED_FROM_LP_BULLETS.map((e) => e.feature).filter(
+      (f) => !allGatedFeatures.includes(f),
+    );
+    if (staleAllowlistEntries.length > 0) {
+      throw new Error(
+        `EXCLUDED_FROM_LP_BULLETSに、既にGatedFeatureから削除されたキーが残っている: [${staleAllowlistEntries.join(", ")}]`,
+      );
     }
   });
 });
