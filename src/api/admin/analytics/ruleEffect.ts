@@ -374,7 +374,24 @@ async function fetchCandidateSessions(
        EXISTS (SELECT 1 FROM conversion_attributions ca
                  WHERE ca.session_id = f.session_uuid) AS converted
      FROM limited f
-     JOIN chat_sessions cs ON cs.id = f.session_uuid`,
+     JOIN chat_sessions cs ON cs.id = f.session_uuid
+     -- ★このORDER BYは削除禁止★
+     -- before_limited/after_limitedそれぞれの内部にあるDESC降順+LIMIT句は、
+     -- 各CTEが「どの行をLIMITで選ぶか」を決めるだけで、UNION ALL + JOINを経た後に
+     -- Postgresが実際に返す行の並び順までは保証しない(CTEが常にmaterializeされる
+     -- 保証はPostgres 12以降無くなっており、インライン化されればなおさら順序は
+     -- 崩れうる。呼び出し側とのJOINでHash Joinが選ばれれば尚更順序は崩れる)。
+     -- 呼び出し側のfetchCandidateSessions()は
+     -- beforeRows.slice(0, CANDIDATE_SESSION_PER_SIDE_LIMIT) で
+     -- 「配列の先頭 = first_message_at降順(直近優先)」を前提にしており、
+     -- この前提はここで明示的にORDER BYしない限り成立しない。
+     -- 実際、このORDER BYが無い状態では、全体で最も新しいセッションであっても
+     -- 上限超過時に切り捨てられることを実Postgresで確認済み(回帰:
+     -- ruleEffectSqlIntegration.test.ts の該当テスト)。再現はクエリプラン依存で
+     -- 非決定的(統計情報の状態次第でHash Join/Nested Loopが切り替わり、
+     -- 前者を選ぶと順序が崩れる)なため、テストが偶然通っても
+     -- 「安全である証明」にはならない — このORDER BYはプラン非依存の保証として必須。
+     ORDER BY f.first_message_at DESC`,
     [tenantId, sinceIso, approvedAtIso, CANDIDATE_SESSION_PER_SIDE_LIMIT + 1],
   );
 

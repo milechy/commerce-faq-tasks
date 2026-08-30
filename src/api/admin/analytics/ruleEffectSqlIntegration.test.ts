@@ -367,17 +367,31 @@ d("getRuleEffect（実Postgresに対するDiD集計SQL検証）", () => {
     expect(result.comparison.groups.beforeControl.convertedCount).toBe(1); // CVが2件でもセッションとしては1
   });
 
-  // 既存実装の確認: fetchCandidateSessions() の最終SELECT(before_limited/
-  // after_limitedをUNION ALLしてchat_sessionsとJOINする箇所)にはORDER BYが無く、
-  // 呼び出し側の `.slice(0, CANDIDATE_SESSION_PER_SIDE_LIMIT)` は「先頭から
-  // 直近順に並んでいる」ことを暗黙に仮定しているが、この仮定はSQL的に保証
-  // されていない。このテストは「直近優先で切り詰める」という設計意図
-  // (ruleEffect.ts CANDIDATE_SESSION_LIMIT付近のコメント参照)どおりの挙動を
-  // 検証するが、現状の実装では全体最新のセッションでも切り捨てられうるため
-  // 失敗する(下のit.failing本体のコメント参照。3回再実行して再現性を確認済み)。
-  // テストを弱めず、it.failing で意図(=直すべきバグ)を明示したまま残す。
-  it.failing(
-    `回帰(バグ発見): 直近優先の上限(${PER_SIDE_LIMIT}件/側)を超えても、` +
+  // 回帰: fetchCandidateSessions() の最終SELECT(before_limited/after_limitedを
+  // UNION ALLしてchat_sessionsとJOINする箇所)には、当初 ORDER BY が無かった。
+  // before_limited/after_limited内部の `ORDER BY first_message_at DESC` は
+  // 各CTEが「どの行をLIMITで選ぶか」を決めるだけで、UNION ALL+JOIN後に
+  // Postgresが実際に返す行の並び順までは保証しない。それにもかかわらず
+  // 呼び出し側の `beforeRows.slice(0, CANDIDATE_SESSION_PER_SIDE_LIMIT)`
+  // (ruleEffect.ts の fetchCandidateSessions 末尾)は「先頭から直近順に
+  // 並んでいる」ことを暗黙に仮定していた。
+  //
+  // 実測(修正前): bulk(2026年1月頭、2501件)よりも明確に新しい(1月10日・
+  // 11日の)treatmentセッションを2件加えると、本来は「全体で最も新しい
+  // セッション」として無条件に生き残るはずが、2件のうち1件が切り捨てられた
+  // (beforeTreatment.currentN=1になりゲート未達でinsufficient_dataに落ちる)。
+  // まっさらなDBで5回連続実行して確認したところ、クエリプラン依存で
+  // 非決定的(統計情報が付く前の1回目は再現せず、以降は再現)だった —
+  // つまりCIのようにDBを毎回作り直す環境では確実に踏む条件だった。
+  //
+  // モックでは result.rows を呼び出し側で好きな順に組み立てるため、この
+  // 「実際にPostgresが返す行順」の問題は原理的に再現できない。
+  //
+  // 修正: fetchCandidateSessions() の最終SELECTに
+  // `ORDER BY f.first_message_at DESC` を追加し、呼び出し側の前提を
+  // SQL自身に保証させた(詳細はruleEffect.ts側のコメント参照)。
+  it(
+    `回帰: 直近優先の上限(${PER_SIDE_LIMIT}件/側)を超えても、` +
       "全体最新の2セッションが切り捨てられてはいけない",
     async () => {
       const tenantId = "tenant-limit";
@@ -440,34 +454,15 @@ d("getRuleEffect（実Postgresに対するDiD集計SQL検証）", () => {
         throw new Error(`unexpected status: ${result.status}`);
       }
 
-      expect(result.truncated).toBe(true); // これは満たされる
+      expect(result.truncated).toBe(true);
 
-      // ★実DBでしか見つからないバグ(回帰・現状FAIL)★
-      // fetchCandidateSessions() の最終SELECT(before_limited/after_limitedを
-      // UNION ALLしてchat_sessionsとJOINする箇所)には ORDER BY が無い。
-      // before_limited/after_limitedの内部の `ORDER BY first_message_at DESC` は
-      // 各CTEが「どの行を選ぶか」を決めるだけで、UNION ALL+JOIN後にPostgresが
-      // 実際に返す行の並び順までは保証しない。それにもかかわらず呼び出し側の
-      // `beforeRows.slice(0, CANDIDATE_SESSION_PER_SIDE_LIMIT)`
-      // (ruleEffect.ts の fetchCandidateSessions 末尾)は「先頭から
-      // CANDIDATE_SESSION_PER_SIDE_LIMIT件が直近順に並んでいる」ことを暗黙に
-      // 仮定しており、この仮定はSQL的に保証されていない。
-      //
-      // 証拠: bulk(2026年1月頭、2501件)よりも明確に新しい(1月10日・11日の)
-      // treatmentセッションを2件加えると、本来は「全体で最も新しいセッション」
-      // として無条件に生き残るはずだが、実測では2件のうち1件が切り捨てられる
-      // (beforeTreatment.currentN=1 になり、ゲート未達でinsufficient_dataに
-      // 落ちる。3回再実行して同じ結果を確認済み・再現性あり)。
-      //
-      // モックでは result.rows を呼び出し側で好きな順に組み立てるため、
-      // この「実際にPostgresが返す行順」の問題は原理的に再現できない。
-      //
-      // プロダクションコードは変更しない(タスク方針)。このテストは
-      // 「あるべき仕様」のまま残し、FAILしたままにして報告する。
+      // ruleEffect.ts の fetchCandidateSessions() 末尾に `ORDER BY
+      // f.first_message_at DESC` を追加した(このテストが発見した回帰の修正)。
+      // これにより「全体で最も新しいセッション」は上限超過時も無条件に
+      // 生き残るはず。
       expect(result.status).toBe("ok");
       if (result.status !== "ok") return;
 
-      // ↓ status が "ok" になった場合(=上記バグ修正後)に満たされるべき値。
       expect(result.comparison.groups.beforeTreatment.sessionCount).toBe(2);
       // CANDIDATE_SESSION_PER_SIDE_LIMIT は before の treatment/control 合算の
       // 共有予算であるため(trigger一致/不一致で別枠になっていない)、
