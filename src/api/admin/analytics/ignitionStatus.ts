@@ -68,6 +68,23 @@ export interface IgnitionStatusResponse {
    * fetchIgnitionStatus 経由でのみ埋まる(buildIgnitionStatus単体呼び出しでは省略可)。
    */
   seriesGates?: SeriesGateInfo[];
+  /**
+   * H-11 (GID 1217973238377692, Asana合流): 自動昇格(memoryDistiller.distillAndPromote)が
+   * Prompt Firewallで弾かれた件数。手動昇格はHTTPレスポンスで可視だが、自動昇格は
+   * logger.warnのみで画面に一切出ていなかった。母数が少ない現状では誤検知による
+   * 静かな取りこぼしに気づけないため、直近 lookbackDays 日分の件数をここに出す。
+   *
+   * seriesGates(4ゲートの通過率ファネル)とは性質が異なる(DBスナップショットからの
+   * 再計算ではなく、実際に発生した弾かれイベントの件数)ため、別フィールドにする。
+   * DBアクセスが要るため fetchIgnitionStatus 経由でのみ埋まる。
+   */
+  autoPromotionBlockedByFirewall?: AutoPromotionBlockedInfo;
+}
+
+export interface AutoPromotionBlockedInfo {
+  /** 直近 lookbackDays 日間で Prompt Firewall に弾かれた自動昇格の件数。 */
+  count: number;
+  lookbackDays: number;
 }
 
 export interface SeriesGateInfo {
@@ -379,6 +396,30 @@ export async function computeSeriesGates(
   ];
 }
 
+/** H-11: 自動昇格がPrompt Firewallに弾かれた件数を数える対象期間。 */
+const AUTO_PROMOTION_BLOCKED_LOOKBACK_DAYS = 30;
+
+/**
+ * H-11 (GID 1217973238377692): memoryDistiller.recordAutoPromotionBlockedMetric が
+ * 既存の汎用シンク metrics_snapshots (phase72d) に積んだイベントを数えるだけ。
+ * 新テーブル・新しい判定ロジックは作らない。
+ */
+async function countAutoPromotionBlockedByFirewall(db: Db): Promise<AutoPromotionBlockedInfo> {
+  const result = await db.query<{ count: string }>(
+    `SELECT COUNT(*) AS count
+     FROM metrics_snapshots
+     WHERE metric_name = 'learned_memory_promotion_blocked'
+       AND labels->>'reason' = 'injection_detected'
+       AND labels->>'promoted_by' = 'auto'
+       AND snapshot_at >= NOW() - $1::interval`,
+    [`${AUTO_PROMOTION_BLOCKED_LOOKBACK_DAYS} days`],
+  );
+  return {
+    count: parseInt(result.rows[0]?.count ?? "0", 10),
+    lookbackDays: AUTO_PROMOTION_BLOCKED_LOOKBACK_DAYS,
+  };
+}
+
 /** tenants を1回引いて点火行列を返す。 */
 export async function fetchIgnitionStatus(db: Db): Promise<IgnitionStatusResponse> {
   const rows = await db.query<{ id: string; features: Record<string, unknown> | null }>(
@@ -389,5 +430,6 @@ export async function fetchIgnitionStatus(db: Db): Promise<IgnitionStatusRespons
     .filter((r) => r.cells.find((c) => c.feature === "judge_x_memory_intersection")?.enabled)
     .map((r) => r.tenantId);
   const seriesGates = await computeSeriesGates(db, intersectionTenantIds);
-  return { ...status, seriesGates };
+  const autoPromotionBlockedByFirewall = await countAutoPromotionBlockedByFirewall(db);
+  return { ...status, seriesGates, autoPromotionBlockedByFirewall };
 }

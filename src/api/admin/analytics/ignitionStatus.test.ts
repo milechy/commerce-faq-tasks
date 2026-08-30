@@ -443,6 +443,53 @@ describe("fetchIgnitionStatus — 交差テナントをcomputeSeriesGatesに渡�
   });
 });
 
+// ---------------------------------------------------------------------------
+// H-11 (GID 1217973238377692, Asana合流): 自動昇格(memoryDistiller.distillAndPromote)が
+// Prompt Firewallに弾かれた件数を可視化する。memoryDistiller.ts側が既存の汎用シンク
+// metrics_snapshots (phase72d) に積んだイベントを、ここでは数えるだけ
+// (新テーブル・第2の判定ロジックは作らない)。
+// ---------------------------------------------------------------------------
+describe("fetchIgnitionStatus — autoPromotionBlockedByFirewall(H-11: 自動昇格のFirewall弾かれ件数を可視化)", () => {
+  it("metrics_snapshotsの該当件数をcountに詰める", async () => {
+    const query = jest.fn().mockImplementation((sql: string) => {
+      if (/SELECT id, features FROM tenants/.test(sql)) {
+        return Promise.resolve({ rows: TENANTS });
+      }
+      if (/FROM metrics_snapshots/.test(sql)) {
+        return Promise.resolve({ rows: [{ count: "3" }] });
+      }
+      return Promise.resolve({ rows: [] });
+    });
+    const db = { query };
+
+    const result = await fetchIgnitionStatus(db as any);
+
+    expect(result.autoPromotionBlockedByFirewall).toEqual({ count: 3, lookbackDays: 30 });
+
+    const metricsCall = query.mock.calls.find(([sql]: [string]) => /FROM metrics_snapshots/.test(sql));
+    expect(metricsCall).toBeDefined();
+    const [sql] = metricsCall as [string];
+    // 自動昇格・injection_detectedに絞っていること(手動昇格やno_qa_extractedを混ぜない)
+    expect(sql).toContain("metric_name = 'learned_memory_promotion_blocked'");
+    expect(sql).toContain("labels->>'reason' = 'injection_detected'");
+    expect(sql).toContain("labels->>'promoted_by' = 'auto'");
+  });
+
+  it("該当行が0件ならcount:0を返す(行が無いのを未計測と混同しない)", async () => {
+    const query = jest.fn().mockImplementation((sql: string) => {
+      if (/SELECT id, features FROM tenants/.test(sql)) {
+        return Promise.resolve({ rows: TENANTS });
+      }
+      return Promise.resolve({ rows: [] });
+    });
+    const db = { query };
+
+    const result = await fetchIgnitionStatus(db as any);
+
+    expect(result.autoPromotionBlockedByFirewall).toEqual({ count: 0, lookbackDays: 30 });
+  });
+});
+
 describe("フラグ解釈を再実装していないことの機械的ガード", () => {
   const src = fs.readFileSync(path.join(__dirname, "ignitionStatus.ts"), "utf-8");
 

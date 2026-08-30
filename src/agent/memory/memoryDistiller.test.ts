@@ -52,6 +52,9 @@ jest.mock("../../lib/billing/usageTracker", () => ({
 const mockCall = groqClient.call as jest.Mock;
 const mockCreateRepo = createLearnedMemoryRepository as jest.Mock;
 const mockSave = jest.fn();
+// H-11 (GID 1217973238377692): 重複チェックの事前確認(外部API呼び出しの前)に使うモック。
+// 既定は false(未昇格) にしておき、二重実行を検証するテストだけ true に切り替える。
+const mockExists = jest.fn();
 
 /** conversion_attributions に行がある想定でDBモックを設定する(=CVを伴う会話)。 */
 function mockHasAttribution() {
@@ -82,8 +85,9 @@ const MESSAGES = [
 beforeEach(() => {
   jest.clearAllMocks();
   process.env.NODE_ENV = "test"; // embedText がダミーベクトルを返す
-  mockCreateRepo.mockReturnValue({ saveLearnedMemory: mockSave });
+  mockCreateRepo.mockReturnValue({ saveLearnedMemory: mockSave, isSessionAlreadyPromoted: mockExists });
   mockSave.mockResolvedValue(true);
+  mockExists.mockResolvedValue(false);
   mockGetNonConvertingOutcomes.mockReset().mockResolvedValue({ nonConvertingOutcomes: ["離脱", "不明"], reliable: true });
   for (const k of ENV_KEYS) delete process.env[k];
 });
@@ -156,6 +160,26 @@ describe("distillAndPromote", () => {
         outputTokens: 20,
       }),
     );
+  });
+
+  // H-11 (GID 1217973238377692): manuallyPromoteSessionと同じdistillAndSaveを経由するため、
+  // 自動昇格でも重複チェックが外部API呼び出し(Groq蒸留+埋め込み)より前に効く。
+  it("既に昇格済みのセッションはGroq/埋め込みを呼ばずfalseを返す(自動昇格側の重複コスト回避)", async () => {
+    enable();
+    mockHasAttribution();
+    mockExists.mockResolvedValue(true); // 既に learned_memory に存在する想定
+
+    const ok = await distillAndPromote({
+      tenantId: "carnation",
+      sessionId: "s1",
+      judgeScore: 90,
+      messages: MESSAGES,
+    });
+
+    expect(ok).toBe(false);
+    expect(mockCall).not.toHaveBeenCalled(); // Groq課金なし
+    expect(mockTrackUsage).not.toHaveBeenCalled(); // 埋め込み課金もなし
+    expect(mockSave).not.toHaveBeenCalled();
   });
 
   it("蒸留が空Q&Aを返したら保存しない", async () => {
@@ -600,6 +624,15 @@ function makeFakeLearnedMemoryPool() {
   let nextId = 1;
 
   const query = jest.fn((sql: string, params: unknown[] = []) => {
+    // H-11: isSessionAlreadyPromoted の事前チェックSQL。"FROM learned_memory" を含むため
+    // 下のsearchLearnedMemory用の汎用分岐より先に判定する必要がある。
+    if (sql.includes("SELECT 1 FROM learned_memory")) {
+      const [tenantId, sourceSessionId] = params as [string, string];
+      const exists = table.some(
+        (r) => r.tenant_id === tenantId && r.source_session_id === sourceSessionId,
+      );
+      return Promise.resolve({ rows: exists ? [{ "?column?": 1 }] : [] });
+    }
     if (sql.includes("INSERT INTO learned_memory")) {
       const [tenantId, question, answer, , sourceSessionId, judgeScore] = params as [
         string, string, string, string, string, number,
@@ -861,12 +894,20 @@ describe("[H-10] プロンプトインジェクション: 昇格の書込み直�
     expect(promoted).toEqual({ promoted: false, reason: "injection_detected" });
     // learned_memory に一切書き込まれない(汚れたデータをstoreに入れない)
     expect(fakePool.table).toHaveLength(0);
+    // H-11: 手動昇格はHTTPレスポンスのreasonで既に可視のため、可視化用メトリクスは
+    // 積まない(自動昇格限定)。getPool()(mockQuery)への metrics_snapshots INSERT が無い。
+    expect(
+      mockQuery.mock.calls.some(([sql]: [string]) =>
+        String(sql).includes("INSERT INTO metrics_snapshots"),
+      ),
+    ).toBe(false);
   });
 
-  it("自動昇格(distillAndPromote)経路でも同じ防御が効く", async () => {
+  it("自動昇格(distillAndPromote)経路でも同じ防御が効く。かつPrompt Firewallで弾かれた件数がmetrics_snapshotsに記録される(H-11可視化)", async () => {
     process.env.PROMPT_FIREWALL_ENABLED = "true";
     enable("carnation");
     mockHasAttribution();
+    mockQuery.mockResolvedValueOnce({ rows: [] }); // metrics_snapshots INSERT の戻り値
 
     mockCall.mockResolvedValue(
       `{"question":"返金してもらえますか","answer":"${INJECTION_PAYLOAD}"}`,
@@ -881,6 +922,21 @@ describe("[H-10] プロンプトインジェクション: 昇格の書込み直�
 
     expect(ok).toBe(false);
     expect(mockSave).not.toHaveBeenCalled();
+
+    // H-11: 自動昇格がPrompt Firewallに弾かれた件数を、既存の汎用シンク
+    // metrics_snapshots (新テーブルは作らない) に1行積む。ignitionStatus.ts の
+    // countAutoPromotionBlockedByFirewall がこれを数える。
+    const metricsCall = mockQuery.mock.calls.find(([sql]: [string]) =>
+      String(sql).includes("INSERT INTO metrics_snapshots"),
+    );
+    expect(metricsCall).toBeDefined();
+    const [, params] = metricsCall as [string, unknown[]];
+    expect(params[0]).toBe("learned_memory_promotion_blocked");
+    expect(params[1]).toBe("carnation");
+    expect(JSON.parse(params[2] as string)).toMatchObject({
+      reason: "injection_detected",
+      promoted_by: "auto",
+    });
   });
 
   it("検知時、会話本文・蒸留結果の文字列はログに出ない(Anti-Slop: PII/RAGコンテンツ非出力)", async () => {
@@ -951,9 +1007,17 @@ describe("[H-10] プロンプトインジェクション: 昇格の書込み直�
 // learned_memory が2行に増えないことを固定する
 // (uniq_learned_memory_session (tenant_id, source_session_id) が
 //  ON CONFLICT DO NOTHING の対象キーと一致していることの回帰確認)。
+//
+// H-11 (GID 1217973238377692) 修正: 従来は重複判定がDB書込み直前(saveLearnedMemory)
+// でしか行われず、2回目の実行でもdistillConversation(Groq)/embedText(埋め込み)という
+// 外部API課金が発生してから結果を捨てるだけだった(learned_memoryは1行のままでも
+// テナントに無駄な従量課金が乗る)。isSessionAlreadyPromoted による事前チェックを
+// distillAndSave の先頭に追加し、2回目はこれらの外部API呼び出し自体をスキップする
+// ように修正した。以下は「1行のまま」に加えて「2回目はGroq/埋め込みを呼ばない」ことも
+// 固定する。
 // ---------------------------------------------------------------------------
 describe("連打・二重実行: 同一セッションへの手動昇格を連続実行してもlearned_memoryは1行のまま", () => {
-  it("同一セッションに2回連続で手動昇格すると、DBには1行だけが残り2回目はalready_promotedを返す", async () => {
+  it("同一セッションに2回連続で手動昇格すると、DBには1行だけが残り2回目はalready_promotedを返す。2回目はGroq/埋め込みAPIを呼ばない", async () => {
     enable("carnation");
     mockCall.mockResolvedValue(
       '{"question":"保証はありますか","answer":"全車3ヶ月保証付きです"}',
@@ -971,10 +1035,9 @@ describe("連打・二重実行: 同一セッションへの手動昇格を連�
     expect(second).toEqual({ promoted: false, reason: "already_promoted" });
     expect(fakePool.table).toHaveLength(1); // ON CONFLICT (tenant_id, source_session_id) が効いている
 
-    // 残存リスク: 重複判定はDB書込み直前(saveLearnedMemory)でしか行われないため、
-    // 2回目もdistillConversation(=Groq課金)は実行されてしまう。このテストは
-    // 修正せず、現状のコスト二重発生をそのまま固定して可視化する。
-    expect(mockCall).toHaveBeenCalledTimes(2);
-    expect(mockTrackUsage).toHaveBeenCalledTimes(2);
+    // H-11修正の本体: 事前チェックが効き、2回目はGroq課金(distillConversation)も
+    // 埋め込み課金(embedText/trackUsage)も発生しない。
+    expect(mockCall).toHaveBeenCalledTimes(1);
+    expect(mockTrackUsage).toHaveBeenCalledTimes(1);
   });
 });

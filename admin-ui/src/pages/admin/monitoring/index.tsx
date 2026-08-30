@@ -49,6 +49,12 @@ interface MeasurementHealth {
     }>;
     envControlledFeatures: string[];
     anyEnabled: boolean;
+    /** H-11(GID 1217973238377692): 自動昇格がPrompt Firewallに弾かれた件数(直近lookbackDays日)。
+     *  手動昇格はHTTPレスポンスで既に可視のため、自動昇格限定。 */
+    autoPromotionBlockedByFirewall?: {
+      count: number;
+      lookbackDays: number;
+    };
   };
   /** super_admin のときだけ返る。Hermes提案(tuning_rules source='hermes')の採択率。
    *  全期間・全テナント横断の累計値(月$23を払い続けるか止めるかの判断材料)。 */
@@ -676,6 +682,21 @@ export default function MonitoringPage() {
                         このうち {health.ignitionStatus.envControlledFeatures.length} 機能は環境変数でしか切り替えられません。
                         画面から開閉できないため、点火し忘れに気づけない構造です（順次 tenants.features へ移行）。
                       </div>
+                    )}
+                    {/* H-11(GID 1217973238377692): 自動昇格がPrompt Firewallに弾かれた件数。
+                        従来はlogger.warnのみで画面に一切出ず、母数が少ない現状では誤検知による
+                        静かな取りこぼしに気づけなかった。0件でも「監視できている」ことが分かるよう
+                        常に表示する(schemaHealthの「欠落なし」と同じ流儀)。 */}
+                    {health.ignitionStatus.autoPromotionBlockedByFirewall && (
+                      health.ignitionStatus.autoPromotionBlockedByFirewall.count === 0 ? (
+                        <div style={{ marginTop: 10, fontSize: 12, color: "var(--muted-foreground)", lineHeight: 1.7 }}>
+                          自動での学習データ保存は、不審な内容を検知して見送られたことはありません（直近{health.ignitionStatus.autoPromotionBlockedByFirewall.lookbackDays}日）。
+                        </div>
+                      ) : (
+                        <div style={{ marginTop: 10, fontSize: 12, color: "#f87171", fontWeight: 700, lineHeight: 1.7 }}>
+                          自動での学習データ保存が、不審な内容を検知して直近{health.ignitionStatus.autoPromotionBlockedByFirewall.lookbackDays}日で{health.ignitionStatus.autoPromotionBlockedByFirewall.count}件見送られています。
+                        </div>
+                      )
                     )}
                   </MeasurementHealthCard>
                 )}

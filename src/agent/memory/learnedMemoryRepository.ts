@@ -51,6 +51,29 @@ export function createLearnedMemoryRepository(pool?: InstanceType<typeof Pool>) 
 
   return {
     /**
+     * H-11 (GID 1217973238377692): (tenant_id, source_session_id) が既に
+     * learned_memory に存在するかどうかだけを調べる。saveLearnedMemory の
+     * ON CONFLICT (tenant_id, source_session_id) と同じキーで引く(判定が
+     * 2箇所に割れないようにするため)。
+     *
+     * memoryDistiller.distillAndSave が、Groq蒸留・埋め込み(どちらも外部API課金)を
+     * 呼ぶ前の事前チェックとして使う。ON CONFLICT DO NOTHING 自体は競合(同時多重
+     * リクエスト)に対する最終防壁として引き続き残す。
+     */
+    async isSessionAlreadyPromoted(
+      tenantId: string,
+      sourceSessionId: string,
+    ): Promise<boolean> {
+      const result = await getPool().query(
+        `SELECT 1 FROM learned_memory
+         WHERE tenant_id = $1 AND source_session_id = $2
+         LIMIT 1`,
+        [tenantId, sourceSessionId],
+      );
+      return result.rows.length > 0;
+    },
+
+    /**
      * 蒸留した Q&A を learned_memory に保存する。
      * (tenant_id, source_session_id) が既存なら何もしない (ON CONFLICT DO NOTHING)。
      * @returns 挿入されたら true、重複でスキップされたら false

@@ -250,3 +250,90 @@ describe("MonitoringPage — Hermes提案の採択率", () => {
     expect(screen.queryByText("Hermes提案の採択率")).toBeNull();
   });
 });
+
+// H-11(GID 1217973238377692): 自動昇格(memoryDistiller.distillAndPromote)が
+// Prompt Firewallに弾かれた件数。従来はlogger.warnのみで画面に一切出ず、
+// 手動昇格(HTTPレスポンスでreasonが返る)と非対称だった。「学習機能の点火状態」
+// カードに常時表示することで、母数が少ない現状での誤検知による静かな取りこぼしに
+// 気づけるようにした。
+describe("MonitoringPage — 学習機能の点火状態(自動昇格のPrompt Firewall弾かれ件数)", () => {
+  const BASE_HEALTH = {
+    sourceBreakdown: [{ source: "user", count: 13 }],
+    emptySessionCount: 0,
+    cvSessionLinkRate: { numerator: 0, denominator: 0, rate: null },
+    outcomeRecordRate: { numerator: 0, denominator: 0, rate: null, autoRecorded: 0 },
+    validUserSessionCount: 13,
+  };
+
+  it("0件のときも「見送られたことはない」ことを明示して表示する(監視できていることが分かる)", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
+      if (url.includes("/measurement-health")) {
+        return mockOk({
+          ...BASE_HEALTH,
+          ignitionStatus: {
+            rows: [],
+            envControlledFeatures: [],
+            anyEnabled: false,
+            autoPromotionBlockedByFirewall: { count: 0, lookbackDays: 30 },
+          },
+        });
+      }
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("学習機能の点火状態")).toBeTruthy();
+    });
+    expect(
+      screen.getByText("自動での学習データ保存は、不審な内容を検知して見送られたことはありません（直近30日）。"),
+    ).toBeTruthy();
+  });
+
+  it("1件以上のときは件数と期間を表示する", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
+      if (url.includes("/measurement-health")) {
+        return mockOk({
+          ...BASE_HEALTH,
+          ignitionStatus: {
+            rows: [],
+            envControlledFeatures: [],
+            anyEnabled: false,
+            autoPromotionBlockedByFirewall: { count: 3, lookbackDays: 30 },
+          },
+        });
+      }
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("学習機能の点火状態")).toBeTruthy();
+    });
+    expect(
+      screen.getByText("自動での学習データ保存が、不審な内容を検知して直近30日で3件見送られています。"),
+    ).toBeTruthy();
+    // 0件のときの文言(監視できていない/見送りが無いかのような誤読)を混ぜて出さない
+    expect(screen.queryByText(/見送られたことはありません/)).toBeNull();
+  });
+
+  it("client_admin(APIがignitionStatusを返さない)のときはカード・件数表示ともに出さない", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
+      if (url.includes("/measurement-health")) return mockOk(BASE_HEALTH);
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("会話完了率")).toBeTruthy();
+    });
+    expect(screen.queryByText("学習機能の点火状態")).toBeNull();
+    expect(screen.queryByText(/見送られ/)).toBeNull();
+  });
+});
