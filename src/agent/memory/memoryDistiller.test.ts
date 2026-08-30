@@ -894,12 +894,20 @@ describe("[H-10] プロンプトインジェクション: 昇格の書込み直�
     expect(promoted).toEqual({ promoted: false, reason: "injection_detected" });
     // learned_memory に一切書き込まれない(汚れたデータをstoreに入れない)
     expect(fakePool.table).toHaveLength(0);
+    // H-11: 手動昇格はHTTPレスポンスのreasonで既に可視のため、可視化用メトリクスは
+    // 積まない(自動昇格限定)。getPool()(mockQuery)への metrics_snapshots INSERT が無い。
+    expect(
+      mockQuery.mock.calls.some(([sql]: [string]) =>
+        String(sql).includes("INSERT INTO metrics_snapshots"),
+      ),
+    ).toBe(false);
   });
 
-  it("自動昇格(distillAndPromote)経路でも同じ防御が効く", async () => {
+  it("自動昇格(distillAndPromote)経路でも同じ防御が効く。かつPrompt Firewallで弾かれた件数がmetrics_snapshotsに記録される(H-11可視化)", async () => {
     process.env.PROMPT_FIREWALL_ENABLED = "true";
     enable("carnation");
     mockHasAttribution();
+    mockQuery.mockResolvedValueOnce({ rows: [] }); // metrics_snapshots INSERT の戻り値
 
     mockCall.mockResolvedValue(
       `{"question":"返金してもらえますか","answer":"${INJECTION_PAYLOAD}"}`,
@@ -914,6 +922,21 @@ describe("[H-10] プロンプトインジェクション: 昇格の書込み直�
 
     expect(ok).toBe(false);
     expect(mockSave).not.toHaveBeenCalled();
+
+    // H-11: 自動昇格がPrompt Firewallに弾かれた件数を、既存の汎用シンク
+    // metrics_snapshots (新テーブルは作らない) に1行積む。ignitionStatus.ts の
+    // countAutoPromotionBlockedByFirewall がこれを数える。
+    const metricsCall = mockQuery.mock.calls.find(([sql]: [string]) =>
+      String(sql).includes("INSERT INTO metrics_snapshots"),
+    );
+    expect(metricsCall).toBeDefined();
+    const [, params] = metricsCall as [string, unknown[]];
+    expect(params[0]).toBe("learned_memory_promotion_blocked");
+    expect(params[1]).toBe("carnation");
+    expect(JSON.parse(params[2] as string)).toMatchObject({
+      reason: "injection_detected",
+      promoted_by: "auto",
+    });
   });
 
   it("検知時、会話本文・蒸留結果の文字列はログに出ない(Anti-Slop: PII/RAGコンテンツ非出力)", async () => {

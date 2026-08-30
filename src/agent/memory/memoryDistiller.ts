@@ -190,6 +190,38 @@ function detectInjection(qa: DistilledQa): boolean {
   );
 }
 
+/**
+ * H-11 (GID 1217973238377692): 自動昇格(distillAndPromote)がPrompt Firewallで
+ * 弾かれても、これまではlogger.warnが出るだけで画面には一切現れなかった。手動昇格は
+ * HTTPレスポンスでsuper_adminに reason:"injection_detected" が返るため可視だが、
+ * 自動は不可視のまま。母数が少ない(90日13会話)状況では誤検知による静かな
+ * 取りこぼしに気づけないため、件数を記録する。
+ *
+ * 新テーブルは作らず、既存の汎用シンク metrics_snapshots (phase72d, agentMetrics.ts /
+ * metricsFlush.ts と同じ再利用パターン) にイベントを1行積むだけにする。
+ * fire-and-forget: 失敗しても distillAndPromote 本体は止めない(呼び出し元で握り潰す
+ * 通常のtry/catchに任せず、ここ自身でcatchする。計測の失敗が本流に伝播してはならない)。
+ */
+async function recordAutoPromotionBlockedMetric(tenantId: string): Promise<void> {
+  try {
+    await getPool().query(
+      `INSERT INTO metrics_snapshots (metric_name, tenant_id, labels, value)
+       VALUES ($1, $2, $3::jsonb, $4)`,
+      [
+        "learned_memory_promotion_blocked",
+        tenantId,
+        JSON.stringify({ reason: "injection_detected", promoted_by: "auto" }),
+        1,
+      ],
+    );
+  } catch (err) {
+    logger.warn(
+      { err, tenantId },
+      "[learnedMemory] failed to record auto-promotion-blocked metric (non-blocking)",
+    );
+  }
+}
+
 async function distillAndSave(params: {
   tenantId: string;
   sessionId: string;
@@ -229,6 +261,9 @@ async function distillAndSave(params: {
       { tenantId, sessionId, promotedBy },
       "[learnedMemory] prompt injection pattern detected in distilled Q&A, refusing to save",
     );
+    if (promotedBy === "auto") {
+      await recordAutoPromotionBlockedMetric(tenantId);
+    }
     return { promoted: false, reason: "injection_detected" };
   }
 
