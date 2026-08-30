@@ -154,6 +154,44 @@ describe("buildIgnitionStatus — judge_x_memory_intersection(ナレッジ配線
   });
 });
 
+describe("buildIgnitionStatus — hermes_raw_data_consent(H-1: 点火状態の同意表示ドリフト是正)", () => {
+  it("1) 新形式 learning={learn:true,share:true} → 同意済み", () => {
+    const res = buildIgnitionStatus(
+      [{ id: "t", features: { learning: { learn: true, share: true } } }],
+      deps(),
+    );
+    expect(cell(res, "t", "hermes_raw_data_consent").enabled).toBe(true);
+  });
+
+  it("2) 旧フラグのみ(learning 未設定 + hermes_raw_data_consent=true) → 同意済み（後方互換）", () => {
+    const res = buildIgnitionStatus(
+      [{ id: "t", features: { hermes_raw_data_consent: true } }],
+      deps(),
+    );
+    expect(cell(res, "t", "hermes_raw_data_consent").enabled).toBe(true);
+  });
+
+  it("3) 新形式 learning={learn:true,share:false} + 旧フラグ true → 未同意（新形式が優先される）", () => {
+    const res = buildIgnitionStatus(
+      [
+        {
+          id: "t",
+          features: { learning: { learn: true, share: false }, hermes_raw_data_consent: true },
+        },
+      ],
+      deps(),
+    );
+    expect(cell(res, "t", "hermes_raw_data_consent").enabled).toBe(false);
+  });
+
+  it("4) learning が壊れた形（文字列/配列/不完全オブジェクト）→ fail-safeで未同意", () => {
+    for (const broken of ["true", ["learn"], { learn: true }]) {
+      const res = buildIgnitionStatus([{ id: "t", features: { learning: broken } }], deps());
+      expect(cell(res, "t", "hermes_raw_data_consent").enabled).toBe(false);
+    }
+  });
+});
+
 describe("computeSeriesGates(ナレッジ配線是正P15)", () => {
   function seriesDeps(over: Partial<SeriesGateDeps> = {}): SeriesGateDeps {
     return {
@@ -328,5 +366,11 @@ describe("フラグ解釈を再実装していないことの機械的ガード"
   it("env を直接読んで判定を再実装していない", () => {
     // process.env をこのファイルで読むと、featureFlag.ts と解釈が割れる余地が生まれる。
     expect(src).not.toMatch(/process\.env/);
+  });
+
+  it("同意判定(hermes_raw_data_consent)は hermesConsent.ts の判定をそのまま使っている(H-1)", () => {
+    expect(src).toMatch(
+      /import\s*\{[^}]*resolveLearningConsentFromFeatures[^}]*\}\s*from\s*".*hermesConsent"/s,
+    );
   });
 });

@@ -26,6 +26,7 @@ import {
 import { resolveSweepTenants } from "../../../agent/judge/judgeSweepRunner";
 import { DEFAULT_MIN_MESSAGE_COUNT } from "../../../agent/judge/sweepCandidates";
 import { userSourceClause, userSourceExistsForTable } from "./summaryQueries";
+import { resolveLearningConsentFromFeatures } from "../../../lib/hermesConsent";
 
 type Db = Pick<Pool, "query">;
 
@@ -126,7 +127,13 @@ export function buildIgnitionStatus(
     const write = deps.learnedMemoryWrite(t.id);
     const read = deps.learnedMemoryRead(t.id);
     const stage = featureFlagOn(t.features, "sales_stage_continuity");
-    const consent = featureFlagOn(t.features, "hermes_raw_data_consent");
+    // ignitionStatus2: 旧フラグ直読みは resolveLearningConsentFromFeatures(share)と判定が
+    // 割れる(このファイルの誤りが判明した実例)。同意判定のロジックはここに書かず、
+    // hermesConsent.ts の唯一の実装をそのまま使う。
+    const consent = resolveLearningConsentFromFeatures(t.features, { tenantId: t.id }).share;
+    // reason 表示専用の分岐(判定根拠の説明であり、同意可否そのものの判定には使わない。
+    // 可否の判定は上の consent 一本で、ここでは既に出た結果を平易な日本語にするだけ)。
+    const usesNewLearningFormat = t.features?.["learning"] !== undefined;
     // ナレッジ配線是正P15: judge_sweep と learned_memory_write は独立したセルとして
     // 両方 ON でも、対象テナントの集合(JUDGE_SWEEP_TENANTS ∩ LEARNED_MEMORY_TENANTS)が
     // 交差していなければ実際には1件も学習データが生まれない(2026-08-25の実例:
@@ -178,8 +185,14 @@ export function buildIgnitionStatus(
         feature: "hermes_raw_data_consent",
         label: "外部への学習データ提供の同意",
         enabled: consent,
-        reason: consent ? "同意済みです" : "未同意です（提供しません）",
-        configKey: "tenants.features.hermes_raw_data_consent",
+        reason: consent
+          ? usesNewLearningFormat
+            ? "同意済みです（新形式 features.learning.share で判定）"
+            : "同意済みです（旧フラグ hermes_raw_data_consent で判定。後方互換）"
+          : usesNewLearningFormat
+            ? "未同意です（新形式 features.learning.share で判定。提供しません）"
+            : "未同意です（旧フラグまたは未設定で判定。提供しません）",
+        configKey: "tenants.features.learning.share",
         controlledBy: "tenants.features",
       },
       {
