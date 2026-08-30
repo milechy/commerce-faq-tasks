@@ -11,6 +11,8 @@ import {
   getTenantPlan,
   tenantHasFeature,
   tenantPlanCache,
+  queryTenantPlan,
+  queryTenantPlanOrThrow,
   queryTenantPlanResult,
   resolveShareForPlan,
   resolveShareForTenantPlan,
@@ -247,6 +249,100 @@ describe("tenantHasFeature", () => {
 
     mockQuery.mockResolvedValueOnce({ rows: [{ plan: "growth" }] });
     expect(await tenantHasFeature("tenant-a", "voice_clone")).toBe(false);
+  });
+});
+
+// GID 1217969364194602 [H-7]: queryTenantPlanOrThrow は checkAnalyticsPlanAccess /
+// analyticsSummaryRoutes.ts の plan ゲート用途だけが使う新設関数。queryTenantPlan
+// (fail-safeでDB例外もfree_adに丸める版)とは「DB例外時にどうするか」だけが逆で、
+// それ以外(null・未知文字列・テナント不在)は同じ結論(free_ad)を返すはずという契約を
+// 直接固定する。ここが割れると、DB障害時にplan_upgrade_requiredで503/500を
+// 覆い隠す元のバグ(H-7が塞いだはずのバグ)に逆戻りする。
+describe("queryTenantPlanOrThrow", () => {
+  beforeEach(() => {
+    mockQuery.mockReset();
+  });
+
+  it("既知の5値はそのまま返す(throwしない)", async () => {
+    for (const plan of ["free_ad", "starter", "standard", "growth", "enterprise"] as const) {
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan }] });
+      expect(await queryTenantPlanOrThrow({ query: mockQuery }, "tenant-a")).toBe(plan);
+    }
+  });
+
+  // ★plan列がnull(行はあるが未設定)はDB障害ではなくデータの状態なので、
+  // throwせずfree_adへ倒す(queryTenantPlanと同じ向き)。
+  it("plan列がnullの場合はthrowせずfree_adへ倒す", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan: null }] });
+    await expect(queryTenantPlanOrThrow({ query: mockQuery }, "tenant-a")).resolves.toBe("free_ad");
+  });
+
+  // 未知の文字列・大文字化・前後空白付きもDB障害ではなくデータの状態。
+  // allowlistが緩んで意図せず通ってしまっていないかも合わせて固定する。
+  it.each(["enterprise_trial", "STANDARD", " growth ", "typo-plan"])(
+    "未知のplan文字列 %s はthrowせずfree_adへ倒す",
+    async (plan) => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan }] });
+      await expect(queryTenantPlanOrThrow({ query: mockQuery }, "tenant-a")).resolves.toBe("free_ad");
+    },
+  );
+
+  it("テナント行が存在しない(rowsが空)場合はthrowせずfree_adへ倒す", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await expect(queryTenantPlanOrThrow({ query: mockQuery }, "nonexistent")).resolves.toBe("free_ad");
+  });
+
+  // ★本関数の存在理由そのもの★: queryTenantPlanと違い、DB例外はfree_adに丸めず
+  // そのままthrowする(呼び出し元がここを500/503として扱えるようにするため)。
+  it("★クエリが例外を投げた場合はfree_adに丸めずthrowする(queryTenantPlanと逆)★", async () => {
+    mockQuery.mockRejectedValueOnce(new Error("connection reset"));
+    await expect(queryTenantPlanOrThrow({ query: mockQuery }, "tenant-a")).rejects.toThrow(
+      "connection reset",
+    );
+  });
+});
+
+// ★queryTenantPlan と queryTenantPlanOrThrow のドリフト検知★
+// 2つの関数は allowlist を独立に実装しているため、片方だけプラン段を追加/修正して
+// もう片方を取り残す事故が起きうる(このファイルの他のdescribeが個別に固定している
+// 内容と重複するが、ここでは「同じ入力に対し両者が常に同じ結論を出す」という
+// 関係性そのものをテーブル駆動で1箇所に集約して固定する)。
+// DB例外時だけは意図的に向きが違う(queryTenantPlanはfree_ad、OrThrow版はthrow)ため
+// このテーブルには含めない(例外時の挙動は上のdescribeでそれぞれ個別に固定済み)。
+describe("queryTenantPlan と queryTenantPlanOrThrow のドリフト検知(DB例外以外)", () => {
+  beforeEach(() => {
+    mockQuery.mockReset();
+  });
+
+  it.each([
+    "free_ad",
+    "starter",
+    "standard",
+    "growth",
+    "enterprise",
+    null,
+    "typo-plan",
+    "STANDARD",
+    " growth ",
+    "enterprise_trial",
+  ])("plan=%p で queryTenantPlan と queryTenantPlanOrThrow が同じ結論を返す", async (plan) => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan }] });
+    const viaThrow = await queryTenantPlanOrThrow({ query: mockQuery }, "tenant-a");
+
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan }] });
+    const viaCatch = await queryTenantPlan({ query: mockQuery }, "tenant-a");
+
+    expect(viaThrow).toBe(viaCatch);
+  });
+
+  it("テナント行が存在しない(rowsが空)場合も両者が同じ結論(free_ad)を返す", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    const viaThrow = await queryTenantPlanOrThrow({ query: mockQuery }, "tenant-a");
+
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    const viaCatch = await queryTenantPlan({ query: mockQuery }, "tenant-a");
+
+    expect(viaThrow).toBe(viaCatch);
   });
 });
 
