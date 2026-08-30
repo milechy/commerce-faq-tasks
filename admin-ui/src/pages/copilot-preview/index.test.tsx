@@ -65,6 +65,7 @@ vi.mock("react-router-dom", async () => {
 });
 
 import { authFetch } from "../../lib/api";
+import { AGENT_CHAT_AUTH_REQUIRED_MESSAGE } from "../../lib/useAgentChatTransport";
 import { fetchWithAuth } from "../../components/knowledge/shared";
 import {
   CHAT_SESSION_SURFACE_FULLSCREEN,
@@ -2575,6 +2576,262 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
 function getComposer(): HTMLTextAreaElement {
   return screen.getByPlaceholderText(/指示ルール/) as HTMLTextAreaElement;
 }
+
+// GID 1217972976609524 (H-5) テスト強化: FAQ取込プレビューカード(faq_import_preview)。
+// suggest_faq_import_from_text/urls は自然文と別に構造化カードを返し、登録/取り消しの
+// 実行はチップ(「登録して」「やめておく」)経由で行われる。このチップが
+// commit_faq_import の確認ゲート(confirmed=true)を迂回する特別な経路になっていないか
+// (CLAUDE.md 禁止4)、公開状態・復元時の見せ方(admin-ui/CLAUDE.md テスト最低ライン)まで
+// 併せて検証する。
+describe("CopilotPreviewPage — FAQ取込プレビューカード(H-5)", () => {
+  function mockAgent(secondResponse: unknown) {
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+    let agentCalls = 0;
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
+      agentCalls += 1;
+      if (agentCalls === 1) return mockOk({ reply: "今週のまとめです。", actions: [] });
+      if (agentCalls === 2) return mockOk(secondResponse);
+      return mockOk({ reply: "承知しました。", actions: [] });
+    });
+  }
+
+  async function send(text: string) {
+    renderPage();
+    await waitForBootstrapSendStarted();
+    fireEvent.change(screen.getByPlaceholderText(/指示ルール/), { target: { value: text } });
+    fireEvent.click(screen.getByLabelText("送信"));
+  }
+
+  const textFaqs = [
+    { question: "送料はいくらですか？", answer: "全国一律550円です。", category: "store_info", duplicate: false, sourceUrl: null },
+    { question: "返品はできますか？", answer: "未使用品のみ7日以内に承ります。", category: "store_info", duplicate: true, sourceUrl: null },
+  ];
+  const textCard = { kind: "faq_import_preview", source: "text", total: 2, truncated: false, faqs: textFaqs, errorUrls: [] };
+
+  it("全N件中M件・重複バッジ・登録チップを描画し、チップは__real:形式の通常のユーザー発話として送信される(確認ゲートを迂回しない)", async () => {
+    mockAgent({
+      reply: "2件のFAQ案を作成しました。",
+      actions: [{ tool: "suggest_faq_import_from_text", result: "2件のFAQ案を作成しました。", card: textCard }],
+    });
+
+    await send("この説明文からFAQを作って");
+
+    expect(await screen.findByText(/全2件中2件/)).toBeTruthy();
+    expect(screen.getByText("送料はいくらですか？")).toBeTruthy();
+    expect(screen.getByText("返品はできますか？")).toBeTruthy();
+    // 重複バッジは該当行(1件)にのみ立つ
+    expect(screen.getAllByText("重複の可能性")).toHaveLength(1);
+    // source: text のカードには urls 由来のフィールド(取得元/取得失敗URL)が出ない
+    expect(screen.queryByText(/取得元/)).toBeNull();
+    expect(screen.queryByText(/取得できなかったURL/)).toBeNull();
+
+    const registerChip = await screen.findByRole("button", { name: "登録して" });
+    expect(screen.getByRole("button", { name: "やめておく" })).toBeTruthy();
+
+    fireEvent.click(registerChip);
+
+    // チップは commit_faq_import を直接叩く特別な経路ではなく、__real: を剥がした
+    // 自然文をそのまま /v1/admin/agent/chat に送るだけ(唯一の書き込み入口はサーバ側の
+    // confirmed ゲート)。suggest系の他チップ(保存して等)と全く同じ経路であることを確認する。
+    await waitFor(() => expect(screen.getByText("登録してください")).toBeTruthy());
+    const chatBodies = vi
+      .mocked(authFetch)
+      .mock.calls.filter(([url]) => String(url).includes("/v1/admin/agent/chat"))
+      .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>);
+    expect(chatBodies.at(-1)?.message).toBe("登録してください");
+    // 二度押し防止: 送信済みのチップは消える
+    expect(screen.queryByRole("button", { name: "登録して" })).toBeNull();
+  });
+
+  it("source: urlsのカードは取得元URL・取得失敗URLを別枠に表示し、件数の内訳(total/faqs/errorUrls)が食い違わない", async () => {
+    const urlsCard = {
+      kind: "faq_import_preview",
+      source: "urls",
+      total: 1,
+      truncated: false,
+      faqs: [{ question: "在庫はありますか？", answer: "店頭在庫は日々変動します。", category: "store_info", duplicate: false, sourceUrl: "https://example.com/p/1" }],
+      errorUrls: [{ url: "https://example.com/broken", error: "取得に失敗しました" }],
+    };
+    mockAgent({
+      reply: "1件のFAQ案を作成しました。",
+      actions: [{ tool: "suggest_faq_import_from_urls", result: "1件のFAQ案を作成しました。", card: urlsCard }],
+    });
+
+    await send("このURLたちからFAQを作って");
+
+    expect(await screen.findByText(/全1件中1件/)).toBeTruthy();
+    expect(screen.getByText(/取得元: https:\/\/example\.com\/p\/1/)).toBeTruthy();
+    expect(screen.getByText("取得できなかったURL（1件）")).toBeTruthy();
+    expect(screen.getByText(/https:\/\/example\.com\/broken（取得に失敗しました）/)).toBeTruthy();
+  });
+
+  it("truncated=trueのとき、母数(全N件)を隠さず上限超過の注記を出す", async () => {
+    const faqs = Array.from({ length: 20 }, (_, i) => ({
+      question: `質問${i + 1}`,
+      answer: `回答${i + 1}`,
+      category: null,
+      duplicate: false,
+      sourceUrl: null,
+    }));
+    const card = { kind: "faq_import_preview", source: "text", total: 25, truncated: true, faqs, errorUrls: [] };
+    mockAgent({
+      reply: "25件のFAQ案を作成しました。",
+      actions: [{ tool: "suggest_faq_import_from_text", result: "25件のFAQ案を作成しました。", card }],
+    });
+
+    await send("長い説明文からFAQを作って");
+
+    // 実際に生成された25件を黙って20件に見せない(D3の教訓)
+    expect(await screen.findByText(/全25件中20件/)).toBeTruthy();
+    expect(screen.getByText(/生成数が上限を超えたため、先頭20件のみを対象にしています/)).toBeTruthy();
+  });
+
+  it("長い取得元URLは word-break: break-all で折り返す設定になっている(390pxでの横スクロール対策)", async () => {
+    const longUrl = "https://example.com/" + "a".repeat(120) + "/product";
+    const urlsCard = {
+      kind: "faq_import_preview",
+      source: "urls",
+      total: 1,
+      truncated: false,
+      faqs: [{ question: "在庫はありますか？", answer: "変動します。", category: null, duplicate: false, sourceUrl: longUrl }],
+      errorUrls: [],
+    };
+    mockAgent({
+      reply: "1件のFAQ案を作成しました。",
+      actions: [{ tool: "suggest_faq_import_from_urls", result: "1件のFAQ案を作成しました。", card: urlsCard }],
+    });
+
+    await send("このURLからFAQを作って");
+
+    const sourceLine = await screen.findByText(new RegExp(`取得元: ${longUrl}`));
+    expect(sourceLine.style.wordBreak).toBe("break-all");
+  });
+
+  it("リロード・ブラウザバック後の復元時、未確定の取り込み候補が『登録済み』として描画されない(admin-ui/CLAUDE.md テスト最低ライン)", async () => {
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
+      return mockOk({ reply: "ok", actions: [] });
+    });
+    vi.mocked(restoreChatSession).mockReturnValue({
+      sessionId: "restored-session-id",
+      messages: [
+        { id: 301, role: "me", text: "この説明文からFAQを作って" },
+        {
+          id: 302,
+          role: "ai",
+          text: "2件のFAQ案を作成しました。",
+          card: { kind: "faqImportPreview", source: "text", total: 2, truncated: false, faqs: textFaqs, errorUrls: [] },
+          chips: [
+            { label: "登録して", action: "__real:登録してください", tone: "primary" },
+            { label: "やめておく", action: "__real:やめておきます", tone: "ghost" },
+          ],
+        },
+      ],
+      history: [
+        { role: "user", content: "この説明文からFAQを作って" },
+        { role: "assistant", content: "2件のFAQ案を作成しました。" },
+      ],
+    });
+
+    renderPage();
+
+    expect(await screen.findByText("送料はいくらですか？")).toBeTruthy();
+    expect(screen.getByText("返品はできますか？")).toBeTruthy();
+    // 未確定のまま復元されたことが分かるよう、確認チップがそのまま残っている
+    // (faqImportPreviewカードは「登録済み」に相当する状態フィールドを持たず、
+    // 構造的にも確定演出を描画しようがない)
+    expect(screen.getByRole("button", { name: "登録して" })).toBeTruthy();
+    expect(screen.queryByText(/登録済み/)).toBeNull();
+    expect(screen.queryByText(/公開済み/)).toBeNull();
+  });
+
+  it("チップ使用済みで復元された場合はチップが再表示されない(二重登録の誘発防止)", async () => {
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
+      return mockOk({ reply: "ok", actions: [] });
+    });
+    vi.mocked(restoreChatSession).mockReturnValue({
+      sessionId: "restored-session-id",
+      messages: [
+        { id: 401, role: "me", text: "この説明文からFAQを作って" },
+        {
+          id: 402,
+          role: "ai",
+          text: "2件のFAQ案を作成しました。",
+          card: { kind: "faqImportPreview", source: "text", total: 2, truncated: false, faqs: textFaqs, errorUrls: [] },
+          chips: [
+            { label: "登録して", action: "__real:登録してください", tone: "primary" },
+            { label: "やめておく", action: "__real:やめておきます", tone: "ghost" },
+          ],
+          chipsUsed: true,
+        },
+      ],
+      history: [
+        { role: "user", content: "この説明文からFAQを作って" },
+        { role: "assistant", content: "2件のFAQ案を作成しました。" },
+      ],
+    });
+
+    renderPage();
+
+    expect(await screen.findByText("送料はいくらですか？")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "登録して" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "やめておく" })).toBeNull();
+  });
+
+  it("チップ送信時にログインセッションが切れていれば、新しいカードは増やさずログイン案内を出す(『テナントが見つかりません』等の誤文言にしない)", async () => {
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+    let calls = 0;
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
+      calls += 1;
+      if (calls === 1) return mockOk({ reply: "今週のまとめです。", actions: [] });
+      if (calls === 2) {
+        return mockOk({
+          reply: "2件のFAQ案を作成しました。",
+          actions: [{ tool: "suggest_faq_import_from_text", result: "2件のFAQ案を作成しました。", card: textCard }],
+        });
+      }
+      return Promise.reject(new Error("__AUTH_REQUIRED__"));
+    });
+
+    renderPage();
+    await waitForBootstrapSendStarted();
+    fireEvent.change(screen.getByPlaceholderText(/指示ルール/), { target: { value: "この説明文からFAQを作って" } });
+    fireEvent.click(screen.getByLabelText("送信"));
+
+    const registerChip = await screen.findByRole("button", { name: "登録して" });
+    fireEvent.click(registerChip);
+
+    expect(await screen.findByText(AGENT_CHAT_AUTH_REQUIRED_MESSAGE)).toBeTruthy();
+    expect(screen.queryByText(/テナントが見つかりません/)).toBeNull();
+    // 新しいFAQ取込カードは増えていない(同じ質問文が1回だけ表示されたまま)
+    expect(screen.getAllByText("送料はいくらですか？")).toHaveLength(1);
+  });
+});
 
 // アバター画像候補の生成・採用は、エージェントツール経由にせずチャットから直接
 // POST /v1/admin/avatar/fal/generate / PATCH /v1/admin/avatar/configs/:id を叩く。
