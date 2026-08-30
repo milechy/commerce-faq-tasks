@@ -70,11 +70,20 @@ function makeApp(decoded: Record<string, unknown> | null) {
 const ADMIN_DECODED = { app_metadata: { role: 'super_admin', tenant_id: TENANT }, email: 't@t.com' };
 
 const ORIGINAL_NODE_ENV = process.env['NODE_ENV'];
+const ORIGINAL_ALLOW_INSECURE = process.env['ALLOW_INSECURE_DEV_AUTH'];
 beforeAll(() => {
   process.env['NODE_ENV'] = 'development';
+  // [P1] dev-decode 素通しは opt-in 必須化された。この test は ES 同期挙動の検証が
+  // 目的で認証層は通過させたいので、明示的に opt-in する。
+  process.env['ALLOW_INSECURE_DEV_AUTH'] = '1';
 });
 afterAll(() => {
   process.env['NODE_ENV'] = ORIGINAL_NODE_ENV;
+  if (ORIGINAL_ALLOW_INSECURE === undefined) {
+    delete process.env['ALLOW_INSECURE_DEV_AUTH'];
+  } else {
+    process.env['ALLOW_INSECURE_DEV_AUTH'] = ORIGINAL_ALLOW_INSECURE;
+  }
 });
 
 beforeEach(() => {

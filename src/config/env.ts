@@ -179,6 +179,16 @@ const envSchema = z.object({
         message: "WIDGET_JWT_SECRET is required in production",
       });
     }
+    // [P1 fail-closed] 暗号化鍵も production 必須。欠落したまま起動すると知識/書籍が
+    // 平文保存される fail-open になるため、スキーマ層でも塞ぐ（起動時の
+    // authSecretsGuard と二重防御）。
+    if (!data.KNOWLEDGE_ENCRYPTION_KEY?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["KNOWLEDGE_ENCRYPTION_KEY"],
+        message: "KNOWLEDGE_ENCRYPTION_KEY is required in production",
+      });
+    }
   }
 });
 

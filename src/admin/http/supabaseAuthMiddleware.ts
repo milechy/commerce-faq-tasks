@@ -15,14 +15,17 @@ export function supabaseAuthMiddleware(
   res: Response,
   next: NextFunction
 ): void {
-  // development: 署名検証なしで JWT をデコードし req.supabaseUser をセットして通す
-  // （roleAuthMiddleware が role を正しく解決できるようにするため decode は必須）
-  // 二重条件化(ALLOW_INSECURE_DEV_AUTH併用必須)も検討したが、35箇所以上の既存呼び出し元と
-  // 多数の既存テスト（makeDevJwtヘルパー経由でNODE_ENV=development単独に依存）がこの単一条件を
-  // 前提にしており、二重化は広範な回帰を生む（実測: tuning-rules-api/chat-history-api等が403に）。
-  // 本番はecosystem.config.cjs/deploy-vps.shがNODE_ENV=productionを強制するため、
-  // このブランチは本番では到達しない（統合前と同じ単一条件を維持）。
-  if (process.env.NODE_ENV === "development") {
+  // [P1 fail-closed] 署名検証なしの dev-decode 素通しは opt-in 必須に変更。
+  // 従来は NODE_ENV==='development' 単独で JWT を署名検証せず decode して通していたため、
+  // 誤って NODE_ENV=development で本番が起動すると認証が実質無効化される fail-open だった。
+  // 明示的な ALLOW_INSECURE_DEV_AUTH=1（かつ非production）が揃った時のみに限定し、
+  // 既定は下の署名検証必須パスへ落とす。production では flag が付いていても発動しない
+  // （多重防御: NODE_ENV=production は常に署名検証）。
+  const insecureDevAuthEnabled =
+    process.env.NODE_ENV !== "production" &&
+    (process.env.ALLOW_INSECURE_DEV_AUTH === "1" ||
+      process.env.ALLOW_INSECURE_DEV_AUTH === "true");
+  if (insecureDevAuthEnabled) {
     const authHeader = req.headers.authorization ?? "";
     if (authHeader.startsWith("Bearer ")) {
       const token = authHeader.slice("Bearer ".length).trim();
@@ -43,18 +46,20 @@ export function supabaseAuthMiddleware(
     return;
   }
 
-  // SUPABASE_JWT_SECRET 未設定時の扱い:
-  // production は fail-closed（503）。真の防御は起動時の fail-fast
-  // （config/env.ts の production 必須化、B3で実装済み）であり、ここは二重防御。
-  // production 以外まで fail-closed にすると、SUPABASE_JWT_SECRET を設定せずに
-  // このミドルウェアへ到達する既存テスト群（jestワーカー間で process.env が
-  // 共有されるため NODE_ENV=test でも影響が波及する）を無関係に壊すため、
-  // production 以外は統合前と同じ fail-open（warn して通す）を維持する。
-  // (統合前の各インラインコピーと同様、リクエスト毎に process.env を読む —
-  //  モジュールトップレベルで一度だけ読むと起動後の env 変更やテストの動的設定に追随できない)
+  // [P1 fail-closed] SUPABASE_JWT_SECRET 未設定時の fail-closed を production 限定から拡張。
+  // 従来は production のみ 503 で、それ以外（NODE_ENV 未設定・staging 等を含む）は warn して
+  // 素通し（fail-open）だった。「NODE_ENV 未設定=非production 扱い」で認証が無効化される
+  // トラップを塞ぐため、fail-closed を「NODE_ENV が development/test 以外の全て」に広げる
+  // （internalSecretGuard.ts / authSecretsGuard.ts と同じ「安全な非本番 env のみ寛容」方針）。
+  //   - production / staging / NODE_ENV 未設定 → 503 fail-closed
+  //   - development / test → warn して素通し（ローカル開発・既存テストを壊さない）
+  // 起動時の真の防御は authSecretsGuard ＋ config/env.ts の production 必須化で、ここは二重防御。
+  // (リクエスト毎に process.env を読む — 起動後の env 変更やテストの動的設定に追随するため)
   const secret = process.env.SUPABASE_JWT_SECRET;
   if (!secret) {
-    if (process.env.NODE_ENV === "production") {
+    const nodeEnv = process.env.NODE_ENV ?? "";
+    const isSafeNonProdEnv = nodeEnv === "development" || nodeEnv === "test";
+    if (!isSafeNonProdEnv) {
       logger.error(
         "[supabaseAuthMiddleware] SUPABASE_JWT_SECRET が設定されていません。認証を拒否します。"
       );
@@ -62,7 +67,7 @@ export function supabaseAuthMiddleware(
       return;
     }
     logger.warn(
-      "[supabaseAuthMiddleware] SUPABASE_JWT_SECRET が設定されていないため、認証をスキップします。"
+      "[supabaseAuthMiddleware] SUPABASE_JWT_SECRET が設定されていないため、認証をスキップします（dev/test のみ）。"
     );
     next();
     return;

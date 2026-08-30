@@ -58,20 +58,82 @@ describe("encryptText / decryptText (key set)", () => {
   });
 });
 
-describe("KNOWLEDGE_ENCRYPTION_KEY 未設定時のフォールバック", () => {
+describe("KNOWLEDGE_ENCRYPTION_KEY 未設定時のフォールバック（dev/test のみ）", () => {
+  const savedNodeEnv = process.env.NODE_ENV;
+
   beforeEach(() => {
     delete process.env.KNOWLEDGE_ENCRYPTION_KEY;
+    // jest 既定の NODE_ENV=test。dev/test では平文フォールバックが許可される。
+    process.env.NODE_ENV = "test";
   });
 
-  it("encryptText が平文をそのまま返す", () => {
+  afterEach(() => {
+    process.env.NODE_ENV = savedNodeEnv;
+  });
+
+  it("test 環境では encryptText が平文をそのまま返す（開発/テスト用フォールバック）", () => {
     const text = "plaintext data";
     const result = encryptText(text);
     expect(result).toBe(text);
   });
 
+  it("development 環境でも平文フォールバックする", () => {
+    process.env.NODE_ENV = "development";
+    const text = "plaintext data";
+    expect(encryptText(text)).toBe(text);
+  });
+
   it("decryptText が平文をそのまま返す（後方互換）", () => {
     const text = "plaintext data";
     expect(decryptText(text)).toBe(text);
+  });
+});
+
+describe("KNOWLEDGE_ENCRYPTION_KEY 未設定時の fail-closed（本番/不明 env）", () => {
+  const savedNodeEnv = process.env.NODE_ENV;
+
+  beforeEach(() => {
+    delete process.env.KNOWLEDGE_ENCRYPTION_KEY;
+  });
+
+  afterEach(() => {
+    process.env.NODE_ENV = savedNodeEnv;
+  });
+
+  it("production では encryptText が throw する（平文保存を拒否）", () => {
+    process.env.NODE_ENV = "production";
+    expect(() => encryptText("secret book text")).toThrow(
+      /KNOWLEDGE_ENCRYPTION_KEY is required/
+    );
+  });
+
+  it("NODE_ENV 未設定（undefined）でも throw する（トラップの解消）", () => {
+    delete process.env.NODE_ENV;
+    expect(() => encryptText("secret book text")).toThrow(
+      /KNOWLEDGE_ENCRYPTION_KEY is required/
+    );
+  });
+
+  it("staging など未知の env でも throw する", () => {
+    process.env.NODE_ENV = "staging";
+    expect(() => encryptText("secret book text")).toThrow(
+      /KNOWLEDGE_ENCRYPTION_KEY is required/
+    );
+  });
+
+  it("鍵が設定されていれば production でも暗号化して往復できる", () => {
+    process.env.NODE_ENV = "production";
+    process.env.KNOWLEDGE_ENCRYPTION_KEY = TEST_KEY;
+    const original = "secret book text";
+    const encrypted = encryptText(original);
+    expect(isEncrypted(encrypted)).toBe(true);
+    expect(decryptText(encrypted)).toBe(original);
+    delete process.env.KNOWLEDGE_ENCRYPTION_KEY;
+  });
+
+  it("復号は鍵さえあれば env に関わらず後方互換（平文はそのまま）", () => {
+    process.env.NODE_ENV = "production";
+    expect(decryptText("古い平文データ")).toBe("古い平文データ");
   });
 });
 

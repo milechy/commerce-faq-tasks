@@ -28,11 +28,12 @@ function issuePaths(result: ReturnType<typeof parse>): string[] {
 
 describe("env.ts — production secret required (B3)", () => {
   describe("正常系", () => {
-    it("production で両 secret 設定済み → 成功", () => {
+    it("production で必須 secret 設定済み → 成功", () => {
       const result = parse({
         NODE_ENV: "production",
         SUPABASE_JWT_SECRET: "s".repeat(32),
         WIDGET_JWT_SECRET: "w".repeat(32),
+        KNOWLEDGE_ENCRYPTION_KEY: "a".repeat(64),
       });
       expect(result.success).toBe(true);
     });
@@ -49,12 +50,32 @@ describe("env.ts — production secret required (B3)", () => {
   });
 
   describe("境界値・異常系", () => {
-    it("production で両方未設定 → 両方の path でエラー", () => {
+    it("production で全未設定 → 3つの path でエラー", () => {
       const result = parse({ NODE_ENV: "production" });
       expect(result.success).toBe(false);
       const paths = issuePaths(result);
       expect(paths).toContain("SUPABASE_JWT_SECRET");
       expect(paths).toContain("WIDGET_JWT_SECRET");
+      expect(paths).toContain("KNOWLEDGE_ENCRYPTION_KEY");
+    });
+
+    it("[P1] production で KNOWLEDGE_ENCRYPTION_KEY のみ欠落 → KNOWLEDGE_ENCRYPTION_KEY のエラー", () => {
+      const result = parse({
+        NODE_ENV: "production",
+        SUPABASE_JWT_SECRET: "s".repeat(32),
+        WIDGET_JWT_SECRET: "w".repeat(32),
+        KNOWLEDGE_ENCRYPTION_KEY: undefined,
+      });
+      expect(result.success).toBe(false);
+      const paths = issuePaths(result);
+      expect(paths).toContain("KNOWLEDGE_ENCRYPTION_KEY");
+      expect(paths).not.toContain("SUPABASE_JWT_SECRET");
+      expect(paths).not.toContain("WIDGET_JWT_SECRET");
+    });
+
+    it("[P1] development では KNOWLEDGE_ENCRYPTION_KEY 未設定でも成功（必須化されない）", () => {
+      const result = parse({ NODE_ENV: "development" });
+      expect(result.success).toBe(true);
     });
 
     it("production で SUPABASE_JWT_SECRET が空文字列 '' → エラー（未設定と同様に扱う）", () => {

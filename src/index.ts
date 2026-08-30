@@ -66,6 +66,7 @@ import { createOriginCheckMiddleware } from "./api/middleware/originCheck";
 import { internalNetworkOnly } from "./api/middleware/internalNetworkOnly";
 import { e2eWriteGuard } from "./api/middleware/e2eWriteGuard";
 import { assertInternalSecretConfigured } from "./lib/startup/internalSecretGuard";
+import { assertAuthSecretsConfigured } from "./lib/startup/authSecretsGuard";
 import { registerWidgetRoutes } from "./api/widget/routes";
 import { registerAuthRoutes } from "./api/auth/routes";
 import { registerLiveKitTokenRoutes } from "./api/avatar/livekitTokenRoutes";
@@ -756,6 +757,13 @@ async function startServer() {
   // production / staging / 不明 env では未設定なら exit(1)。
   // dev/test または ALLOW_MISSING_INTERNAL_HMAC_SECRET=true でのみ続行。
   assertInternalSecretConfigured({
+    warn: (msg) => logger.warn(msg),
+    fatal: (msg) => logger.fatal(msg),
+  });
+  // [P1 fail-closed] 認証/署名/暗号 secret（SUPABASE_JWT_SECRET / WIDGET_JWT_SECRET /
+  // KNOWLEDGE_ENCRYPTION_KEY）を NODE_ENV に依らず起動時に検査。production/不明 env で
+  // 欠落していれば exit(1)。dev/test は warn のみ。
+  assertAuthSecretsConfigured({
     warn: (msg) => logger.warn(msg),
     fatal: (msg) => logger.fatal(msg),
   });
