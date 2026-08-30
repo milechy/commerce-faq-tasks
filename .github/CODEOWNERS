@@ -40,3 +40,10 @@ secrets/                       @milechy
 # ── 法務・パートナー関連 ─────────────────────────────────────
 docs/legal/                    @milechy
 PARTNER_*                      @milechy
+
+# ── 認証・認可・公開配布物 (2026-08-30 リスク監査で Tier S 拡張) ──
+src/auth/                      @milechy
+src/api/middleware/            @milechy
+src/admin/http/                @milechy
+public/widget.js               @milechy
+admin-ui/src/                  @milechy
