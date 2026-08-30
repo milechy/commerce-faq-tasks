@@ -79,6 +79,34 @@ describe("isLearnedMemoryReadEnabled", () => {
     // write 側は引き続き有効
     expect(isLearnedMemoryWriteEnabled("carnation")).toBe(true);
   });
+
+  // H-6欠陥修正 (GID 1217972798328871): 読込みは書込み側 allowlist を見ない。
+  // 手動昇格 (allowlist をバイパスする) で保存された行を読めるようにするための挙動変化。
+  it("allowlist に無いテナントでも、マスタースイッチ ON なら true (手動昇格した内容を読めるようにするため)", () => {
+    process.env.LEARNED_MEMORY_ENABLED = "true";
+    process.env.LEARNED_MEMORY_TENANTS = "carnation"; // "not-in-allowlist" を含まない
+    expect(isLearnedMemoryReadEnabled("not-in-allowlist")).toBe(true);
+  });
+
+  // allowlist 自体が未設定 (空) でも、マスタースイッチ ON なら読込みは開く。
+  it("LEARNED_MEMORY_TENANTS 未設定でも、マスタースイッチ ON なら true", () => {
+    process.env.LEARNED_MEMORY_ENABLED = "true";
+    expect(isLearnedMemoryReadEnabled("anyone")).toBe(true);
+  });
+
+  it("マスタースイッチ OFF なら allowlist に関わらず false", () => {
+    process.env.LEARNED_MEMORY_TENANTS = "*";
+    expect(isLearnedMemoryReadEnabled("anyone")).toBe(false);
+  });
+
+  it("write は従来どおり allowlist を見る (read だけを変えたことの固定)", () => {
+    process.env.LEARNED_MEMORY_ENABLED = "true";
+    process.env.LEARNED_MEMORY_TENANTS = "carnation";
+    expect(isLearnedMemoryWriteEnabled("not-in-allowlist")).toBe(false);
+    expect(isLearnedMemoryWriteEnabled("carnation")).toBe(true);
+    // 同条件で read は allowlist に関わらず true (write との非対称を並べて固定)
+    expect(isLearnedMemoryReadEnabled("not-in-allowlist")).toBe(true);
+  });
 });
 
 describe("getLearnedMemoryThreshold", () => {

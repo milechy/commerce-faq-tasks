@@ -43,11 +43,22 @@ export function isLearnedMemoryWriteEnabled(tenantId: string): boolean {
 /**
  * 学習メモリの読込み (RAG検索へのマージ) が有効か。
  * マスタースイッチ ON かつ READ 明示 OFF でない場合に有効。
+ *
+ * H-6欠陥修正 (GID 1217972798328871): tenantId 引数は残すが、ここでは
+ * isTenantAllowed (書込み側 allowlist) を意図的に見ない。
+ * 読込みは「learned_memory に存在する行」しか返せず、行が存在するのは
+ *   (a) 自動昇格 = 書込み側 allowlist (isLearnedMemoryWriteEnabled) を通ったテナント
+ *   (b) 手動昇格 (manuallyPromoteSession) = allowlist を経由せず人間が個別に判断したテナント
+ * のどちらかに限られる。つまり「何が存在するか」は既に書込み側の gate が制御済みなので、
+ * 読込み側で同じ allowlist を重ねて見ると (a) には冗長、(b) には有害
+ * (せっかく手動昇格した内容が二度とプロンプトに載らない)。
+ * 挙動変化: allowlist から外れたテナントは「新しく学習しなくなる (書込み側は従来どおり閉じる)」
+ * だけで、「学習済みの内容を使わなくなる (忘却)」わけではない。
  */
-export function isLearnedMemoryReadEnabled(tenantId: string): boolean {
+export function isLearnedMemoryReadEnabled(_tenantId: string): boolean {
   if (process.env.LEARNED_MEMORY_ENABLED !== "true") return false;
   if (process.env.LEARNED_MEMORY_READ_ENABLED === "false") return false;
-  return isTenantAllowed(tenantId);
+  return true;
 }
 
 /**
