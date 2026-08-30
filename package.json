@@ -6,15 +6,26 @@
   "packageManager": "pnpm@9.15.9",
   "pnpm": {
     "overrides": {
-      "undici": ">=6.27.0 <7",
+      "undici": ">=6.28.0 <7",
       "path-to-regexp": ">=8.4.2",
       "ws": ">=8.21.0 <9",
-      "axios": ">=1.15.0",
+      "axios": ">=1.16.0 <2",
       "minimatch": ">=9.0.7 <10",
-      "protobufjs": ">=7.5.6 <8",
+      "protobufjs": ">=7.6.5 <8",
       "@grpc/grpc-js": ">=1.14.4 <2",
-      "brace-expansion": ">=5.0.9 <6"
+      "brace-expansion": ">=5.0.9 <6",
+      "tar": ">=7.5.21 <8",
+      "shell-quote": ">=1.9.0 <2",
+      "lodash": ">=4.18.0 <5",
+      "form-data": ">=4.0.6 <5",
+      "picomatch@2": ">=2.3.2 <3",
+      "picomatch@4": ">=4.0.4 <5"
     },
+    "onlyBuiltDependencies": [
+      "onnxruntime-node",
+      "protobufjs",
+      "unrs-resolver"
+    ],
     "auditConfig": {
       "ignoreCves": [
         "CVE-2026-45134"
