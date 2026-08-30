@@ -2,6 +2,7 @@
 
 import { decryptText } from "../lib/crypto/textEncrypt";
 import { pool as pg } from "../lib/db";
+import { shouldIncludeGlobalKnowledge, shouldIncludeR2cDocs } from "./globalKnowledgeFlag";
 
 export interface PgVectorHit {
   id: string;
@@ -111,6 +112,20 @@ export async function searchPgVector(
     ? `and fe.id::text != ALL($4::text[])`
     : "";
 
+  // P1: global(書籍等) / r2c_docs(社内ドキュメント) の合流をテナント別オプトインで判定。
+  // 既定(env 未設定)は従来どおり両方引く。opt-in 有効時は allowlist 外テナントから除外する。
+  // 両方引く場合は従来と完全一致の文字列を維持(静的検査 excludedIds.test.ts が本ファイル文字列の
+  // "fe.tenant_id = $1 OR fe.tenant_id = 'global'" を参照)。
+  const includeGlobal = shouldIncludeGlobalKnowledge(tenantId);
+  const includeR2cDocs = shouldIncludeR2cDocs(tenantId);
+  const tenantScope = includeGlobal && includeR2cDocs
+    ? `fe.tenant_id = $1 OR fe.tenant_id = 'global' OR fe.tenant_id = 'r2c_docs'`
+    : [
+        "fe.tenant_id = $1",
+        includeGlobal ? "fe.tenant_id = 'global'" : null,
+        includeR2cDocs ? "fe.tenant_id = 'r2c_docs'" : null,
+      ].filter(Boolean).join(" OR ");
+
   // Phase69-2 Round 4: identity-based FAQ visibility (Codex Adversarial Round 3 #1 対応)
   //
   // Round 3 では source 文字列リテラル ('scrape'/'text'/'faq') で FAQ 系を判定していたが、
@@ -135,7 +150,7 @@ export async function searchPgVector(
       1 - (fe.embedding <-> $2::vector) as score
     from faq_embeddings fe
     ${FAQ_VISIBILITY_JOIN}
-    where (fe.tenant_id = $1 OR fe.tenant_id = 'global' OR fe.tenant_id = 'r2c_docs')
+    where (${tenantScope})
       and ${FAQ_VISIBILITY_WHERE}
       and (fe.is_excluded_from_search IS NULL OR fe.is_excluded_from_search = false)
       ${excludeClause}
