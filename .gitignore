@@ -94,3 +94,6 @@ models/ce-export/model.onnx
 
 # 一時スクラッチ(Playwright REPL 等)
 .claude/tmp_*
+
+# CI の vitest JSON レポート(artifact としてアップロードするだけでコミットしない)
+admin-ui/vitest-report.json
