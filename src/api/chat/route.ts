@@ -20,6 +20,12 @@ import { checkTopic } from "../../middleware/topicGuard";
 import { guardOutput, redactInternalTerms } from "../../middleware/outputGuard";
 import { detectPiiRoute } from "../../agent/avatar/piiRouteDetector";
 import { getTenantPlan } from "../../lib/billing/planFeatures";
+import {
+  queryBillingAccess,
+  blocksTextChat,
+  shouldDegradeToFreeAdCap,
+  type BillingAccess,
+} from "../../lib/billing/suspensionGate";
 import { getCachedShareConsent } from "../../lib/hermesConsent";
 import {
   getMonthRangeJst,
@@ -173,10 +179,16 @@ async function isFreeAdQuotaExceededForTenant(
   tenantId: string,
   logger: Logger,
   now: Date = new Date(),
+  // fix/unpaid-suspension: 猶予超過(restricted)の有料テナントを free_ad 相当へ
+  // 降格するとき true。plan!==free_ad でも free_ad の月次上限を適用する。
+  forceCap: boolean = false,
+  // 呼び出し元が既に getTenantPlan を解決済みなら渡す(二重取得を避ける)。
+  // undefined のときのみ内部で取得する(既存の単独呼び出しとの後方互換)。
+  preResolvedPlan?: string | null,
 ): Promise<boolean> {
   try {
-    const plan = await getTenantPlan(tenantId);
-    if (plan !== "free_ad") return false;
+    const plan = preResolvedPlan !== undefined ? preResolvedPlan : await getTenantPlan(tenantId);
+    if (plan !== "free_ad" && !forceCap) return false;
 
     const { monthStart, monthEnd } = getMonthRangeJst(now);
     const pool = getPool();
@@ -334,12 +346,56 @@ export function createChatHandler(logger: Logger) {
     const sessionId: string =
       body.sessionId?.trim() || body.conversationId || randomUUID();
 
+    // プランを1回だけ解決する(getTenantPlan は 60s キャッシュ付き)。停止ゲートと
+    // free_ad 上限の両方でこの値を使い回し、DB問い合わせの二重化を避ける。
+    // fail-open: 取得失敗(pool未初期化等)は null とし、chat を止めない
+    // (既存 isFreeAdQuotaExceededForTenant の fail-open と整合)。
+    let tenantPlan: string | null = null;
+    try {
+      tenantPlan = await getTenantPlan(tenantId);
+    } catch (err) {
+      logger.warn({ requestId, tenantId, err }, "chat.request.plan_resolve_failed");
+    }
+
+    // fix/unpaid-suspension [P0]: 未払・退会テナントの提供停止ゲート。
+    // ★有料セルフサービスプラン(starter/standard/growth)だけを対象にする★
+    // free_ad は止める subscription が無く、enterprise は個別契約で自動停止しない。
+    // free_ad/enterprise/未知プランはここで追加のDB問い合わせを一切しない(最高
+    // トラフィック経路に無駄なラウンドトリップを足さない)。
+    //   suspended(unpaid/canceled/subscription削除) → テキストchatを全停止(402)。
+    //   restricted(past_due が猶予超過)            → 下の free_ad 上限へ降格。
+    //   grace(猶予内)/active/判定不能               → 通す(判定不能=DB例外は可用性優先で
+    //                                                通す。blocksTextChat の fail-open)。
+    let degradeToFreeAdCap = false;
+    if (tenantPlan === "starter" || tenantPlan === "standard" || tenantPlan === "growth") {
+      let billingAccess: BillingAccess | null = null;
+      try {
+        billingAccess = await queryBillingAccess(getPool(), tenantId, new Date());
+      } catch (err) {
+        logger.warn({ requestId, tenantId, err }, "chat.request.billing_access_check_failed");
+      }
+      if (blocksTextChat(billingAccess)) {
+        logger.info({ requestId, tenantId }, "chat.request.billing_suspended");
+        res.status(402).json({
+          error: "billing_suspended",
+          message: t("error.billing_suspended", lang),
+          requestId,
+          tenantId,
+          lang,
+        });
+        return;
+      }
+      degradeToFreeAdCap = shouldDegradeToFreeAdCap(billingAccess);
+    }
+
     // free_ad プランの月次上限（Asana 1217759064329998）。free_ad 以外のテナントは
     // isFreeAdQuotaExceededForTenant が即 false を返すため既存動作は変わらない。
+    // ただし restricted(猶予超過)の有料テナントは degradeToFreeAdCap=true で
+    // free_ad 上限を適用する。解決済みの tenantPlan を渡して getTenantPlan の再取得を避ける。
     // 403 plan_upgrade_required は正常系の分岐であり、エラーではない
     // （CLAUDE.md 絶対にやってはいけないこと21。赤帯にしない・「0件」と描画しない
     // のはフロント側の責務。ここでは構造化した理由コードのみ返す）。
-    if (await isFreeAdQuotaExceededForTenant(tenantId, logger)) {
+    if (await isFreeAdQuotaExceededForTenant(tenantId, logger, new Date(), degradeToFreeAdCap, tenantPlan)) {
       logger.info({ requestId, tenantId }, "chat.request.free_ad_quota_exceeded");
       res.status(403).json({
         error: "plan_upgrade_required",
