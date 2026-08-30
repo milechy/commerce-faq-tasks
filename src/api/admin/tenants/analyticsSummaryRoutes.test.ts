@@ -265,6 +265,31 @@ describe("GET /v1/admin/tenants/:id/analytics-summary — LLM原価はsuper_admi
     expect(mockedGetMonthlyLLMUsage).not.toHaveBeenCalled();
   });
 
+  // ★穴4: プランを上げても原価は開示しない(プランと原価開示は無関係という設計の固定)★
+  // growthはconversionゲート(このエンドポイントが要求する最低プラン)を通過する最下段、
+  // enterpriseは最上段。両端を見て「プランに関わらずclient_adminには一切出ない」ことを固定する。
+  it.each(["growth", "enterprise"])(
+    "client_admin(plan=%s)にはllm_usageを返さない(プランを上げてもcost_jpyは開示されない)",
+    async (plan) => {
+      mockedGetMonthlyLLMUsage.mockResolvedValue({
+        totalInputTokens: 100,
+        totalOutputTokens: 50,
+        estimatedCostUsd: 1.23,
+        totalGenerations: 3,
+      });
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan }] }); // plan確認
+      mockQuery.mockResolvedValue({ rows: [] });
+
+      const res = await request(app)
+        .get("/v1/admin/tenants/carnation/analytics-summary?period=last_30d")
+        .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.llm_usage).toBeNull();
+      expect(mockedGetMonthlyLLMUsage).not.toHaveBeenCalled();
+    },
+  );
+
   it("super_adminにはllm_usage(原価)を返す", async () => {
     mockedGetMonthlyLLMUsage.mockResolvedValue({
       totalInputTokens: 100,
@@ -280,5 +305,55 @@ describe("GET /v1/admin/tenants/:id/analytics-summary — LLM原価はsuper_admi
     expect(res.status).toBe(200);
     expect(res.body.llm_usage).not.toBeNull();
     expect(res.body.llm_usage.cost_jpy).toBe(Math.round(1.23 * 150));
+  });
+
+  // ★穴4: レスポンス全体を走査して、costを含むキーがllm_usage.cost_jpy以外に
+  // 紛れ込んでいないことを固定する(将来フィールドが増えたときの回帰検知用)。
+  // ピンポイントのフィールド名比較(res.body.llm_usage.cost_jpy)だけだと、
+  // 新しい集計フィールド(例: cv側にcost_per_conversionのような値)が
+  // client_adminにも見える形で追加されても検出できない。
+  function findCostKeyPaths(value: unknown, path = ""): string[] {
+    if (value === null || typeof value !== "object") return [];
+    const found: string[] = [];
+    for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
+      const currentPath = path ? `${path}.${key}` : key;
+      if (/cost/i.test(key)) found.push(currentPath);
+      found.push(...findCostKeyPaths(v, currentPath));
+    }
+    return found;
+  }
+
+  it("super_adminのレスポンスで cost を含むキーは llm_usage.cost_jpy のみ(他に紛れ込んでいない)", async () => {
+    mockedGetMonthlyLLMUsage.mockResolvedValue({
+      totalInputTokens: 100,
+      totalOutputTokens: 50,
+      estimatedCostUsd: 1.23,
+      totalGenerations: 3,
+    });
+
+    const res = await request(app)
+      .get("/v1/admin/tenants/carnation/analytics-summary?period=last_30d")
+      .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`);
+
+    expect(res.status).toBe(200);
+    expect(findCostKeyPaths(res.body)).toEqual(["llm_usage.cost_jpy"]);
+  });
+
+  it("client_adminのレスポンスにはcostを含むキーが一切無い(llm_usageがnullのため)", async () => {
+    mockedGetMonthlyLLMUsage.mockResolvedValue({
+      totalInputTokens: 100,
+      totalOutputTokens: 50,
+      estimatedCostUsd: 1.23,
+      totalGenerations: 3,
+    });
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan: "growth" }] });
+    mockQuery.mockResolvedValue({ rows: [] });
+
+    const res = await request(app)
+      .get("/v1/admin/tenants/carnation/analytics-summary?period=last_30d")
+      .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`);
+
+    expect(res.status).toBe(200);
+    expect(findCostKeyPaths(res.body)).toEqual([]);
   });
 });
