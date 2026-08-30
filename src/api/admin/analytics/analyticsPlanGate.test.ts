@@ -119,6 +119,212 @@ describe("GET /v1/admin/analytics/conversions — plan ゲート(Growthのまま
   });
 });
 
+// trends / evaluations は summary と同じ analytics ゲート(Standard〜)を通るはずだが、
+// 個別には未検証だった(取り違えると全ゲートが静かに壊れる箇所なのに穴になっていた)。
+describe("GET /v1/admin/analytics/trends — plan ゲート", () => {
+  beforeEach(() => {
+    mockQuery.mockReset();
+  });
+
+  it("client_admin + plan=starter → 403 plan_upgrade_required", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan: "starter" }] });
+
+    const res = await request(makeApp({ role: "client_admin", tenant_id: "tenant-a" }))
+      .get("/v1/admin/analytics/trends");
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("plan_upgrade_required");
+  });
+
+  it("client_admin + plan=standard → planゲートを通過する(403にならない、analytics開放の対象)", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan: "standard" }] });
+    mockQuery.mockResolvedValue({ rows: [], rowCount: 0 });
+
+    const res = await request(makeApp({ role: "client_admin", tenant_id: "tenant-a" }))
+      .get("/v1/admin/analytics/trends");
+
+    expect(res.status).not.toBe(403);
+  });
+});
+
+describe("GET /v1/admin/analytics/evaluations — plan ゲート", () => {
+  beforeEach(() => {
+    mockQuery.mockReset();
+  });
+
+  it("client_admin + plan=starter → 403 plan_upgrade_required(集計クエリは実行されない)", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan: "starter" }] });
+
+    const res = await request(makeApp({ role: "client_admin", tenant_id: "tenant-a" }))
+      .get("/v1/admin/analytics/evaluations");
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("plan_upgrade_required");
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it("client_admin + plan=standard → planゲートを通過する(403にならない、analytics開放の対象)", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan: "standard" }] });
+    mockQuery.mockResolvedValue({ rows: [], rowCount: 0 });
+
+    const res = await request(makeApp({ role: "client_admin", tenant_id: "tenant-a" }))
+      .get("/v1/admin/analytics/evaluations");
+
+    expect(res.status).not.toBe(403);
+  });
+});
+
+// ★ゲート取り違え検知(穴2)★
+// 個別エンドポイントのテストはそれぞれ独立しているため、「新しいエンドポイントを
+// analyticsのつもりでconversionゲートに繋いだ」「逆に外し忘れた」といった取り違えは
+// 見た目上どのテストも書き方に沿っていれば通ってしまう。エンドポイント一覧を
+// 1箇所のテーブルにまとめ、standardプラン1本で「analytics系は全通過・conversion系は
+// 全403」を一括検証する。新しいエンドポイントを足すときはこのテーブルに追加すること。
+const ANALYTICS_GATE_ENDPOINTS: ReadonlyArray<{ path: string; feature: "analytics" | "conversion" }> = [
+  { path: "/v1/admin/analytics/summary", feature: "analytics" },
+  { path: "/v1/admin/analytics/trends", feature: "analytics" },
+  { path: "/v1/admin/analytics/evaluations", feature: "analytics" },
+  { path: "/v1/admin/analytics/conversions", feature: "conversion" },
+  { path: "/v1/admin/analytics/knowledge-attribution", feature: "conversion" },
+  { path: "/v1/admin/analytics/rule-effect/42", feature: "conversion" },
+];
+
+describe("ゲート取り違え検知: standardプランで analytics系は全通過・conversion系は全403", () => {
+  beforeEach(() => {
+    mockQuery.mockReset();
+  });
+
+  it.each(ANALYTICS_GATE_ENDPOINTS.filter((e) => e.feature === "analytics").map((e) => e.path))(
+    "%s は standard プランで通過する(403にならない = analyticsゲートに正しく繋がっている)",
+    async (path) => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: "standard" }] });
+      mockQuery.mockResolvedValue({ rows: [], rowCount: 0 });
+
+      const res = await request(makeApp({ role: "client_admin", tenant_id: "tenant-a" })).get(path);
+
+      expect(res.status).not.toBe(403);
+    },
+  );
+
+  it.each(ANALYTICS_GATE_ENDPOINTS.filter((e) => e.feature === "conversion").map((e) => e.path))(
+    "%s は standard プランで403になる(analyticsゲートに紛れ込んでいない = conversionゲートのまま)",
+    async (path) => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: "standard" }] });
+
+      const res = await request(makeApp({ role: "client_admin", tenant_id: "tenant-a" })).get(path);
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toBe("plan_upgrade_required");
+    },
+  );
+});
+
+// ★403のエラー形と文言(穴3)★
+// admin-ui の isPlanUpgradeRequired は error フィールドの値に依存して赤帯表示を分岐する。
+// message は機能別に出し分けているが、error はどちらの機能で403になっても
+// 完全に同じ文字列でなければならない(ここが割れると正常系の分岐UIが壊れる)。
+describe("403のエラー形と文言(admin-uiのisPlanUpgradeRequiredが依存する形)", () => {
+  beforeEach(() => {
+    mockQuery.mockReset();
+  });
+
+  it("analytics機能の403はStandardを案内し、Growthとは言わない(逆側の文言が紛れ込んでいない)", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan: "starter" }] });
+
+    const res = await request(makeApp({ role: "client_admin", tenant_id: "tenant-a" }))
+      .get("/v1/admin/analytics/summary");
+
+    expect(res.body.error).toBe("plan_upgrade_required");
+    expect(res.body.message).toContain("Standard");
+    expect(res.body.message).not.toContain("Growth");
+  });
+
+  it("conversion機能の403はGrowthを案内し、Standardとは言わない(Standard開放後に嘘の案内をしない)", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan: "standard" }] });
+
+    const res = await request(makeApp({ role: "client_admin", tenant_id: "tenant-a" }))
+      .get("/v1/admin/analytics/conversions");
+
+    expect(res.body.error).toBe("plan_upgrade_required");
+    expect(res.body.message).toContain("Growth");
+    expect(res.body.message).not.toContain("Standard");
+  });
+
+  it("★analyticsとconversionの403はmessageが違ってもerrorは完全一致する★", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan: "starter" }] });
+    const analyticsRes = await request(makeApp({ role: "client_admin", tenant_id: "tenant-a" }))
+      .get("/v1/admin/analytics/summary");
+
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan: "standard" }] });
+    const conversionRes = await request(makeApp({ role: "client_admin", tenant_id: "tenant-a" }))
+      .get("/v1/admin/analytics/conversions");
+
+    expect(analyticsRes.status).toBe(403);
+    expect(conversionRes.status).toBe(403);
+    expect(analyticsRes.body.error).toBe(conversionRes.body.error);
+    expect(analyticsRes.body.message).not.toBe(conversionRes.body.message);
+  });
+});
+
+// ★テナント管理者がやりそうな乱暴な操作(穴5)★
+describe("plan ゲートに対するイレギュラーな操作", () => {
+  beforeEach(() => {
+    mockQuery.mockReset();
+  });
+
+  // 403を受けた直後にクエリパラメータで他テナントを指定して再試行しても、
+  // client_adminのgateは常にJWTのtenant_idで判定するため回避できないことを固定する
+  // (resolveTenantFilterはclient_adminの場合queryを無視してjwtTenantIdを使う実装だが、
+  // 実装ではなく「回避できない」という観測可能な結果そのものを固定する)。
+  it("client_adminが?tenant=で他テナントを指定してもgateはJWTのtenant_idで判定する(query改ざんで回避できない)", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan: "starter" }] });
+
+    const res = await request(makeApp({ role: "client_admin", tenant_id: "tenant-a" }))
+      .get("/v1/admin/analytics/summary?tenant=tenant-with-growth-plan");
+
+    expect(res.status).toBe(403);
+    // plan確認クエリに渡されたtenantIdがJWTのtenant-aであり、queryのtenant-with-growth-planではない
+    expect(mockQuery.mock.calls[0]?.[1]).toEqual(["tenant-a"]);
+  });
+
+  // super_admin自身のapp_metadataにtenant_idが乗っていても(例: 自社所属テナントを
+  // 持つ運用アカウント)、gateはsuper_adminである時点で無条件バイパスし、
+  // データ絞り込みも自身のtenant_idではなく?tenantクエリが使われることを固定する。
+  it("super_adminは自身のtenant_idを持っていてもgateをバイパスし、?tenantクエリのテナントでデータを返す", async () => {
+    mockQuery.mockResolvedValue({ rows: [], rowCount: 0 });
+
+    const res = await request(makeApp({ role: "super_admin", tenant_id: "staff-own-tenant" }))
+      .get("/v1/admin/analytics/evaluations?tenant=tenant-customer");
+
+    expect(res.status).not.toBe(403);
+    expect(res.body.tenant_id).toBe("tenant-customer");
+    const firstCallSql = mockQuery.mock.calls[0]?.[0] ?? "";
+    expect(firstCallSql).not.toMatch(/SELECT plan FROM tenants/);
+  });
+
+  // checkAnalyticsPlanAccessはgetTenantPlan(60秒TTLキャッシュ付き)ではなく
+  // queryTenantPlanOrThrowを直接使う(planFeatures.ts参照)。プラン変更直後に
+  // 前のプランの判定を60秒引きずらないことを、同一テナントへの連続リクエストで固定する。
+  it("同一テナントへの連続リクエストは毎回plan確認クエリを実行する(TTLキャッシュに乗らない = プラン変更が即座に反映される)", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan: "starter" }] });
+    const res1 = await request(makeApp({ role: "client_admin", tenant_id: "tenant-a" }))
+      .get("/v1/admin/analytics/summary");
+    expect(res1.status).toBe(403);
+
+    // DB側でプランがgrowthへ更新された想定で2回目のリクエスト
+    mockQuery.mockResolvedValueOnce({ rows: [{ plan: "growth" }] });
+    mockQuery.mockResolvedValue({ rows: [], rowCount: 0 });
+    const res2 = await request(makeApp({ role: "client_admin", tenant_id: "tenant-a" }))
+      .get("/v1/admin/analytics/summary");
+    expect(res2.status).not.toBe(403);
+
+    const planQueryCount = mockQuery.mock.calls.filter((c) =>
+      /SELECT plan FROM tenants/.test(String(c[0])),
+    ).length;
+    expect(planQueryCount).toBe(2);
+  });
+});
+
 // [H-5] GID 1217969425230400: knowledge-attribution / rule-effect はplanゲートを
 // 一切通っていなかった(free_ad含む全プランが無制限に取得可能)。性質としては成果分析
 // (conversion, Growth〜)なのでconversionsと同じゲートを適用する回帰を固定する。
