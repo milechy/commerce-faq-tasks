@@ -4,6 +4,7 @@
 import {
   isLearnedMemoryWriteEnabled,
   isLearnedMemoryReadEnabled,
+  isLearnedMemoryMasterEnabled,
   getLearnedMemoryThreshold,
   getLearnedMemoryWeight,
 } from "./featureFlag";
@@ -41,6 +42,25 @@ describe("isLearnedMemoryWriteEnabled", () => {
     process.env.LEARNED_MEMORY_ENABLED = "true";
     process.env.LEARNED_MEMORY_TENANTS = "*";
     expect(isLearnedMemoryWriteEnabled("anyone")).toBe(true);
+  });
+});
+
+describe("isLearnedMemoryMasterEnabled", () => {
+  // GID 1217972798328871 (H-6): 手動昇格はallowlistを経由しないため、
+  // マスタースイッチ単体の判定関数が独立に必要(isLearnedMemoryWriteEnabledはallowlistも見る)。
+  it("LEARNED_MEMORY_ENABLED=trueのみでtrue(テナントallowlistは無関係)", () => {
+    process.env.LEARNED_MEMORY_ENABLED = "true";
+    // allowlist未設定でも、マスタースイッチ単体はtrue
+    expect(isLearnedMemoryMasterEnabled()).toBe(true);
+  });
+
+  it("未設定ならfalse", () => {
+    expect(isLearnedMemoryMasterEnabled()).toBe(false);
+  });
+
+  it("'true'以外の値(例: '1')ならfalse", () => {
+    process.env.LEARNED_MEMORY_ENABLED = "1";
+    expect(isLearnedMemoryMasterEnabled()).toBe(false);
   });
 });
 

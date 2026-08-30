@@ -14,6 +14,7 @@ import { getPool } from "../../lib/db";
 import { getNonConvertingOutcomes } from "../../api/admin/chat-history/chatHistoryRepository";
 import {
   isLearnedMemoryWriteEnabled,
+  isLearnedMemoryMasterEnabled,
   getLearnedMemoryThreshold,
 } from "./featureFlag";
 import {
@@ -157,6 +158,51 @@ export async function hasConvertingOutcome(tenantId: string, sessionId: string):
   return !nonConvertingOutcomes.includes(row.outcome);
 }
 
+/** distillAndPromote(自動)と manuallyPromoteSession(手動)が共有する「蒸留→埋め込み→保存」部分。 */
+type DistillAndSaveOutcome =
+  | { promoted: true }
+  | { promoted: false; reason: "already_promoted" | "no_qa_extracted" };
+
+async function distillAndSave(params: {
+  tenantId: string;
+  sessionId: string;
+  judgeScore: number;
+  messages: DistillSourceMessage[];
+  /** metadata.promoted_by に記録する昇格元。自動/手動を後から区別できるようにする。 */
+  promotedBy: "auto" | "manual";
+}): Promise<DistillAndSaveOutcome> {
+  const { tenantId, sessionId, judgeScore, messages, promotedBy } = params;
+
+  const qa = await distillConversation(tenantId, messages);
+  if (!qa) {
+    logger.debug({ tenantId, sessionId, promotedBy }, "[learnedMemory] distill yielded no Q&A");
+    return { promoted: false, reason: "no_qa_extracted" };
+  }
+
+  const embedding = await embedText(qa.question);
+
+  const entry: LearnedMemoryEntry = {
+    tenantId,
+    question: qa.question,
+    answer: qa.answer,
+    embedding,
+    sourceSessionId: sessionId,
+    judgeScore,
+    metadata: { distilled_by: GPT_OSS_120B, promoted_by: promotedBy },
+  };
+
+  const repo = createLearnedMemoryRepository();
+  const inserted = await repo.saveLearnedMemory(entry);
+
+  logger.info(
+    { tenantId, sessionId, judgeScore, promotedBy, inserted },
+    inserted
+      ? "[learnedMemory] promoted conversation"
+      : "[learnedMemory] already promoted (dedup)",
+  );
+  return inserted ? { promoted: true } : { promoted: false, reason: "already_promoted" };
+}
+
 /**
  * 高スコア会話を蒸留して learned_memory に保存する。
  *
@@ -199,34 +245,8 @@ export async function distillAndPromote(
       return false;
     }
 
-    const qa = await distillConversation(tenantId, messages);
-    if (!qa) {
-      logger.debug({ tenantId, sessionId }, "[learnedMemory] distill yielded no Q&A");
-      return false;
-    }
-
-    const embedding = await embedText(qa.question);
-
-    const entry: LearnedMemoryEntry = {
-      tenantId,
-      question: qa.question,
-      answer: qa.answer,
-      embedding,
-      sourceSessionId: sessionId,
-      judgeScore,
-      metadata: { distilled_by: GPT_OSS_120B },
-    };
-
-    const repo = createLearnedMemoryRepository();
-    const inserted = await repo.saveLearnedMemory(entry);
-
-    logger.info(
-      { tenantId, sessionId, judgeScore, inserted },
-      inserted
-        ? "[learnedMemory] promoted high-score conversation"
-        : "[learnedMemory] already promoted (dedup)",
-    );
-    return inserted;
+    const result = await distillAndSave({ tenantId, sessionId, judgeScore, messages, promotedBy: "auto" });
+    return result.promoted;
   } catch (err) {
     logger.warn(
       { err, tenantId, sessionId },
@@ -234,4 +254,39 @@ export async function distillAndPromote(
     );
     return false;
   }
+}
+
+/**
+ * GID 1217972798328871 (H-6): 学習ループの初期母数(90日で13会話・平均1.54通)は
+ * 「潤沢な母数を絞る」設計の自動ゲート(スコア閾値 + hasConvertingOutcome必須)を
+ * 適用すると常に0件で止まる。人間が個別に確認した会話を、そのゲートをバイパスして
+ * learned_memory へ手動昇格する経路。
+ *
+ * バイパスするのはスコア閾値と hasConvertingOutcome の2つだけ:
+ *   - LEARNED_MEMORY_ENABLED(マスタースイッチ)は尊重する (OFFなら何もしない)
+ *   - LEARNED_MEMORY_TENANTS allowlist は経由しない (人間が個別に判断した結果のため。
+ *     自動昇格の対象テナントを広げるかどうかとは独立)
+ *   - メッセージ2件未満は蒸留しようがないため従来どおり除外する
+ *
+ * distillAndPromote と異なり、本関数は例外を握り潰さない
+ * (呼び出し元の HTTP ルートが catch して 500 に変換する。fire-and-forget フックではないため)。
+ * 蒸留失敗・重複(既に昇格済み)は「昇格しました」と偽らず reason で区別して返す。
+ */
+export async function manuallyPromoteSession(
+  params: DistillParams,
+): Promise<
+  | { promoted: true }
+  | { promoted: false; reason: "already_promoted" | "no_qa_extracted" | "too_few_messages" | "disabled" }
+> {
+  const { tenantId, sessionId, judgeScore, messages } = params;
+
+  if (!isLearnedMemoryMasterEnabled()) {
+    return { promoted: false, reason: "disabled" };
+  }
+
+  if (messages.length < MIN_MESSAGES_FOR_DISTILL) {
+    return { promoted: false, reason: "too_few_messages" };
+  }
+
+  return distillAndSave({ tenantId, sessionId, judgeScore, messages, promotedBy: "manual" });
 }

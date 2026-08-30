@@ -231,3 +231,159 @@ describe("ChatHistorySessionPage — 取得失敗時に前のセッションの�
     expect(style).not.toContain("248");
   });
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// GID 1217972798328871 (H-6): 学習メモリへの手動昇格ボタン
+// ───────────────────────────────────────────────────────────────────────────
+describe("ChatHistorySessionPage — 学習メモリへの手動昇格", () => {
+  const CLIENT_ADMIN = createAuthMock({
+    user: { id: "2", email: "client@example.com", role: "client_admin", tenantId: "tenant-a", tenantName: "A社" },
+    isSuperAdmin: false,
+    isClientAdmin: true,
+  });
+
+  // previewMode中はisSuperAdminがfalseに落ちる(useAuth.tsxの既知の挙動)。
+  // 運用者向け機能は生のuser.roleで出し分けねばならない(CLAUDE.md 禁止13)ことの回帰テスト用。
+  const SUPER_ADMIN_IN_PREVIEW = createAuthMock({
+    user: { id: "1", email: "admin@example.com", role: "super_admin", tenantId: null, tenantName: null },
+    isSuperAdmin: false,
+    previewMode: true,
+    previewTenantId: "tenant-a",
+    previewTenantName: "A社",
+  });
+
+  function mockBaseFetch(extra?: (url: string, init?: RequestInit) => Promise<Response> | null) {
+    vi.mocked(authFetch).mockImplementation((url: string, init?: RequestInit) => {
+      const viaExtra = extra?.(url, init);
+      if (viaExtra) return viaExtra;
+      if (url.includes("/promote-memory")) {
+        return Promise.resolve(jsonResponse(200, { promoted: true }) as unknown as Response);
+      }
+      if (url.includes("/v1/admin/evaluations/")) {
+        return Promise.resolve(jsonResponse(200, { evaluations: [], total: 0 }) as unknown as Response);
+      }
+      if (url.includes("/messages")) {
+        return Promise.resolve(jsonResponse(200, { messages: [] }) as unknown as Response);
+      }
+      return Promise.resolve(jsonResponse(200, {}) as unknown as Response);
+    });
+  }
+
+  beforeEach(() => {
+    vi.mocked(authFetch).mockReset();
+  });
+
+  it("super_adminにはボタンが表示される", async () => {
+    vi.mocked(useAuth).mockReturnValue(SUPER_ADMIN);
+    mockBaseFetch();
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText("学習メモリへ昇格する")).toBeTruthy();
+    });
+  });
+
+  it("client_adminにはボタンが表示されない（サーバ側403とは別に、そもそも導線を出さない）", async () => {
+    vi.mocked(useAuth).mockReturnValue(CLIENT_ADMIN);
+    mockBaseFetch();
+    renderPage();
+    await waitFor(() => {
+      // 画面がロード完了したこと自体は他要素で確認
+      expect(screen.getByText(/chat_history\.message_count/)).toBeTruthy();
+    });
+    expect(screen.queryByText("学習メモリへ昇格する")).toBeNull();
+  });
+
+  it("previewMode中のsuper_admin(isSuperAdminはfalseに落ちる)でもボタンは表示される(生roleで判定するため)", async () => {
+    vi.mocked(useAuth).mockReturnValue(SUPER_ADMIN_IN_PREVIEW);
+    mockBaseFetch();
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText("学習メモリへ昇格する")).toBeTruthy();
+    });
+  });
+
+  it("クリックすると成功メッセージを表示する", async () => {
+    vi.mocked(useAuth).mockReturnValue(SUPER_ADMIN);
+    mockBaseFetch();
+    renderPage();
+    const button = await waitFor(() => screen.getByText("学習メモリへ昇格する"));
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(screen.getByText(/学習メモリに昇格しました/)).toBeTruthy();
+    });
+    // POST が呼ばれている
+    const calls = vi.mocked(authFetch).mock.calls.filter(([url]) => (url as string).includes("/promote-memory"));
+    expect(calls).toHaveLength(1);
+    expect((calls[0]![1] as RequestInit | undefined)?.method).toBe("POST");
+  });
+
+  it("既に昇格済み(promoted:false)なら、成功したと偽らずサーバのmessageを表示する", async () => {
+    vi.mocked(useAuth).mockReturnValue(SUPER_ADMIN);
+    mockBaseFetch((url) => {
+      if (url.includes("/promote-memory")) {
+        return Promise.resolve(
+          jsonResponse(200, {
+            promoted: false,
+            reason: "already_promoted",
+            message: "この会話は既に学習メモリに昇格済みです",
+          }) as unknown as Response,
+        );
+      }
+      return null;
+    });
+    renderPage();
+    const button = await waitFor(() => screen.getByText("学習メモリへ昇格する"));
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(screen.getByText("この会話は既に学習メモリに昇格済みです")).toBeTruthy();
+    });
+    // 「昇格しました」という成功文言は出ていないこと
+    expect(screen.queryByText(/学習メモリに昇格しました/)).toBeNull();
+  });
+
+  it("サーバエラー(500)時はエラーメッセージを表示し、スピナーのまま固まらない(確定状態にする)", async () => {
+    vi.mocked(useAuth).mockReturnValue(SUPER_ADMIN);
+    mockBaseFetch((url) => {
+      if (url.includes("/promote-memory")) {
+        return Promise.resolve(
+          jsonResponse(500, { error: "学習メモリへの昇格に失敗しました" }) as unknown as Response,
+        );
+      }
+      return null;
+    });
+    renderPage();
+    const button = (await waitFor(() =>
+      screen.getByText("学習メモリへ昇格する"),
+    )) as HTMLButtonElement;
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(screen.getByText("学習メモリへの昇格に失敗しました")).toBeTruthy();
+    });
+    // 無限スピナーを残さない: ボタンが再び押せる状態(disabledでない)に戻っていること
+    expect(button.disabled).toBe(false);
+    expect(screen.queryByText("昇格を実行中…")).toBeNull();
+  });
+
+  it("通信エラー(reject)時もエラーメッセージを表示し、確定状態にする", async () => {
+    vi.mocked(useAuth).mockReturnValue(SUPER_ADMIN);
+    mockBaseFetch((url) => {
+      if (url.includes("/promote-memory")) {
+        return Promise.reject(new Error("network down"));
+      }
+      return null;
+    });
+    renderPage();
+    const button = (await waitFor(() =>
+      screen.getByText("学習メモリへ昇格する"),
+    )) as HTMLButtonElement;
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(screen.getByText(/通信に失敗しました/)).toBeTruthy();
+    });
+    expect(button.disabled).toBe(false);
+  });
+});

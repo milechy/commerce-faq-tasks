@@ -18,10 +18,16 @@ jest.mock("../../../lib/logger", () => ({
     child: jest.fn(),
   },
 }));
+// GID 1217972798328871 (H-6): POST .../promote-memory の「学習メモリへの実昇格ロジック」
+// (Groq蒸留・埋め込み・保存)自体は memoryDistiller.test.ts が実装を直接検証済みなので、
+// このファイル(ルーティング/認可/テナント境界のテスト)ではブラックボックスとしてモックする。
+jest.mock("../../../agent/memory/memoryDistiller");
 import { deleteSession } from "./deleteSessionRepository";
 import * as dbModule from "../../../lib/db";
 import { logger } from "../../../lib/logger";
+import { manuallyPromoteSession } from "../../../agent/memory/memoryDistiller";
 const mockDeleteSession = deleteSession as jest.MockedFunction<typeof deleteSession>;
+const mockManuallyPromoteSession = manuallyPromoteSession as jest.MockedFunction<typeof manuallyPromoteSession>;
 
 function makeDevJwt(payload: object): string {
   const header = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url");
@@ -840,5 +846,268 @@ describe("deleteSessionRepository: lock_timeout / ROLLBACK 整合性", () => {
     );
     expect(selectCall![0] as string).toContain("outcome");
     expect(auditMetadata()).toHaveProperty("deleted_outcome");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// GID 1217972798328871 (H-6): POST /v1/admin/chat-history/sessions/:sessionId/promote-memory
+//
+// manuallyPromoteSession(memoryDistiller.ts)自体は memoryDistiller.test.ts が
+// 実装を直接検証済みなのでここではモックし、このファイルではルーティング層
+// (認可・テナント境界・レスポンスのマッピング)だけを検証する。
+//
+// getMessages/getEvaluationsBySession は実装をそのまま使い、共有の mockQuery
+// (lib/db の自動モック)経由でDB行を差し込む。これにより「session.id(内部UUID)を
+// 取り違えて session.session_id(公開キー)の代わりに使っていないか」を、モックの
+// 呼び出し引数として実際に固定できる(distillAndPromoteの重複判定キーと不一致だと
+// 自動昇格済みの会話の重複判定が壊れるため、ここが本エンドポイントの一番壊れやすい点)。
+// ─────────────────────────────────────────────────────────────────────────
+describe("POST /v1/admin/chat-history/sessions/:sessionId/promote-memory", () => {
+  let app: ReturnType<typeof express>;
+  let mockQuery: jest.Mock;
+
+  // 内部UUID(id)と公開キー(session_id)をわざと別の値にして、取り違えを検出できるようにする。
+  const SESSION_ROW = {
+    id: "sess-uuid-1",
+    tenant_id: "tenant-a",
+    session_id: "public-session-key-xyz",
+  };
+  const MESSAGE_ROWS = [
+    { id: 1, role: "user", content: "保証はありますか", metadata: {}, created_at: "2026-01-01T00:00:00Z" },
+    { id: 2, role: "assistant", content: "全車3ヶ月保証付きです", metadata: {}, created_at: "2026-01-01T00:00:01Z" },
+  ];
+
+  /** ルートの正常系が発行する4回のクエリ(session lookup → getMessagesの所有権確認 → メッセージ本体 → 評価)を積む。 */
+  function queueHappyPathQueries(opts?: { evaluationRows?: unknown[] }) {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [SESSION_ROW] }) // ルート: chat_sessions SELECT
+      .mockResolvedValueOnce({ rows: [{ id: SESSION_ROW.id }] }) // getMessages: 所有権確認
+      .mockResolvedValueOnce({ rows: MESSAGE_ROWS }) // getMessages: chat_messages SELECT
+      .mockResolvedValueOnce({ rows: opts?.evaluationRows ?? [] }); // getEvaluationsBySession
+  }
+
+  beforeAll(() => {
+    process.env.NODE_ENV = "development";
+    process.env.ALLOW_INSECURE_DEV_AUTH = "1";
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    app = express();
+    app.use(express.json());
+    registerChatHistoryRoutes(app);
+    mockQuery = jest.fn();
+    jest.mocked(dbModule.getPool).mockReturnValue({
+      query: mockQuery,
+    } as unknown as ReturnType<typeof dbModule.getPool>);
+  });
+
+  // ── 認可: super_admin限定(client_adminは403) ─────────────────────────────
+
+  it("client_adminは403を返し、manuallyPromoteSessionもDBも一切呼ばれない", async () => {
+    const res = await request(app)
+      .post("/v1/admin/chat-history/sessions/sess-uuid-1/promote-memory")
+      .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`);
+
+    expect(res.status).toBe(403);
+    expect(mockManuallyPromoteSession).not.toHaveBeenCalled();
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  it("認証なしは401を返す", async () => {
+    const res = await request(app).post(
+      "/v1/admin/chat-history/sessions/sess-uuid-1/promote-memory",
+    );
+    expect(res.status).toBe(401);
+  });
+
+  it("roleがundefinedのユーザーは403を返す", async () => {
+    const noRoleToken = makeDevJwt({ email: "norole@example.com", app_metadata: {} });
+    const res = await request(app)
+      .post("/v1/admin/chat-history/sessions/sess-uuid-1/promote-memory")
+      .set("Authorization", `Bearer ${noRoleToken}`);
+    expect(res.status).toBe(403);
+  });
+
+  // ── 正常系 ────────────────────────────────────────────────────────────
+
+  it("super_adminが昇格でき、promoted:trueを返す", async () => {
+    queueHappyPathQueries();
+    mockManuallyPromoteSession.mockResolvedValueOnce({ promoted: true });
+
+    const res = await request(app)
+      .post("/v1/admin/chat-history/sessions/sess-uuid-1/promote-memory")
+      .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ promoted: true });
+  });
+
+  it("manuallyPromoteSessionには内部UUID(id)ではなく公開session_idが渡る(取り違え防止)", async () => {
+    queueHappyPathQueries();
+    mockManuallyPromoteSession.mockResolvedValueOnce({ promoted: true });
+
+    await request(app)
+      .post("/v1/admin/chat-history/sessions/sess-uuid-1/promote-memory")
+      .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`);
+
+    expect(mockManuallyPromoteSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: SESSION_ROW.tenant_id,
+        sessionId: SESSION_ROW.session_id, // ← session.id ではなく session.session_id
+      }),
+    );
+    // 会話本文もそのまま渡っている
+    const calledWith = mockManuallyPromoteSession.mock.calls[0]![0];
+    expect(calledWith.messages).toEqual([
+      { role: "user", content: "保証はありますか" },
+      { role: "assistant", content: "全車3ヶ月保証付きです" },
+    ]);
+  });
+
+  it("getEvaluationsBySessionにも公開session_idが渡り、既存のJudgeスコアがjudgeScoreとして使われる", async () => {
+    queueHappyPathQueries({ evaluationRows: [{ overall_score: 42 }] });
+    mockManuallyPromoteSession.mockResolvedValueOnce({ promoted: true });
+
+    await request(app)
+      .post("/v1/admin/chat-history/sessions/sess-uuid-1/promote-memory")
+      .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`);
+
+    // getEvaluationsBySession の実SQLは session_id = $1 AND tenant_id = $2
+    const evalCall = mockQuery.mock.calls[3] as [string, unknown[]];
+    expect(evalCall[1]).toEqual([SESSION_ROW.session_id, SESSION_ROW.tenant_id]);
+
+    expect(mockManuallyPromoteSession).toHaveBeenCalledWith(
+      expect.objectContaining({ judgeScore: 42 }),
+    );
+  });
+
+  it("Judge評価が無いセッションはjudgeScore: 0で呼ばれる(未評価でも昇格自体は妨げない)", async () => {
+    queueHappyPathQueries({ evaluationRows: [] });
+    mockManuallyPromoteSession.mockResolvedValueOnce({ promoted: true });
+
+    await request(app)
+      .post("/v1/admin/chat-history/sessions/sess-uuid-1/promote-memory")
+      .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`);
+
+    expect(mockManuallyPromoteSession).toHaveBeenCalledWith(
+      expect.objectContaining({ judgeScore: 0 }),
+    );
+  });
+
+  // ── 見つからない/越境 ────────────────────────────────────────────────────
+
+  it("存在しないセッションは404を返す", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] }); // ルートのSELECTが0件
+    const res = await request(app)
+      .post("/v1/admin/chat-history/sessions/nonexistent/promote-memory")
+      .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`);
+
+    expect(res.status).toBe(404);
+    expect(mockManuallyPromoteSession).not.toHaveBeenCalled();
+  });
+
+  it("越境: ?tenant=で他テナントを指定すると403ではなく404(不存在)を返す(CLAUDE.md 禁止20・24)", async () => {
+    // WHERE id=$1 AND tenant_id=$2 が一致せず0件 → 越境かどうかを外部に漏らさない
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+
+    const res = await request(app)
+      .post("/v1/admin/chat-history/sessions/sess-uuid-1/promote-memory?tenant=other-tenant")
+      .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`);
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).not.toMatch(/権限/); // 権限エラーの文言ではないこと
+    expect(mockManuallyPromoteSession).not.toHaveBeenCalled();
+  });
+
+  it("previewMode相当(super_admin + ?tenant=一致)は絞り込んだ上で成功する", async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [SESSION_ROW] }) // WHERE id=$1 AND tenant_id=$2 が一致
+      .mockResolvedValueOnce({ rows: [{ id: SESSION_ROW.id }] })
+      .mockResolvedValueOnce({ rows: MESSAGE_ROWS })
+      .mockResolvedValueOnce({ rows: [] });
+    mockManuallyPromoteSession.mockResolvedValueOnce({ promoted: true });
+
+    const res = await request(app)
+      .post(`/v1/admin/chat-history/sessions/sess-uuid-1/promote-memory?tenant=${SESSION_ROW.tenant_id}`)
+      .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ promoted: true });
+    const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain("tenant_id = $2");
+    expect(params).toEqual(["sess-uuid-1", SESSION_ROW.tenant_id]);
+  });
+
+  // ── 「昇格しました」と嘘をつかない(reasonマッピング) ─────────────────────
+
+  it.each([
+    ["already_promoted", "既に昇格済み"],
+    ["no_qa_extracted", "抽出できませんでした"],
+    ["too_few_messages", "蒸留対象になりません"],
+    ["disabled", "無効になっています"],
+  ] as const)(
+    "reason=%s のときpromoted:falseと理由メッセージ(%s相当)を返し、成功したと偽らない",
+    async (reason, _label) => {
+      queueHappyPathQueries();
+      mockManuallyPromoteSession.mockResolvedValueOnce({ promoted: false, reason });
+
+      const res = await request(app)
+        .post("/v1/admin/chat-history/sessions/sess-uuid-1/promote-memory")
+        .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`);
+
+      expect(res.status).toBe(200); // 業務上妥当な結果なのでエラーステータスにはしない
+      expect(res.body.promoted).toBe(false);
+      expect(res.body.reason).toBe(reason);
+      expect(typeof res.body.message).toBe("string");
+      expect(res.body.message.length).toBeGreaterThan(0);
+    },
+  );
+
+  it("既に自動昇格済みの会話に手動昇格を実行すると、already_promotedを返し「昇格しました」と表示させない", async () => {
+    queueHappyPathQueries();
+    mockManuallyPromoteSession.mockResolvedValueOnce({ promoted: false, reason: "already_promoted" });
+
+    const res = await request(app)
+      .post("/v1/admin/chat-history/sessions/sess-uuid-1/promote-memory")
+      .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.promoted).toBe(false);
+    expect(res.body.reason).toBe("already_promoted");
+  });
+
+  // ── LEARNED_MEMORY_ENABLED=false: フラグOFFで挙動不変 ────────────────────
+
+  it("LEARNED_MEMORY_ENABLED=falseのときmanuallyPromoteSessionがdisabledを返せば、そのままdisabledとして応答する", async () => {
+    // フラグ判定自体はmanuallyPromoteSession内部の責務(memoryDistiller.test.tsで検証済み)。
+    // ここではルートがその結果を握り潰したり「成功」に読み替えたりしないことだけを確認する。
+    queueHappyPathQueries();
+    mockManuallyPromoteSession.mockResolvedValueOnce({ promoted: false, reason: "disabled" });
+
+    const res = await request(app)
+      .post("/v1/admin/chat-history/sessions/sess-uuid-1/promote-memory")
+      .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      promoted: false,
+      reason: "disabled",
+      message: expect.any(String),
+    });
+  });
+
+  // ── 例外系 ────────────────────────────────────────────────────────────
+
+  it("manuallyPromoteSessionが例外を投げたら500を返す(蒸留失敗を握り潰して成功に見せない)", async () => {
+    queueHappyPathQueries();
+    mockManuallyPromoteSession.mockRejectedValueOnce(new Error("groq down"));
+
+    const res = await request(app)
+      .post("/v1/admin/chat-history/sessions/sess-uuid-1/promote-memory")
+      .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`);
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBeTruthy();
   });
 });

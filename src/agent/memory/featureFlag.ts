@@ -22,10 +22,21 @@ function isTenantAllowed(tenantId: string): boolean {
 }
 
 /**
+ * 学習メモリ機構全体のマスタースイッチ。
+ * GID 1217972798328871 (H-6): 手動昇格 (memoryDistiller.manuallyPromoteSession) は
+ * LEARNED_MEMORY_TENANTS allowlist を経由しない (人間が個別に判断した結果のため。
+ * allowlist を広げる/広げないは自動昇格の対象範囲を決める別判断で、本関数はそれとは独立)が、
+ * このマスタースイッチだけは尊重する (機構自体がOFFなら手動でも何もしない)。
+ */
+export function isLearnedMemoryMasterEnabled(): boolean {
+  return process.env.LEARNED_MEMORY_ENABLED === "true";
+}
+
+/**
  * 学習メモリの書込み (高スコア会話の蒸留→保存) が有効か。
  */
 export function isLearnedMemoryWriteEnabled(tenantId: string): boolean {
-  if (process.env.LEARNED_MEMORY_ENABLED !== "true") return false;
+  if (!isLearnedMemoryMasterEnabled()) return false;
   return isTenantAllowed(tenantId);
 }
 

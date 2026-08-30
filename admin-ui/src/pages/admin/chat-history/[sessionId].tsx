@@ -61,6 +61,10 @@ export default function ChatHistorySessionPage() {
   const [outcomeSubmitting, setOutcomeSubmitting] = useState(false);
   const [outcomeToast, setOutcomeToast] = useState<string | null>(null);
 
+  // ─── 学習メモリへの手動昇格(GID 1217972798328871 / H-6) ────────────────────
+  const [promoting, setPromoting] = useState(false);
+  const [promoteResult, setPromoteResult] = useState<{ text: string; tone: "success" | "info" | "error" } | null>(null);
+
   // ─── セッション完全削除（GDPR Art.17 / 個情法30条） ────────────────────────
   const [deleteStep, setDeleteStep] = useState<DeleteStep>("idle");
   const [deleteReason, setDeleteReason] = useState("");
@@ -213,6 +217,42 @@ export default function ChatHistorySessionPage() {
       setTimeout(() => setOutcomeToast(null), 3000);
     } finally {
       setOutcomeSubmitting(false);
+    }
+  };
+
+  // 学習メモリへの手動昇格: 自動昇格ゲート(スコア閾値+成果必須)の対象外の会話でも、
+  // super_adminが個別に確認した上で昇格できる。previewMode中も運用者自身の操作なので
+  // isSuperAdmin(previewMode中はfalseに落ちる)ではなく生のroleで出し分ける(CLAUDE.md禁止13)。
+  const handlePromoteMemory = async () => {
+    if (!sessionId || promoting) return;
+    setPromoting(true);
+    setPromoteResult(null);
+    try {
+      const params = new URLSearchParams();
+      if (tenantId) params.set("tenant", tenantId);
+      const res = await authFetch(
+        `${API_BASE}/v1/admin/chat-history/sessions/${sessionId}/promote-memory?${params}`,
+        { method: "POST" },
+      );
+      const data = (await res.json().catch(() => ({}))) as {
+        promoted?: boolean;
+        message?: string;
+        error?: string;
+      };
+      if (!res.ok) {
+        setPromoteResult({ text: data.error ?? "学習メモリへの昇格に失敗しました", tone: "error" });
+        return;
+      }
+      if (data.promoted) {
+        setPromoteResult({ text: "✅ 学習メモリに昇格しました", tone: "success" });
+      } else {
+        setPromoteResult({ text: data.message ?? "昇格できませんでした", tone: "info" });
+      }
+    } catch {
+      setPromoteResult({ text: "通信に失敗しました。しばらくしてから再度お試しください", tone: "error" });
+    } finally {
+      // 失敗時も無限スピナーを残さない(確定状態にする)
+      setPromoting(false);
     }
   };
 
@@ -532,6 +572,66 @@ export default function ChatHistorySessionPage() {
             fetchFailed={evaluationFetchFailed}
             onRetryFetch={loadEvaluation}
           />
+
+          {/* 学習メモリへの手動昇格（super_admin限定。previewMode中でも生roleで出す） */}
+          {user?.role === "super_admin" && (
+            <div
+              style={{
+                marginTop: 8,
+                padding: "18px 18px",
+                borderRadius: 14,
+                border: "1px solid var(--border)",
+                background: "linear-gradient(145deg, var(--card), var(--card))",
+                display: "flex",
+                flexDirection: "column",
+                gap: 10,
+                alignItems: "flex-start",
+              }}
+            >
+              <p style={{ margin: 0, fontSize: 15, fontWeight: 700, color: "var(--foreground)" }}>
+                🧠 学習メモリへの手動昇格
+              </p>
+              <p style={{ margin: 0, fontSize: 12, color: "var(--muted-foreground)", lineHeight: 1.6 }}>
+                自動昇格の対象外(スコア閾値未満・成果未記録)の会話でも、この会話を個別に確認した上で
+                学習メモリへ昇格できます。既に昇格済みの会話は再昇格されません。
+              </p>
+              <button
+                type="button"
+                onClick={() => void handlePromoteMemory()}
+                disabled={promoting}
+                style={{
+                  padding: "8px 16px",
+                  minHeight: 36,
+                  borderRadius: 8,
+                  border: "1px solid rgba(167,139,250,0.4)",
+                  background: promoting ? "rgba(167,139,250,0.1)" : "rgba(167,139,250,0.15)",
+                  color: "#c4b5fd",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: promoting ? "not-allowed" : "pointer",
+                }}
+              >
+                {promoting ? "昇格を実行中…" : "学習メモリへ昇格する"}
+              </button>
+              {promoteResult && (
+                <p
+                  style={{
+                    margin: 0,
+                    fontSize: 12,
+                    lineHeight: 1.5,
+                    color:
+                      promoteResult.tone === "error"
+                        ? "#fca5a5"
+                        : promoteResult.tone === "success"
+                          ? "#4ade80"
+                          : "var(--muted-foreground)",
+                  }}
+                >
+                  {promoteResult.text}
+                </p>
+              )}
+            </div>
+          )}
 
           {/* 営業結果入力（Client Adminのみ表示） */}
           {!isSuperAdmin && <OutcomeSection

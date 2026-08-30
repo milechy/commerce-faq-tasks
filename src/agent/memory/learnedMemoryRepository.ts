@@ -16,6 +16,11 @@ export interface LearnedMemoryEntry {
   embedding: number[];
   sourceSessionId: string;
   judgeScore: number;
+  /**
+   * GID 1217972798328871 (H-6): memoryDistiller.ts が `promoted_by: "auto" | "manual"` を
+   * 必ず入れる (どちらの経路で昇格したかの後追い用)。このリポジトリ層は中身を解釈せず
+   * そのまま JSONB へ保存するだけ (第2の判定ロジックを作らない)。
+   */
   metadata?: Record<string, unknown>;
   createdAt?: Date;
 }
