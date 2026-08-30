@@ -406,7 +406,12 @@ function successTxQueries(opts: { checkRow: { id: string }; updateRowCount?: num
 
 describe("POST /v1/admin/avatar/configs/:id/voice-clone", () => {
   const AUDIO_BUFFER = Buffer.from("dummy-audio-bytes");
-  let fetchSpy: jest.SpyInstance;
+  // GID 1217972650425834: jest.spyOn(global, "fetch") は Node/undici の lazy getter実装と
+  // 干渉し、1回目の mockRestore() 後に global.fetch が消失し、以降の全テストが
+  // "Property `fetch` does not exist in the provided object" で落ちる。
+  // 他ファイル(faqIndexSync.test.ts 等)と同じ直接代入方式に統一する。
+  let fetchSpy: jest.Mock;
+  const originalFetch = global.fetch;
 
   // makeApp で role なしユーザーを再現するためのバリアント
   function makeAppNoRole(db: any) {
@@ -423,16 +428,17 @@ describe("POST /v1/admin/avatar/configs/:id/voice-clone", () => {
   beforeEach(() => {
     process.env.FISH_AUDIO_API_KEY = "test-fish-key";
     mockTenantHasFeature.mockReset().mockResolvedValue(true);
-    fetchSpy = jest.spyOn(global, "fetch" as any).mockResolvedValue({
+    fetchSpy = jest.fn().mockResolvedValue({
       ok: true,
       status: 201,
       json: async () => ({ _id: "fish-voice-123" }),
       text: async () => "",
-    } as any);
+    } as unknown as Response);
+    global.fetch = fetchSpy as unknown as typeof fetch;
   });
 
   afterEach(() => {
-    fetchSpy.mockRestore();
+    global.fetch = originalFetch;
     delete process.env.FISH_AUDIO_API_KEY;
   });
 
@@ -643,7 +649,7 @@ describe("POST /v1/admin/avatar/configs/:id/voice-clone", () => {
       status: 500,
       text: async () => "internal fish error detail",
       json: async () => ({}),
-    } as any);
+    } as unknown as Response);
 
     const { db, clientQuery } = makeTxDb(async (sql) => {
       if (sql === "BEGIN" || sql === "SET LOCAL lock_timeout = '3s'" || sql === "ROLLBACK") return { rows: [] };
@@ -724,21 +730,24 @@ describe("POST /v1/admin/avatar/configs/:id/voice-clone", () => {
 // --------------------------------------------------------------------------
 describe("POST /v1/admin/avatar/configs/:id/adopt-designed-voice", () => {
   const CANDIDATE_AUDIO = Buffer.from("fake-wav-candidate-bytes");
-  let fetchSpy: jest.SpyInstance;
+  // GID 1217972650425834: 直接代入方式の理由は voice-clone describe 冒頭のコメントを参照。
+  let fetchSpy: jest.Mock;
+  const originalFetch = global.fetch;
 
   beforeEach(() => {
     process.env.FISH_AUDIO_API_KEY = "test-fish-key";
     mockTenantHasFeature.mockReset().mockResolvedValue(true);
-    fetchSpy = jest.spyOn(global, "fetch" as any).mockResolvedValue({
+    fetchSpy = jest.fn().mockResolvedValue({
       ok: true,
       status: 201,
       json: async () => ({ _id: "fish-voice-designed-123" }),
       text: async () => "",
-    } as any);
+    } as unknown as Response);
+    global.fetch = fetchSpy as unknown as typeof fetch;
   });
 
   afterEach(() => {
-    fetchSpy.mockRestore();
+    global.fetch = originalFetch;
     delete process.env.FISH_AUDIO_API_KEY;
   });
 
@@ -827,7 +836,7 @@ describe("POST /v1/admin/avatar/configs/:id/adopt-designed-voice", () => {
       ok: false,
       status: 500,
       text: async () => "internal fish error detail",
-    } as any);
+    } as unknown as Response);
     const { db, clientQuery } = makeTxDb(async (sql) => {
       if (sql === "BEGIN" || sql === "SET LOCAL lock_timeout = '3s'" || sql === "ROLLBACK") return { rows: [] };
       if (sql.startsWith("SELECT id, tenant_id FROM avatar_configs")) return { rows: [{ id: "config-1" }] };
