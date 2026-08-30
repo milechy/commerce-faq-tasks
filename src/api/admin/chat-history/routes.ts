@@ -484,6 +484,7 @@ export function registerChatHistoryRoutes(app: Express): void {
         const REASON_MESSAGES: Record<typeof result.reason, string> = {
           already_promoted: "この会話は既に学習メモリに昇格済みです",
           no_qa_extracted: "有用な質問と回答の組を抽出できませんでした",
+          injection_detected: "不審な指示が含まれている可能性があるため保存しませんでした",
           too_few_messages: "メッセージ数が少なく蒸留対象になりません",
           disabled: "学習メモリ機能が現在無効になっています",
         };
