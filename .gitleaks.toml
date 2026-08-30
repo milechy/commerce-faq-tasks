@@ -1,6 +1,65 @@
 title = "RAJIUCE gitleaks configuration"
 # Allowlist policy and rationale: docs/GITLEAKS_ALLOWLIST_POLICY.md
 
+# 注意: 本 config は「標準ルールの拡張」ではなく、下記カスタムルールのみを定義する。
+# gitleaks の標準ルールセット (useDefault) は、このリポジトリの履歴に対して 60 件規模の
+# 未トリアージ検知 (public/widget.min.js の難読化キー, lp/ の公開キー, テスト fixture 等) を
+# 生じさせるため、必須チェック "gitleaks" を壊すリスクがある。標準ルールの有効化は
+# それら既存検知の一括トリアージを伴う別タスクとして扱う (本 PR のスコープ外)。
+#   → 詳細は PR 説明 / docs/GITLEAKS_ALLOWLIST_POLICY.md を参照。
+# 本 PR は「DB 接続文字列パスワード漏洩」という、今回の監査で実際に CI をすり抜けた
+# 単一の穴を塞ぐことに限定する。
+
+# ---------------------------------------------------------------------------
+# カスタムルール: DB/メッセージング接続文字列にインラインで書かれたパスワード
+# ---------------------------------------------------------------------------
+# 背景: 本番 Postgres の実パスワード (20桁) が
+#   postgresql://postgres:<実PW>@127.0.0.1:5432/commerce_faq
+# の形で git 履歴に残存していたが、標準ルールは接続文字列内パスワードを拾わず
+# CI をすり抜けた。同種の漏洩を今後 CI で検知する。
+#
+# 判定方針:
+#   - proto://user:PASSWORD@host 形式の PASSWORD を secretGroup として抽出
+#   - 実漏洩はホストが 127.0.0.1 (VPS 上で localhost バインドの Postgres) だったため、
+#     ホストでは除外できない。除外は「パスワードがプレースホルダか / 低エントロピーか」で行う。
+#   - entropy 閾値 (3.2) で pass / postgres / CHANGE_ME / XXXXX 等の明示ダミーを自動除外し、
+#     <...> / ${...} / your_password 等はエントロピーが高くても allowlist で明示除外する。
+[[rules]]
+id = "db-connection-string-password"
+description = "DB/broker connection string with inline password (postgres/mysql/mongodb/redis/amqp)"
+# 非キャプチャの proto 群 + user + キャプチャ1=パスワード(5文字以上) + @host
+regex = '''(?i)\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|rediss?|amqps?)://[^:@/\s]{1,64}:([^@/\s]{5,})@[^\s"'` )\]}>]+'''
+secretGroup = 1
+entropy = 3.2
+keywords = [
+  "postgres",
+  "postgresql",
+  "mysql",
+  "mongodb",
+  "redis",
+  "amqp",
+]
+
+  # このルール専用の allowlist。判定対象はキャプチャした secret (=パスワード)。
+  [rules.allowlist]
+  description = "接続文字列パスワードのプレースホルダ/明示ダミー (実資格情報ではない)"
+  regexTarget = "secret"
+  regexes = [
+    # <DB_PASSWORD>, <password>, <...> の山括弧プレースホルダ
+    '''^<[^>]*>$''',
+    # ${DB_PASSWORD}, ${...} のシェル/env 展開プレースホルダ
+    '''^\$\{[^}]*\}$''',
+    # 明示的なダミー語 (完全一致)。エントロピーが 3.2 を超えても除外する。
+    '''(?i)^(pass|password|passwd|postgres|postgresql|mysql|mongo|root|admin|user|guest|changeme|change[_-]?me|change_this|secret|example|examplepass|test|tests|testing|testpass|dummy|placeholder|redacted|sample|foobar|foo|bar|baz|xxx+|yyy+|zzz+|your[_-].*|my[_-].*|some[_-].*|\.\.\.)$''',
+    # CHANGE_ME / CHANGEME を含む定番の要書換マーカー (部分一致)
+    '''(?i)change[_-]?me''',
+    '''(?i)your[_-]?password''',
+    '''(?i)replace[_-]?me''',
+  ]
+
+# ---------------------------------------------------------------------------
+# 既知の誤検知 allowlist (グローバル)
+# ---------------------------------------------------------------------------
 [allowlist]
 description = "Known false positives — see docs/GITLEAKS_ALLOWLIST_POLICY.md for each entry's rationale"
 regexTarget = "secret"

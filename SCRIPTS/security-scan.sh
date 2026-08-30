@@ -73,6 +73,27 @@ if [[ -n "$SECRET_HITS" ]]; then
 else
   echo '[PASS] No hardcoded secrets found'
 fi
+
+# DB/broker 接続文字列にインラインで書かれた平文パスワード
+#   例: postgresql://postgres:<20桁実PW>@127.0.0.1:5432/commerce_faq
+# gitleaks の db-connection-string-password ルールと同種の穴を、自前 grep 側でも塞ぐ。
+# 実漏洩はホストが 127.0.0.1 だったため *ホストでは除外しない*。除外はパスワードが
+# プレースホルダ/明示ダミー (<...> / ${...} / pass / changeme 等) の場合のみ。
+DB_CONNSTR_HITS=$(grep -rnoE \
+  '(postgres(ql)?|mysql|mongodb(\+srv)?|rediss?|amqps?)://[^:@/[:space:]]+:[^@/[:space:]]{5,}@[^[:space:]"'"'"'`]+' \
+  src/ admin-ui/src/ \
+  --include='*.ts' --include='*.tsx' --include='*.js' 2>/dev/null \
+  | grep -v node_modules \
+  | grep -vEi '://[^@]+:(<[^>]*>|\$\{[^}]*\}|pass|password|passwd|postgres|postgresql|mysql|mongo|root|admin|user|guest|changeme|change[_-]me|secret|example|test|dummy|placeholder|sample|redacted|your[_-][a-z]*|replace[_-]?me|xxx+|yyy+|zzz+)@' \
+  || true)
+
+if [[ -n "$DB_CONNSTR_HITS" ]]; then
+  echo "[CRITICAL] Possible DB connection-string password (plaintext) detected:"
+  echo "$DB_CONNSTR_HITS"
+  FAIL_COUNT=$((FAIL_COUNT + 1))
+else
+  echo '[PASS] No inline DB connection-string passwords found'
+fi
 echo ''
 
 # -------------------------------------------------------------------
