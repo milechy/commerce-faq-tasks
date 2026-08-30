@@ -436,6 +436,11 @@ describe("PUT /v1/admin/knowledge/book-pdf/chunks/:chunkId", () => {
             : Promise.resolve({ rows: [], rowCount: 0 });
         }
 
+        // 楽観ロック409の原因判別用の再SELECT(CASのUPDATEが0行だった場合のみ発行される)
+        if (sql.includes("SELECT metadata FROM faq_embeddings WHERE id = $1")) {
+          return Promise.resolve({ rows: [{ metadata: currentMetadata }], rowCount: 1 });
+        }
+
         if (sql.includes("COALESCE(metadata->>'embedding_status'")) {
           const meta = currentMetadata as Record<string, unknown>;
           const staleCutoff = params[2] as string;
@@ -443,7 +448,13 @@ describe("PUT /v1/admin/knowledge/book-pdf/chunks/:chunkId", () => {
           const stillFreshlyPending =
             meta["embedding_status"] === "pending" &&
             (updatedAt == null ? false : new Date(updatedAt) >= new Date(staleCutoff));
-          if (stillFreshlyPending) {
+          // 楽観ロック条件(params[3]=hasExpectedContentUpdatedAt, params[4]=期待する版)
+          const hasExpectedContentUpdatedAt = params[3] as boolean;
+          const expectedContentUpdatedAt = params[4] as string | null;
+          const currentContentUpdatedAt = (meta["content_updated_at"] as string | undefined) ?? null;
+          const versionMismatch =
+            hasExpectedContentUpdatedAt === true && currentContentUpdatedAt !== expectedContentUpdatedAt;
+          if (stillFreshlyPending || versionMismatch) {
             return Promise.resolve({ rows: [], rowCount: 0 });
           }
           const patch = JSON.parse(params[0] as string);
@@ -629,6 +640,138 @@ describe("PUT /v1/admin/knowledge/book-pdf/chunks/:chunkId", () => {
 
     expect(res.status).toBe(409);
     expect(embedText).not.toHaveBeenCalled();
+  });
+
+  // ─── 楽観ロック(同時編集検出) ──────────────────────────────────────────
+  // 上のCAS(embedding_status='pending')は再埋め込みの一瞬しか弾けない。反映が
+  // 完了(done)した後に別タブが保存すると、その条件は素通りして後勝ちで上書きされて
+  // いた。metadata.content_updated_at を版として持ち、保存時に expected_content_updated_at
+  // と一致しなければ409(conflict)にする(T4-1の tenants PATCH と同じ考え方)。
+  it("expected_content_updated_at が現在の版と一致しない → 409(conflict)、書き込みは行われない", async () => {
+    const chunkRow = {
+      id: 15,
+      metadata: {
+        source: "book",
+        book_id: 1,
+        chunk_index: 0,
+        principle: "希少性",
+        situation: "誰かが既に上書きした状況",
+        embedding_status: "done",
+        content_updated_at: "2026-08-30T00:00:00.000Z", // 既に他の人が保存済みの版
+      },
+      is_excluded_from_search: false,
+      tenant_id: "tenant-a",
+    };
+    const { app, calls } = makeChunkApp(chunkRow);
+
+    const res = await request(app)
+      .put("/v1/admin/knowledge/book-pdf/chunks/15")
+      .send({ situation: "自分が読んだ時点の古い状況を元に書いた新しい値", expected_content_updated_at: "2026-08-29T00:00:00.000Z" });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe("conflict");
+    expect(res.body.message).toMatch(/他の人がこのチャンクを更新しました/);
+    // 409の本体に現在の最新metadataを含める(画面が「他の人の変更」を提示できるように)
+    expect(res.body.metadata.situation).toBe("誰かが既に上書きした状況");
+    expect(embedText).not.toHaveBeenCalled();
+    // CASのUPDATEはWHEREの版チェックに弾かれて0行更新(部分適用は起きない)。
+    // 埋め込み確定UPDATE(embedding = $1::vector)まで進んでいないことも合わせて確認する。
+    const updateCalls = calls.filter((c) => c.sql.includes("UPDATE faq_embeddings"));
+    expect(updateCalls).toHaveLength(1);
+    expect(calls.some((c) => c.sql.includes("embedding = $1::vector"))).toBe(false);
+  });
+
+  it("expected_content_updated_at が現在の版と一致する → 通常どおり保存でき、版が新しくなる", async () => {
+    const chunkRow = {
+      id: 16,
+      metadata: {
+        source: "book",
+        book_id: 1,
+        chunk_index: 0,
+        principle: "希少性",
+        situation: "旧状況",
+        embedding_status: "done",
+        content_updated_at: "2026-08-30T00:00:00.000Z",
+      },
+      is_excluded_from_search: false,
+      tenant_id: "tenant-a",
+    };
+    const { app } = makeChunkApp(chunkRow);
+
+    const res = await request(app)
+      .put("/v1/admin/knowledge/book-pdf/chunks/16")
+      .send({ situation: "新状況", expected_content_updated_at: "2026-08-30T00:00:00.000Z" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.metadata.situation).toBe("新状況");
+    // 保存のたびに版が更新される(次回の保存はこの新しい版を期待値として送る想定)
+    expect(res.body.metadata.content_updated_at).toBeDefined();
+    expect(res.body.metadata.content_updated_at).not.toBe("2026-08-30T00:00:00.000Z");
+  });
+
+  it("expected_content_updated_at を送らない(旧クライアント/未対応の呼び出し元) → 従来どおり版チェックなしで保存できる(後方互換)", async () => {
+    const chunkRow = {
+      id: 17,
+      metadata: {
+        source: "book",
+        book_id: 1,
+        chunk_index: 0,
+        principle: "希少性",
+        situation: "旧状況",
+        embedding_status: "done",
+        content_updated_at: "2026-08-30T00:00:00.000Z",
+      },
+      is_excluded_from_search: false,
+      tenant_id: "tenant-a",
+    };
+    const { app } = makeChunkApp(chunkRow);
+
+    const res = await request(app)
+      .put("/v1/admin/knowledge/book-pdf/chunks/17")
+      .send({ situation: "新状況" }); // expected_content_updated_at を送らない
+
+    expect(res.status).toBe(200);
+    expect(res.body.metadata.situation).toBe("新状況");
+  });
+
+  it("一度も編集されていないチャンク(content_updated_atが無い)は expected_content_updated_at: null で保存できる", async () => {
+    const chunkRow = {
+      id: 18,
+      metadata: {
+        source: "book",
+        book_id: 1,
+        chunk_index: 0,
+        principle: "希少性",
+        situation: "旧状況",
+        // content_updated_at は未設定(アップロード直後でまだ一度も編集されていない)
+      },
+      is_excluded_from_search: false,
+      tenant_id: "tenant-a",
+    };
+    const { app } = makeChunkApp(chunkRow);
+
+    const res = await request(app)
+      .put("/v1/admin/knowledge/book-pdf/chunks/18")
+      .send({ situation: "新状況", expected_content_updated_at: null });
+
+    expect(res.status).toBe(200);
+    expect(res.body.metadata.situation).toBe("新状況");
+  });
+
+  it("expected_content_updated_at に数値など不正な型を送ると400", async () => {
+    const chunkRow = {
+      id: 19,
+      metadata: { source: "book", book_id: 1, chunk_index: 0, situation: "旧状況" },
+      is_excluded_from_search: false,
+      tenant_id: "tenant-a",
+    };
+    const { app } = makeChunkApp(chunkRow);
+
+    const res = await request(app)
+      .put("/v1/admin/knowledge/book-pdf/chunks/19")
+      .send({ situation: "新状況", expected_content_updated_at: 12345 });
+
+    expect(res.status).toBe(400);
   });
 
   // 2026-08-29 再レビュー: pending 書き込み後にプロセスが落ちると、CASの条件が
