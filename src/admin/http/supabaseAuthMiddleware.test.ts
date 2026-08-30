@@ -40,9 +40,11 @@ describe("supabaseAuthMiddleware", () => {
     process.env = savedEnv;
   });
 
-  describe("development: dev-decodeバイパス（単一条件 NODE_ENV==='development'）", () => {
+  describe("dev-decodeバイパス（opt-in: NODE_ENV!=='production' かつ ALLOW_INSECURE_DEV_AUTH=1）", () => {
     beforeEach(() => {
       process.env.NODE_ENV = "development";
+      // [P1] dev-decode 素通しは明示的 opt-in を必須化した。
+      process.env.ALLOW_INSECURE_DEV_AUTH = "1";
     });
 
     it("Bearerトークンを署名検証せずdecodeしreq.supabaseUserにセットして通す", () => {
@@ -96,10 +98,15 @@ describe("supabaseAuthMiddleware", () => {
     });
   });
 
-  describe("NODE_ENV!=='development'（production/test/未設定） かつ SUPABASE_JWT_SECRET未設定", () => {
+  describe("SUPABASE_JWT_SECRET未設定: fail-closed を production 限定から non-safe env 全体へ拡張", () => {
+    beforeEach(() => {
+      // opt-in を明示的に外す（前段テストの残留を打ち消す）。
+      delete process.env.ALLOW_INSECURE_DEV_AUTH;
+      delete process.env.SUPABASE_JWT_SECRET;
+    });
+
     it("production: 503 fail-closed で next() を呼ばない", () => {
       process.env.NODE_ENV = "production";
-      delete process.env.SUPABASE_JWT_SECRET;
       const { req, res, next } = makeReqRes({ authorization: "Bearer whatever" });
 
       supabaseAuthMiddleware(req, res, next);
@@ -109,29 +116,64 @@ describe("supabaseAuthMiddleware", () => {
       expect(res.body).toEqual({ error: "auth_not_configured" });
     });
 
-    it("test: fail-open（warnして next()）、かつ req.supabaseUser はセットされない", () => {
-      process.env.NODE_ENV = "test";
-      delete process.env.SUPABASE_JWT_SECRET;
+    it("[P1] NODE_ENV未設定（undefined）: 従来の fail-open をやめ 503 fail-closed（トラップ解消）", () => {
+      delete process.env.NODE_ENV;
       const { req, res, next } = makeReqRes({ authorization: "Bearer whatever" });
 
       supabaseAuthMiddleware(req, res, next);
 
-      expect(next).toHaveBeenCalledTimes(1);
-      expect(res.statusCode).toBe(200);
-      // fail-openで通過した場合、req.supabaseUserは未設定のまま —
-      // 後続のroleAuthMiddlewareはこれを role:"anonymous" として扱う必要がある。
-      // ここが未設定のまま特権ロールとして誤解釈されないことが本テストの主眼。
+      expect(next).not.toHaveBeenCalled();
+      expect(res.statusCode).toBe(503);
+      expect(res.body).toEqual({ error: "auth_not_configured" });
       expect(req.supabaseUser).toBeUndefined();
     });
 
-    it("NODE_ENV未設定（undefined）: productionではないため fail-open で next()", () => {
-      delete process.env.NODE_ENV;
-      delete process.env.SUPABASE_JWT_SECRET;
+    it("[P1] staging など未知 env: 503 fail-closed（production 限定をやめた効果）", () => {
+      process.env.NODE_ENV = "staging";
+      const { req, res, next } = makeReqRes({ authorization: "Bearer whatever" });
+
+      supabaseAuthMiddleware(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res.statusCode).toBe(503);
+    });
+
+    it("test: 安全な非本番 env なので fail-open（warnして next）。req.supabaseUser は未設定のまま", () => {
+      process.env.NODE_ENV = "test";
+      const { req, res, next } = makeReqRes({ authorization: "Bearer whatever" });
+
+      supabaseAuthMiddleware(req, res, next);
+
+      // dev/test を寛容に保つことで既存の広範なルートテストを壊さない。
+      // 本番相当の env（production/staging/未設定）では上記の通り 503。
+      expect(next).toHaveBeenCalledTimes(1);
+      expect(req.supabaseUser).toBeUndefined();
+    });
+
+    it("development（opt-in なし）: 安全な非本番 env なので fail-open（warnして next）", () => {
+      process.env.NODE_ENV = "development";
       const { req, res, next } = makeReqRes({ authorization: "Bearer whatever" });
 
       supabaseAuthMiddleware(req, res, next);
 
       expect(next).toHaveBeenCalledTimes(1);
+      expect(req.supabaseUser).toBeUndefined();
+    });
+  });
+
+  describe("[P1] ALLOW_INSECURE_DEV_AUTH は production では無効（多重防御）", () => {
+    it("NODE_ENV=production かつ ALLOW_INSECURE_DEV_AUTH=1 でも dev-decode は発動せず、secret 無しなら 503", () => {
+      process.env.NODE_ENV = "production";
+      process.env.ALLOW_INSECURE_DEV_AUTH = "1";
+      delete process.env.SUPABASE_JWT_SECRET;
+      const header = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url");
+      const body = Buffer.from(JSON.stringify({ app_metadata: { role: "super_admin" } })).toString("base64url");
+      const { req, res, next } = makeReqRes({ authorization: `Bearer ${header}.${body}.unsigned` });
+
+      supabaseAuthMiddleware(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res.statusCode).toBe(503);
       expect(req.supabaseUser).toBeUndefined();
     });
   });
