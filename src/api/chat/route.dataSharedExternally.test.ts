@@ -10,7 +10,7 @@
 // 直接 await する形のため、専用ファイルで検証する。
 
 import express from "express";
-import request from "supertest";
+import { request } from "../../../tests/helpers/testServer";
 import pino from "pino";
 
 jest.mock("../admin/chat-history/chatHistoryRepository", () => ({

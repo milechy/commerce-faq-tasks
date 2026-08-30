@@ -1,6 +1,6 @@
 // tests/phase-a/analyticsSummaryRoutes.test.ts
 import express from "express";
-import request from "supertest";
+import { request } from "../helpers/testServer";
 import { registerAnalyticsSummaryRoutes } from "../../src/api/admin/tenants/analyticsSummaryRoutes";
 import jwt from "jsonwebtoken";
 

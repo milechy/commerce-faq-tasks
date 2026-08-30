@@ -2,7 +2,7 @@
 // GID 1215923339649519: avatar-agent のトークン使用量が破棄され課金$0になる不具合の回帰テスト
 
 import express from "express";
-import request from "supertest";
+import { request } from "../../../tests/helpers/testServer";
 
 jest.mock("../../lib/logger", () => ({
   logger: { warn: jest.fn(), info: jest.fn(), error: jest.fn(), debug: jest.fn() },

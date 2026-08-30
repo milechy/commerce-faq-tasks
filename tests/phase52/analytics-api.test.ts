@@ -2,7 +2,7 @@
 // Phase52: Analytics API — score>0フィルタと認証テスト
 
 import express from "express";
-import request from "supertest";
+import { request } from "../helpers/testServer";
 
 // ---------------------------------------------------------------------------
 // Mock DB pool

@@ -2,7 +2,7 @@
 // Phase52c: AI提案ルール承認前編集機能のテスト
 
 import express from "express";
-import request from "supertest";
+import { request } from "../helpers/testServer";
 
 // ---------------------------------------------------------------------------
 // Mock evaluationsRepository

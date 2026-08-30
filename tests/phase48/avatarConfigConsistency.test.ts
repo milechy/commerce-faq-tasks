@@ -6,7 +6,7 @@
 // super_admin は全テナント取得できる
 
 import express from 'express';
-import request from 'supertest';
+import { request } from "../helpers/testServer";
 import { registerAvatarConfigRoutes } from '../../src/api/admin/avatar/routes';
 
 // ---------------------------------------------------------------------------

@@ -4,7 +4,7 @@
 // RBAC・越境防止・母数不足時に数値を出さないことのみを確認する。
 
 import express from 'express';
-import request from 'supertest';
+import { request } from "../../../../tests/helpers/testServer";
 
 const mockGetRuleEffect = jest.fn();
 jest.mock('./ruleEffect', () => ({

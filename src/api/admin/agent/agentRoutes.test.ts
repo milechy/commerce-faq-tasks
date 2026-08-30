@@ -2,7 +2,7 @@
 // Phase B-Admin: admin agent chat route テスト
 
 import express from 'express';
-import request from 'supertest';
+import { request } from "../../../../tests/helpers/testServer";
 
 // ---------------------------------------------------------------------------
 // モック（副作用 no-op — Gate1 OOM 回避）

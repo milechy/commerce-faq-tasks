@@ -2,7 +2,7 @@
 // Phase44: 書籍PDFアップロードAPI テスト
 
 import express from "express";
-import request from "supertest";
+import { request } from "../../../../tests/helpers/testServer";
 import { registerBookPdfRoutes } from "./bookPdfRoutes";
 
 // supabaseAdmin をモック

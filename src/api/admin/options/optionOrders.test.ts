@@ -2,7 +2,7 @@
 // Phase64 タスク6: option_orders CRUD + premium_avatar type テスト
 
 import express from 'express';
-import request from 'supertest';
+import { request } from "../../../../tests/helpers/testServer";
 import { registerOptionRoutes } from './routes';
 
 // ── モック ─────────────────────────────────────────────────────────────────────

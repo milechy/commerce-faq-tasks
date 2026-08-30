@@ -5,7 +5,7 @@
 
 import type { NextFunction, Request, Response } from "express";
 import express from "express";
-import request from "supertest";
+import { request } from "../../../tests/helpers/testServer";
 import { internalNetworkOnly, isLoopbackAddress } from "./internalNetworkOnly";
 
 jest.mock("../../lib/logger", () => ({

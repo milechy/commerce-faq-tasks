@@ -2,7 +2,7 @@
 // Phase65-3: CV指標 (summary拡張 + cv-statusエンドポイント) のユニットテスト
 
 import express from 'express';
-import request from 'supertest';
+import { request } from "../../../../tests/helpers/testServer";
 
 // ---------------------------------------------------------------------------
 // DB モック

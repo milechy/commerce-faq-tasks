@@ -2,7 +2,7 @@
 // Phase45: 評価API テスト
 
 import express from "express";
-import request from "supertest";
+import { request } from "../../../../tests/helpers/testServer";
 import { registerEvaluationRoutes } from "./routes";
 
 // ---------------------------------------------------------------------------

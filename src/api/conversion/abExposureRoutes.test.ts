@@ -2,7 +2,7 @@
 // GID 1216978855735482: アバター効果A/Bテスト基盤 — 露出記録エンドポイント
 
 import express from 'express';
-import request from 'supertest';
+import { request } from "../../../tests/helpers/testServer";
 import { registerAbExposureRoutes } from './abExposureRoutes';
 
 const VALID_SESSION_ID = '11111111-1111-1111-1111-111111111111';

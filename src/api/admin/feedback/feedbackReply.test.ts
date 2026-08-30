@@ -22,7 +22,7 @@ jest.mock('../../../admin/http/supabaseAuthMiddleware', () => ({
 }));
 
 import express from 'express';
-import request from 'supertest';
+import { request } from "../../../../tests/helpers/testServer";
 import { registerAdminFeedbackManagementRoutes } from './routes';
 
 function makeApp(appMetadata: Record<string, unknown> | null, email = 'actor@test.com') {

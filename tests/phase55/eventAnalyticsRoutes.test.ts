@@ -2,7 +2,7 @@
 // Phase55: GET /v1/admin/analytics/events テスト
 
 import express from 'express';
-import request from 'supertest';
+import { request } from "../helpers/testServer";
 import { registerEventAnalyticsRoutes } from '../../src/api/admin/analytics/eventAnalyticsRoutes';
 
 // supabaseAuthMiddleware をモック

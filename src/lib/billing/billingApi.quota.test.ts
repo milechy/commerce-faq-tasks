@@ -9,7 +9,7 @@
 // 気づかせないか、逆に「もう枠が無い」と誤解させて過剰にプランを上げさせる。
 
 import express from "express";
-import request from "supertest";
+import { request } from "../../../tests/helpers/testServer";
 import pino from "pino";
 import { registerBillingAdminRoutes, fetchBillingQuota } from "./billingApi";
 import { computeExpectedBilling } from "./stripeSync";

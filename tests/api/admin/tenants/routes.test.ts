@@ -1,5 +1,5 @@
 import express from "express";
-import request from "supertest";
+import { request } from "../../../helpers/testServer";
 import { registerTenantAdminRoutes } from "../../../../src/api/admin/tenants/routes";
 import { generateApiKey, hashApiKey, maskApiKey, maskApiKeyPrefix } from "../../../../src/api/admin/tenants/apiKeyUtils";
 import {

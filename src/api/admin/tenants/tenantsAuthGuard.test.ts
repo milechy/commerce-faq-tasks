@@ -30,7 +30,7 @@ jest.mock("../../../agent/openclaw/workspaceCache", () => ({
 }));
 
 import express from "express";
-import request from "supertest";
+import { request } from "../../../../tests/helpers/testServer";
 import { registerTenantAdminRoutes } from "./routes";
 
 /** DBに到達したら失敗と分かるよう、呼ばれたら記録する Pool スタブ */

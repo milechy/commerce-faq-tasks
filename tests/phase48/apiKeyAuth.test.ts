@@ -45,7 +45,7 @@ describe('hashApiKey consistency', () => {
 // ---------------------------------------------------------------------------
 
 import express from 'express';
-import request from 'supertest';
+import { request } from "../helpers/testServer";
 import { initAuthMiddleware } from '../../src/agent/http/authMiddleware';
 import type { TenantConfig } from '../../src/types/contracts';
 

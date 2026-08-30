@@ -2,7 +2,7 @@
 // Phase52f Phase B: GET /v1/admin/analytics/conversions のテスト
 
 import express from "express";
-import request from "supertest";
+import { request } from "../helpers/testServer";
 
 // ---------------------------------------------------------------------------
 // Mocks

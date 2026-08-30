@@ -2,7 +2,7 @@
 // Phase38: テナントシステムプロンプト — モックExpressアプリを使ったユニットテスト
 
 import express from "express";
-import request from "supertest";
+import { request } from "../helpers/testServer";
 import { registerTenantAdminRoutes } from "../../src/api/admin/tenants/routes";
 
 jest.mock("../../src/lib/tenant-context", () => ({ registerTenant: jest.fn() }));

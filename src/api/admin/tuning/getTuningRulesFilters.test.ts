@@ -36,7 +36,7 @@ jest.mock('../../../lib/research/featureCheck', () => ({ isDeepResearchEnabled: 
 jest.mock('../../../lib/research/queryBuilder', () => ({ buildResearchQuery: jest.fn() }));
 
 import express from 'express';
-import request from 'supertest';
+import { request } from "../../../../tests/helpers/testServer";
 import { registerTuningRoutes } from './routes';
 
 function makeApp(appMetadata: Record<string, unknown> | null) {

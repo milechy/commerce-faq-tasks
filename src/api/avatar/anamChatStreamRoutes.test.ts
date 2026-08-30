@@ -2,7 +2,7 @@
 // Phase75: 会話ログ永続化(avatar経由の会話をchat_messagesへsaveMessage)の検証
 
 import express from 'express';
-import request from 'supertest';
+import { request } from "../../../tests/helpers/testServer";
 import type { RequestHandler } from 'express';
 import { registerAnamChatStreamRoutes } from './anamChatStreamRoutes';
 

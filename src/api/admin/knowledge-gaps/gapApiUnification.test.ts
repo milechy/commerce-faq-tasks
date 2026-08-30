@@ -36,7 +36,7 @@ jest.mock('../../../lib/db', () => ({
 }));
 
 import express from 'express';
-import request from 'supertest';
+import { request } from "../../../../tests/helpers/testServer";
 import { registerKnowledgeGapPhase46Routes } from './routes';
 
 function makeApp(user: Record<string, unknown> | null) {

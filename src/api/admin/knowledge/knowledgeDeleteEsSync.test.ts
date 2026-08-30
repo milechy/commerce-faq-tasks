@@ -40,7 +40,7 @@ jest.mock('../../../agent/llm/openaiEmbeddingClient', () => ({
 jest.mock('../../../lib/crypto/textEncrypt', () => ({ encryptText: (s: string) => s }));
 
 import express from 'express';
-import request from 'supertest';
+import { request } from "../../../../tests/helpers/testServer";
 import { registerKnowledgeAdminRoutes } from './routes';
 import { resolveFaqWriteIndex } from '../../../search/langIndex';
 import { faqEsDocId } from '../../../lib/knowledge/faqIndexSync';

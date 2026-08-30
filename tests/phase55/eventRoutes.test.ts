@@ -2,7 +2,7 @@
 // Phase55: POST /api/events テスト
 
 import express from 'express';
-import request from 'supertest';
+import { request } from "../helpers/testServer";
 import { registerEventRoutes } from '../../src/api/events/eventRoutes';
 
 function makeApp(opts: {

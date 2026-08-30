@@ -2,7 +2,7 @@
 // avatar activate/deactivate が tenants.features.avatar を正しく同期するかを検証
 
 import express from "express";
-import request from "supertest";
+import { request } from "../../../../tests/helpers/testServer";
 import { registerAvatarConfigRoutes } from "./routes";
 
 // --------------------------------------------------------------------------

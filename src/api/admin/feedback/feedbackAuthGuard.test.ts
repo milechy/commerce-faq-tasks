@@ -37,7 +37,7 @@ jest.mock('../../../lib/security/inputSanitizer', () => ({
 }));
 
 import express from 'express';
-import request from 'supertest';
+import { request } from "../../../../tests/helpers/testServer";
 import { logger } from '../../../lib/logger';
 import { registerFeedbackRoutes } from './feedbackRoutes';
 import { registerAdminFeedbackManagementRoutes } from './routes';

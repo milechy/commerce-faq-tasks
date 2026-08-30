@@ -16,7 +16,7 @@ jest.mock('../../src/agent/llm/openaiEmbeddingClient', () => ({
 }));
 
 import express from 'express';
-import request from 'supertest';
+import { request } from "../helpers/testServer";
 import { getPool } from '../../src/lib/db';
 import { registerKnowledgeGapPhase46Routes } from '../../src/api/admin/knowledge-gaps/routes';
 

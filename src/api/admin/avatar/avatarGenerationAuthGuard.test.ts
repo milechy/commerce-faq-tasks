@@ -32,7 +32,7 @@ jest.mock('../../../lib/db', () => ({
 }));
 
 import express from 'express';
-import request from 'supertest';
+import { request } from "../../../../tests/helpers/testServer";
 import { logger } from '../../../lib/logger';
 import { registerAvatarGenerationRoutes } from './generationRoutes';
 import { registerFalGenerationRoutes } from './falGenerationRoutes';

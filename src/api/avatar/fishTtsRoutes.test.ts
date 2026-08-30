@@ -9,7 +9,7 @@
 //   - body から voiceId を受けない（テナント越境防止）
 
 import express from "express";
-import request from "supertest";
+import { request } from "../../../tests/helpers/testServer";
 import { registerFishTtsRoutes } from "./fishTtsRoutes";
 
 // ── モック ────────────────────────────────────────────────────────────────────

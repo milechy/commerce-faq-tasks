@@ -2,7 +2,7 @@
 // Phase54: テナント従量課金ダッシュボード API テスト
 
 import express from "express";
-import request from "supertest";
+import { request } from "../helpers/testServer";
 import { registerBillingAdminRoutes, _resetPriceCacheForTest } from "../../src/lib/billing/billingApi";
 
 // Stripe をモック

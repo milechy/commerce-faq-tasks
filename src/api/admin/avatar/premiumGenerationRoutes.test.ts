@@ -1,7 +1,7 @@
 // src/api/admin/avatar/premiumGenerationRoutes.test.ts
 
 import express from "express";
-import request from "supertest";
+import { request } from "../../../../tests/helpers/testServer";
 import { registerPremiumGenerationRoutes } from "./premiumGenerationRoutes";
 
 // ── モック ────────────────────────────────────────────────────────────────────

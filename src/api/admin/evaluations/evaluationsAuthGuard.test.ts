@@ -25,7 +25,7 @@ jest.mock('./evaluationsRepository', () => ({
 }));
 
 import express from 'express';
-import request from 'supertest';
+import { request } from "../../../../tests/helpers/testServer";
 import { logger } from '../../../lib/logger';
 import { registerEvaluationRoutes } from './routes';
 

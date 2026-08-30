@@ -9,7 +9,7 @@
 //   avatarConfigId を room metadata に埋め込み → agent.py が特定アバターを選択できる
 
 import express from "express";
-import request from "supertest";
+import { request } from "../../../tests/helpers/testServer";
 import { registerLiveKitTokenRoutes } from "./livekitTokenRoutes";
 
 // ── モック ────────────────────────────────────────────────────────────────────

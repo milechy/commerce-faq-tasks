@@ -5,7 +5,7 @@ jest.mock("../../src/api/admin/chat-history/chatHistoryRepository");
 jest.mock("../../src/lib/notifications");
 
 import express from "express";
-import request from "supertest";
+import { request } from "../helpers/testServer";
 import { registerEscalationRoutes } from "../../src/api/chat/escalationRoutes";
 import {
   escalateSession,

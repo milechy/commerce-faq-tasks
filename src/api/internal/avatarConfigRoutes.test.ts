@@ -2,7 +2,7 @@
 // GET /api/internal/avatar-config の avatarConfigId 伝搬修正(Path B fix)検証
 
 import express from "express";
-import request from "supertest";
+import { request } from "../../../tests/helpers/testServer";
 import { registerInternalAvatarConfigRoutes } from "./avatarConfigRoutes";
 
 jest.mock("../../lib/db", () => ({

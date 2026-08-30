@@ -7,7 +7,7 @@
 // DB障害時にfail-open(チャット全体を止めない)することを固定する。
 
 import express from "express";
-import request from "supertest";
+import { request } from "../../../tests/helpers/testServer";
 import pino from "pino";
 
 const mockSaveMessage = jest.fn().mockResolvedValue(undefined);

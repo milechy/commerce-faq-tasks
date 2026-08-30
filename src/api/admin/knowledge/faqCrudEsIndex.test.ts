@@ -17,7 +17,7 @@ jest.mock("../../../agent/llm/openaiEmbeddingClient", () => ({
 }));
 
 import express, { type Request, type Response, type NextFunction } from "express";
-import request from "supertest";
+import { request } from "../../../../tests/helpers/testServer";
 import type { Pool } from "pg";
 import { registerFaqCrudRoutes } from "./faqCrudRoutes";
 import { resolveFaqWriteIndex } from "../../../search/langIndex";

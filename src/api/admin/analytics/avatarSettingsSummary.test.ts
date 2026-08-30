@@ -2,7 +2,7 @@
 // Phase72-B: アバター設定利用率集計 (avatar-settings-summary) のユニットテスト
 
 import express from 'express';
-import request from 'supertest';
+import { request } from "../../../../tests/helpers/testServer";
 
 // ---------------------------------------------------------------------------
 // DB モック

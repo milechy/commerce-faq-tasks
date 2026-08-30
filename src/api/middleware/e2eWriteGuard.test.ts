@@ -4,7 +4,7 @@
 // 本番の他テナントデータを壊せる状態に戻るため、境界を明示的に固定する。
 
 import express from "express";
-import request from "supertest";
+import { request } from "../../../tests/helpers/testServer";
 import { e2eWriteGuard, shouldBlockE2eWrite } from "./e2eWriteGuard";
 import { TRAFFIC_SOURCE_HEADER } from "../../lib/traffic/trafficSource";
 

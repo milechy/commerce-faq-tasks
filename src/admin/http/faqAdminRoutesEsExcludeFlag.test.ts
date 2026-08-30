@@ -32,7 +32,7 @@ jest.mock("../../lib/knowledge/faqIndexSync", () => ({
 }));
 
 import express from "express";
-import request from "supertest";
+import { request } from "../../../tests/helpers/testServer";
 import { pool } from "../../lib/db";
 import { registerFaqAdminRoutes } from "./faqAdminRoutes";
 

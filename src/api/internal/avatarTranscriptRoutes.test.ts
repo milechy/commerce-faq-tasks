@@ -2,7 +2,7 @@
 // POST /api/internal/avatar-transcript のテスト
 
 import express from "express";
-import request from "supertest";
+import { request } from "../../../tests/helpers/testServer";
 import { registerInternalAvatarTranscriptRoutes } from "./avatarTranscriptRoutes";
 
 jest.mock("../admin/chat-history/chatHistoryRepository", () => ({

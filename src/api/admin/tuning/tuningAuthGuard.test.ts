@@ -47,7 +47,7 @@ jest.mock('../../../lib/research/queryBuilder', () => ({
 }));
 
 import express from 'express';
-import request from 'supertest';
+import { request } from "../../../../tests/helpers/testServer";
 import { logger } from '../../../lib/logger';
 import { registerTuningRoutes } from './routes';
 import { registerTestResponseRoutes } from './testResponseRoutes';

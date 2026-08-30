@@ -5,7 +5,7 @@
 // 出せるようにするための配線(CLAUDE.md 禁止34: 母数を隠さない)。
 
 import express from 'express';
-import request from 'supertest';
+import { request } from "../../../tests/helpers/testServer";
 import { registerAbTestRoutes } from './abTestRoutes';
 
 jest.mock('../../admin/http/supabaseAuthMiddleware', () => ({

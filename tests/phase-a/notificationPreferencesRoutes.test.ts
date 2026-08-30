@@ -1,6 +1,6 @@
 // tests/phase-a/notificationPreferencesRoutes.test.ts
 import express from "express";
-import request from "supertest";
+import { request } from "../helpers/testServer";
 import { registerNotificationPreferencesRoutes } from "../../src/api/admin/tenants/notificationPreferencesRoutes";
 import jwt from "jsonwebtoken";
 
