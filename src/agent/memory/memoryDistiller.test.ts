@@ -1,7 +1,7 @@
 // src/agent/memory/memoryDistiller.test.ts
 // Phase71-A: memoryDistiller テスト
 
-import { distillAndPromote } from "./memoryDistiller";
+import { distillAndPromote, manuallyPromoteSession } from "./memoryDistiller";
 import { groqClient } from "../llm/groqClient";
 import { createLearnedMemoryRepository } from "./learnedMemoryRepository";
 
@@ -412,5 +412,121 @@ describe("D2: conversion_types をカスタマイズしたテナントでの境�
     expect(sql).toContain("cs.tenant_id = $1");
     expect(sql).toContain("cs.session_id = $2");
     expect(params).toEqual(["carnation", "s1"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GID 1217972798328871 (H-6): 手動昇格 — 自動昇格ゲート(スコア閾値+CV/outcome必須)を
+// バイパスするが、マスタースイッチとメッセージ数下限だけは尊重する。
+// ---------------------------------------------------------------------------
+describe("manuallyPromoteSession", () => {
+  it("マスタースイッチOFFなら reason: disabled を返し、Groqを呼ばない", async () => {
+    // LEARNED_MEMORY_ENABLED 未設定(enable()を呼ばない)
+    const result = await manuallyPromoteSession({
+      tenantId: "carnation",
+      sessionId: "s1",
+      judgeScore: 10,
+      messages: MESSAGES,
+    });
+    expect(result).toEqual({ promoted: false, reason: "disabled" });
+    expect(mockCall).not.toHaveBeenCalled();
+  });
+
+  it("メッセージが2未満なら reason: too_few_messages を返し、Groqを呼ばない", async () => {
+    enable();
+    const result = await manuallyPromoteSession({
+      tenantId: "carnation",
+      sessionId: "s1",
+      judgeScore: 10,
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(result).toEqual({ promoted: false, reason: "too_few_messages" });
+    expect(mockCall).not.toHaveBeenCalled();
+  });
+
+  it("スコアが閾値未満でもCV/outcome判定用のDBを叩かず、蒸留→保存してpromoted:trueを返す", async () => {
+    enable();
+    process.env.LEARNED_MEMORY_THRESHOLD = "80";
+    mockCall.mockResolvedValue(
+      '{"question":"保証はありますか","answer":"全車3ヶ月保証付きです"}',
+    );
+
+    const result = await manuallyPromoteSession({
+      tenantId: "carnation",
+      sessionId: "s1",
+      judgeScore: 10, // 閾値80未満
+      messages: MESSAGES,
+    });
+
+    expect(result).toEqual({ promoted: true });
+    // hasConvertingOutcome() が使うDBクエリ(mockQuery)が一切呼ばれていない = バイパスされている
+    expect(mockQuery).not.toHaveBeenCalled();
+    expect(mockSave).toHaveBeenCalledTimes(1);
+    const saved = mockSave.mock.calls[0]![0];
+    expect(saved.judgeScore).toBe(10);
+    expect(saved.sourceSessionId).toBe("s1");
+    // 昇格元がmetadataに記録されている(自動/手動の後追い用)
+    expect(saved.metadata).toMatchObject({ promoted_by: "manual" });
+  });
+
+  it("LEARNED_MEMORY_TENANTS allowlistに無いテナントでも昇格する(手動はallowlistを経由しない)", async () => {
+    process.env.LEARNED_MEMORY_ENABLED = "true";
+    process.env.LEARNED_MEMORY_TENANTS = "carnation"; // "other-tenant" は含まれない
+    mockCall.mockResolvedValue('{"question":"q","answer":"a"}');
+
+    const result = await manuallyPromoteSession({
+      tenantId: "other-tenant",
+      sessionId: "s2",
+      judgeScore: 0,
+      messages: MESSAGES,
+    });
+
+    expect(result).toEqual({ promoted: true });
+    expect(mockSave).toHaveBeenCalledTimes(1);
+    expect(mockSave.mock.calls[0]![0].tenantId).toBe("other-tenant");
+  });
+
+  it("既に(自動昇格などで)登録済みの会話は reason: already_promoted を返し、'昇格した'と偽らない", async () => {
+    enable();
+    mockCall.mockResolvedValue('{"question":"q","answer":"a"}');
+    mockSave.mockResolvedValue(false); // ON CONFLICT DO NOTHING でスキップされた
+
+    const result = await manuallyPromoteSession({
+      tenantId: "carnation",
+      sessionId: "s1",
+      judgeScore: 90,
+      messages: MESSAGES,
+    });
+
+    expect(result).toEqual({ promoted: false, reason: "already_promoted" });
+  });
+
+  it("蒸留が空Q&Aを返したら reason: no_qa_extracted を返し、保存しない", async () => {
+    enable();
+    mockCall.mockResolvedValue('{"question":"","answer":""}');
+
+    const result = await manuallyPromoteSession({
+      tenantId: "carnation",
+      sessionId: "s1",
+      judgeScore: 90,
+      messages: MESSAGES,
+    });
+
+    expect(result).toEqual({ promoted: false, reason: "no_qa_extracted" });
+    expect(mockSave).not.toHaveBeenCalled();
+  });
+
+  it("distillAndPromoteと異なり、Groq呼び出しの例外を握り潰さず伝播させる(HTTPルート側で500に変換するため)", async () => {
+    enable();
+    mockCall.mockRejectedValue(new Error("groq down"));
+
+    await expect(
+      manuallyPromoteSession({
+        tenantId: "carnation",
+        sessionId: "s1",
+        judgeScore: 90,
+        messages: MESSAGES,
+      }),
+    ).rejects.toThrow("groq down");
   });
 });

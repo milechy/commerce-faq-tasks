@@ -11,6 +11,8 @@ import { exportVisitorData, deleteVisitorData } from "./visitorDataRepository";
 import { logger } from '../../../lib/logger';
 import { isAllowedAdminRole, roleAuthMiddleware } from "../../middleware/roleAuth";
 import { z } from "zod";
+import { getEvaluationsBySession } from "../evaluations/evaluationsRepository";
+import { manuallyPromoteSession } from "../../../agent/memory/memoryDistiller";
 
 /**
  * テナントIDをリクエストから解決する。
@@ -403,6 +405,96 @@ export function registerChatHistoryRoutes(app: Express): void {
       } catch (err) {
         logger.warn("[PATCH /v1/admin/chat-history/sessions/:id/outcome]", err);
         return res.status(500).json({ error: "結果の記録に失敗しました" });
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------------
+  // POST /v1/admin/chat-history/sessions/:sessionId/promote-memory
+  // GID 1217972798328871 (H-6): 学習ループの初期母数(90日で13会話)が
+  // 自動昇格ゲート(スコア閾値80 + CV/outcome必須)を満たせないまま枯渇しているため、
+  // super_adminが個別に確認した会話を手動で learned_memory へ昇格する経路。
+  // 自動昇格のゲート自体(memoryDistiller.distillAndPromote)は変更しない。
+  // :sessionId = chat_sessions.id (UUID。他エンドポイントと同じ規約)
+  // -----------------------------------------------------------------------
+  app.post(
+    "/v1/admin/chat-history/sessions/:sessionId/promote-memory",
+    async (req: Request, res: Response) => {
+      const pool = getPool();
+      const sessionDbId: string = req.params["sessionId"] ?? "";
+      const su = (req as any).supabaseUser as Record<string, any> | undefined;
+      const actorRole = su?.app_metadata?.role;
+
+      // 学習メモリへの昇格は super_admin 限定の運用操作(旧UI)。client_admin には出さない。
+      // UI側の出し分けだけでなくサーバ側でも強制する(CLAUDE.md 禁止14: 機能ゲートをUI側だけに置かない)。
+      if (actorRole !== "super_admin") {
+        return res.status(403).json({ error: "この操作を実行する権限がありません" });
+      }
+
+      if (!sessionDbId) {
+        return res.status(400).json({ error: "sessionId が必要です" });
+      }
+
+      // previewMode中は ?tenant= でスコープを絞る(resolveTenantFilter と同じ規約)。
+      // 未指定なら全テナント対象(super_adminの通常運用)。
+      const tenantFilter = (req.query["tenant"] as string | undefined) || undefined;
+
+      try {
+        // テナント越境は「見つからない」に倒す(CLAUDE.md 禁止20・24。存在確認オラクル防止)。
+        const sessionResult = tenantFilter
+          ? await pool.query<{ id: string; tenant_id: string; session_id: string }>(
+              `SELECT id, tenant_id, session_id FROM chat_sessions WHERE id = $1 AND tenant_id = $2`,
+              [sessionDbId, tenantFilter],
+            )
+          : await pool.query<{ id: string; tenant_id: string; session_id: string }>(
+              `SELECT id, tenant_id, session_id FROM chat_sessions WHERE id = $1`,
+              [sessionDbId],
+            );
+        if (sessionResult.rows.length === 0) {
+          return res.status(404).json({ error: "セッションが見つかりません" });
+        }
+        const session = sessionResult.rows[0];
+
+        const messages = await getMessages({ sessionDbId, tenantId: session.tenant_id });
+        if (messages === null) {
+          return res.status(404).json({ error: "セッションが見つかりません" });
+        }
+
+        // 蒸留時の judge_score は参考値として既存のJudge評価があれば使う(無ければ0)。
+        // conversation_evaluations.session_id は chat_sessions.session_id(公開キー)で
+        // 記録されている(judgeEvaluator.ts)。session.id(内部UUID)を渡すと常に0件になるため
+        // 必ず session.session_id を渡す。
+        const evaluations = await getEvaluationsBySession(session.session_id, session.tenant_id);
+        const judgeScore = evaluations[0]?.overall_score ?? 0;
+
+        // distillAndPromote(自動)と同じ (tenant_id, source_session_id) キーで重複判定させるため、
+        // DBの内部id ではなく公開 session_id を渡す(自動昇格済みセッションへの二重昇格を防ぐ)。
+        const result = await manuallyPromoteSession({
+          tenantId: session.tenant_id,
+          sessionId: session.session_id,
+          judgeScore,
+          messages: messages.map((m) => ({ role: m.role, content: m.content })),
+        });
+
+        if (result.promoted) {
+          return res.json({ promoted: true });
+        }
+
+        // 失敗を黙って成功にしない: 昇格済み/抽出不可/対象外を区別して伝える。
+        const REASON_MESSAGES: Record<typeof result.reason, string> = {
+          already_promoted: "この会話は既に学習メモリに昇格済みです",
+          no_qa_extracted: "有用な質問と回答の組を抽出できませんでした",
+          too_few_messages: "メッセージ数が少なく蒸留対象になりません",
+          disabled: "学習メモリ機能が現在無効になっています",
+        };
+        return res.json({
+          promoted: false,
+          reason: result.reason,
+          message: REASON_MESSAGES[result.reason],
+        });
+      } catch (err) {
+        logger.warn("[POST /v1/admin/chat-history/sessions/:id/promote-memory]", err);
+        return res.status(500).json({ error: "学習メモリへの昇格に失敗しました" });
       }
     },
   );
