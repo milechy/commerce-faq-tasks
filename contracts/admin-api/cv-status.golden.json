@@ -1,0 +1,31 @@
+{
+  "total_tenants": 3,
+  "fired_tenants": 2,
+  "not_fired_tenants": 1,
+  "tenants": [
+    {
+      "tenant_id": "carnation",
+      "tenant_name": "からーねーしょん整体院",
+      "cv_count_30d": 14,
+      "cv_fired_status": "fired",
+      "days_since_effective_start": 120,
+      "last_cv_at": "2026-08-28T05:12:00.000Z"
+    },
+    {
+      "tenant_id": "bross-niigata",
+      "tenant_name": "BROSS新潟",
+      "cv_count_30d": 3,
+      "cv_fired_status": "fired",
+      "days_since_effective_start": 45,
+      "last_cv_at": "2026-08-25T11:03:00.000Z"
+    },
+    {
+      "tenant_id": "accept",
+      "tenant_name": "Accept",
+      "cv_count_30d": 0,
+      "cv_fired_status": "not_fired",
+      "days_since_effective_start": 12,
+      "last_cv_at": null
+    }
+  ]
+}
