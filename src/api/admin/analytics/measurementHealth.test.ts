@@ -7,6 +7,7 @@ jest.mock("../chat-history/chatHistoryRepository", () => ({
 }));
 
 import { fetchMeasurementHealth } from "./measurementHealth";
+import { fetchHermesAcceptanceRate } from "./summaryQueries";
 
 function makeDb(responses: Array<{ rows: any[] }>) {
   let i = 0;
@@ -343,5 +344,56 @@ describe("fetchMeasurementHealth — chatOpenDropoff", () => {
       expect(r.chatOpenDropoff.proactive.dropoffRate).toBeNull();
       expect(r.chatOpenDropoff.manual.dropoffRate).not.toBeNull();
     });
+  });
+});
+
+// GID 1217972930945091 (H-7): Hermes提案(tuning_rules source='hermes')の採択率。
+// pendingは未判断のため母数(denominator)に含めない。CLAUDE.md禁止34(母数不足で0%を
+// 出さない)を summaryQueries.ts 側の実装でも同じ流儀で固定する。
+describe("fetchHermesAcceptanceRate", () => {
+  it("active/rejectedが混在するとき、採択率が一致する(pendingは母数に含めない)", async () => {
+    const db = makeDb([{ rows: [{ active: "3", rejected: "1", pending: "5" }] }]);
+
+    const result = await fetchHermesAcceptanceRate(db);
+
+    expect(result.acceptanceRate).toEqual({ numerator: 3, denominator: 4, rate: 75 });
+    expect(result.pendingCount).toBe(5);
+    expect(typeof result.asOf).toBe("string");
+    expect(Number.isNaN(Date.parse(result.asOf))).toBe(false);
+  });
+
+  it("母数0(Hermes提案が1件も無い)のとき rate は null(no_data)で 0% を出さない", async () => {
+    const db = makeDb([{ rows: [{ active: "0", rejected: "0", pending: "0" }] }]);
+
+    const result = await fetchHermesAcceptanceRate(db);
+
+    expect(result.acceptanceRate).toEqual({ numerator: 0, denominator: 0, rate: null });
+  });
+
+  it("pendingのみ(active/rejectedが0件)のとき、母数に入らずnullのまま", async () => {
+    const db = makeDb([{ rows: [{ active: "0", rejected: "0", pending: "7" }] }]);
+
+    const result = await fetchHermesAcceptanceRate(db);
+
+    expect(result.acceptanceRate.rate).toBeNull();
+    expect(result.acceptanceRate.denominator).toBe(0);
+    expect(result.pendingCount).toBe(7);
+  });
+
+  it("母数1(承認1件のみ)でも率自体は計算される(trend/矢印は別途フロント側で出さない)", async () => {
+    const db = makeDb([{ rows: [{ active: "1", rejected: "0", pending: "0" }] }]);
+
+    const result = await fetchHermesAcceptanceRate(db);
+
+    expect(result.acceptanceRate).toEqual({ numerator: 1, denominator: 1, rate: 100 });
+  });
+
+  it("行が返らないとき(空DB)は例外を投げずゼロ扱いでnullを返す", async () => {
+    const db = makeDb([{ rows: [] }]);
+
+    const result = await fetchHermesAcceptanceRate(db);
+
+    expect(result.acceptanceRate).toEqual({ numerator: 0, denominator: 0, rate: null });
+    expect(result.pendingCount).toBe(0);
   });
 });

@@ -15,6 +15,7 @@ import {
   fetchAnalyticsSummary,
   fetchAnalyticsTrend,
   fetchConversionSummary,
+  fetchHermesAcceptanceRate,
   fetchKnowledgeAttribution,
   fetchLowScoreSessions,
   periodToInterval,
@@ -219,11 +220,13 @@ export function registerAnalyticsRoutes(app: Express): void {
         // fetchMeasurementHealth(全クエリが tenant_id で絞られる契約)には入れず、
         // ここで super_admin にだけ合成する。新エンドポイントは作らない。
         // 点火状態も同じ理由(テナント固有ではなくR2C運用の情報)で super_admin にだけ合成する。
-        const [schemaHealth, ignitionStatus] = isSuperAdmin
-          ? await Promise.all([fetchSchemaHealth(pool), fetchIgnitionStatus(pool)])
-          : [undefined, undefined];
+        // H-7(GID 1217972930945091): Hermes提案の採択率も同じ理由(R2C運用の判断材料であり
+        // テナント固有ではない)で super_admin にだけ合成する。
+        const [schemaHealth, ignitionStatus, hermesAcceptanceRate] = isSuperAdmin
+          ? await Promise.all([fetchSchemaHealth(pool), fetchIgnitionStatus(pool), fetchHermesAcceptanceRate(pool)])
+          : [undefined, undefined, undefined];
         return res.json(
-          isSuperAdmin ? { ...response, schemaHealth, ignitionStatus } : response,
+          isSuperAdmin ? { ...response, schemaHealth, ignitionStatus, hermesAcceptanceRate } : response,
         );
       } catch (err) {
         logger.warn("[GET /v1/admin/analytics/measurement-health]", err);

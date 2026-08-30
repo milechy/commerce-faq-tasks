@@ -50,6 +50,13 @@ interface MeasurementHealth {
     envControlledFeatures: string[];
     anyEnabled: boolean;
   };
+  /** super_admin のときだけ返る。Hermes提案(tuning_rules source='hermes')の採択率。
+   *  全期間・全テナント横断の累計値(月$23を払い続けるか止めるかの判断材料)。 */
+  hermesAcceptanceRate?: {
+    acceptanceRate: RateMetric;
+    pendingCount: number;
+    asOf: string;
+  };
 }
 
 interface MonitoringKpis {
@@ -670,6 +677,23 @@ export default function MonitoringPage() {
                         画面から開閉できないため、点火し忘れに気づけない構造です（順次 tenants.features へ移行）。
                       </div>
                     )}
+                  </MeasurementHealthCard>
+                )}
+
+                {/* H-7(GID 1217972930945091): Hermes提案の採択率(R2C運用のみ)。
+                    評価層はR2C側にあり、Hermesにeval/LLMOpsは無い。強化するか止めるかを
+                    採択率で測る。全期間・全テナント横断の累計値のため期間フィルタの対象外。 */}
+                {health?.hermesAcceptanceRate && (
+                  <MeasurementHealthCard
+                    title="Hermes提案の採択率"
+                    description="Hermesが提案し、承認(active)または却下(rejected)まで判断が済んだもののうち承認された割合（未判断のpendingは母数に含めない）"
+                  >
+                    <RateDisplay metric={health.hermesAcceptanceRate.acceptanceRate} />
+                    <div style={{ fontSize: 12, color: "var(--muted-foreground)", marginTop: 4 }}>
+                      未判断(pending): {health.hermesAcceptanceRate.pendingCount.toLocaleString("ja-JP")}件
+                      <br />
+                      集計時点: {new Date(health.hermesAcceptanceRate.asOf).toLocaleString("ja-JP")}
+                    </div>
                   </MeasurementHealthCard>
                 )}
               </div>
