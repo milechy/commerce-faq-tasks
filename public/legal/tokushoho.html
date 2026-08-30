@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<!--
+  特定商取引法に基づく表記（雛形 / ドラフト）
+  ※ このページは雛形です。【要記入: …】の箇所は事業者・法務による確定が必須です。
+  ※ 虚偽・未確定の事実は記載せず、必ずプレースホルダのまま残しています。
+-->
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex">
+  <title>特定商取引法に基づく表記 — R2C</title>
+  <style>
+    :root {
+      --bg: #f7f7fb;
+      --fg: #1e1b2e;
+      --muted: #605a72;
+      --accent: #7c3aed;
+      --border: #e4e0ef;
+      --card: #ffffff;
+      --note-bg: #fbf7ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: system-ui, -apple-system, "Hiragino Kaku Gothic ProN", "Yu Gothic", Meiryo, sans-serif;
+      line-height: 1.8;
+      font-size: 15px;
+    }
+    header.site {
+      background: linear-gradient(135deg, #050508, #241546);
+      color: #fff;
+      padding: 28px 20px;
+    }
+    header.site .inner { max-width: 820px; margin: 0 auto; display: flex; align-items: center; gap: 12px; }
+    .logo {
+      width: 34px; height: 34px; border-radius: 50%;
+      background: linear-gradient(135deg, #7c3aed, #8b5cf6);
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 800; font-size: 13px; color: #fff;
+    }
+    header.site a { color: #cbb8ff; text-decoration: none; font-size: 13px; }
+    main { max-width: 820px; margin: 0 auto; padding: 32px 20px 64px; }
+    h1 { font-size: 24px; font-weight: 800; margin: 8px 0 4px; }
+    .updated { color: var(--muted); font-size: 13px; margin: 0 0 24px; }
+    .note {
+      background: var(--note-bg); border: 1px solid var(--border);
+      border-left: 4px solid var(--accent); border-radius: 8px;
+      padding: 14px 16px; margin: 0 0 28px; font-size: 13.5px; color: var(--muted);
+    }
+    table.tokusho {
+      width: 100%; border-collapse: collapse; background: var(--card);
+      border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
+    }
+    table.tokusho th, table.tokusho td {
+      text-align: left; vertical-align: top; padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    table.tokusho tr:last-child th, table.tokusho tr:last-child td { border-bottom: none; }
+    table.tokusho th {
+      width: 34%; background: #faf9fd; font-weight: 700; color: var(--fg);
+      white-space: nowrap;
+    }
+    .todo { color: var(--accent); font-weight: 600; background: #f2ecff; border-radius: 4px; padding: 1px 6px; }
+    .muted { color: var(--muted); }
+    footer.site { border-top: 1px solid var(--border); padding: 24px 20px; text-align: center; color: var(--muted); font-size: 12px; }
+    footer.site a { color: var(--accent); text-decoration: none; margin: 0 8px; }
+    @media (max-width: 560px) {
+      table.tokusho th, table.tokusho td { display: block; width: 100%; white-space: normal; }
+      table.tokusho th { border-bottom: none; padding-bottom: 2px; }
+      table.tokusho td { padding-top: 4px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="site">
+    <div class="inner">
+      <div class="logo">R2C</div>
+      <div>
+        <div style="font-weight:700;">R2C</div>
+        <a href="/lp/">← トップに戻る</a>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <h1>特定商取引法に基づく表記</h1>
+    <p class="updated">最終更新日: <span class="todo">【要記入: 公開日 / 改定日】</span></p>
+
+    <div class="note">
+      本ページは雛形（ドラフト）です。<span class="todo">【要記入: …】</span>の項目は、事業者および法務による内容確定が必須です。確定するまで公開しないでください。
+    </div>
+
+    <table class="tokusho">
+      <tbody>
+        <tr>
+          <th>販売事業者名</th>
+          <td><span class="todo">【要記入: 事業者の正式名称（例: 合同会社◯◯）】</span></td>
+        </tr>
+        <tr>
+          <th>運営統括責任者</th>
+          <td><span class="todo">【要記入: 代表者氏名または責任者氏名】</span></td>
+        </tr>
+        <tr>
+          <th>所在地</th>
+          <td>
+            <span class="todo">【要記入: 登記上の住所（郵便番号・都道府県から）】</span>
+            <div class="muted" style="font-size:12.5px; margin-top:4px;">請求があれば遅滞なく開示します。開示を希望される場合は下記連絡先までご請求ください。</div>
+          </td>
+        </tr>
+        <tr>
+          <th>電話番号</th>
+          <td>
+            <span class="todo">【要記入: 電話番号】</span>
+            <div class="muted" style="font-size:12.5px; margin-top:4px;">請求があれば遅滞なく開示します。</div>
+          </td>
+        </tr>
+        <tr>
+          <th>メールアドレス</th>
+          <td><span class="todo">【要記入: 問い合わせ用メールアドレス（例: support@r2c.biz）】</span></td>
+        </tr>
+        <tr>
+          <th>ホームページURL</th>
+          <td><span class="todo">【要記入: サービスURL（例: https://r2c.biz）】</span></td>
+        </tr>
+        <tr>
+          <th>販売価格 / 利用料金</th>
+          <td>
+            各料金プランに準じます。最新の価格は
+            <a href="/lp/#pricing" style="color:var(--accent);">料金プラン</a>
+            をご確認ください。
+            <div class="muted" style="font-size:13px; margin-top:6px;">
+              （参考・確定前の掲載例。正式には料金ページに準拠）<br>
+              Free ¥0/月 ・ Starter ¥20/対話（従量） ・ Standard ¥9,800/月 ・ Growth ¥29,800/月 ・ Enterprise は個別見積り。
+              <br>いずれも消費税の取扱い（内税/外税）は <span class="todo">【要記入: 税込 / 税別の別】</span>。
+            </div>
+          </td>
+        </tr>
+        <tr>
+          <th>商品代金以外の必要料金</th>
+          <td>
+            従量課金分（対話数・音声アバター利用分など）はプランに定める単価に基づき別途発生します。詳細は
+            <a href="/legal/terms.html" style="color:var(--accent);">利用規約</a>
+            および料金プランをご確認ください。インターネット接続料金・通信料はお客様のご負担となります。
+          </td>
+        </tr>
+        <tr>
+          <th>支払方法</th>
+          <td>クレジットカード（決済代行: <span class="todo">【要記入: 決済事業者名（例: Stripe）】</span>）。<span class="todo">【要記入: その他の支払方法があれば記載】</span></td>
+        </tr>
+        <tr>
+          <th>支払時期</th>
+          <td><span class="todo">【要記入: 課金サイクル（例: 月額は毎月◯日に当月分/翌月分を請求、従量分は当月利用分を翌月請求）】</span></td>
+        </tr>
+        <tr>
+          <th>サービスの提供時期</th>
+          <td>お申し込み・お支払い手続きの完了後、順次アカウントを有効化しご利用いただけます。<span class="todo">【要記入: 具体的な提供開始時期の目安があれば記載】</span></td>
+        </tr>
+        <tr>
+          <th>返品・キャンセル・解約</th>
+          <td>
+            本サービスは役務（デジタルサービス）の提供であり、その性質上、提供済みの役務についての返金は原則お受けできません。
+            解約は管理画面またはお問い合わせ窓口からお手続きいただけます。解約後の課金の取扱い（日割りの有無・次回請求の停止時期）は
+            <span class="todo">【要記入: 解約時の課金停止条件・返金ポリシー（利用規約と整合させること）】</span>。
+          </td>
+        </tr>
+        <tr>
+          <th>動作環境</th>
+          <td><span class="todo">【要記入: 推奨ブラウザ等の動作環境】</span></td>
+        </tr>
+        <tr>
+          <th>特別な販売条件</th>
+          <td><span class="todo">【要記入: 無料プランの制限・最低利用期間・その他特記事項があれば記載】</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </main>
+
+  <footer class="site">
+    <div>© 2025 RAJIUSEC All rights reserved.</div>
+    <div style="margin-top:8px;">
+      <a href="/legal/tokushoho.html">特定商取引法に基づく表記</a>
+      <a href="/legal/privacy.html">プライバシーポリシー</a>
+      <a href="/legal/terms.html">利用規約</a>
+    </div>
+  </footer>
+</body>
+</html>
