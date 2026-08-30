@@ -7,6 +7,7 @@ server {
     #   /api/internal/  : loopback のみ (avatar-agent / smoke / local ops)
     #   /metrics        : loopback のみ (Prometheus scrape)
     #   /internal/ga4/  : 公開可 (CF Workers Cron)。HMAC で守る。ヘッダ操作なし。
+    #   /v1/hermes-mcp/ : Hermes Agent VPS(135.181.194.34)のみ。詳細は該当 location 参照。
     #   /               : デフォルト。X-Internal-Request は強制strip。
     #
     # ヘッダ方針 (Codex review #1 反映 — 2026-05-27):
@@ -62,6 +63,33 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        client_max_body_size 1M;
+        proxy_read_timeout 60s;
+    }
+
+    location /v1/hermes-mcp/ {
+        # 外部 Hermes Agent VPS(135.181.194.34)専用エンドポイント。
+        # 同意済みテナントの生会話を検索できる口であり、
+        # アプリ層の守りは HERMES_MCP_API_KEY 静的キー1本(未ローテーション、
+        # src/api/hermes-mcp/hermesMcpAuth.ts)のみのため、nginx 側でも
+        # 正当な呼び出し元を135.181.194.34の1ホストに絞る二重ガードとする。
+        #
+        # 重要: このブロックを反映する前に、必ずアクセスログで実際の送信元IPを
+        # 確認すること。Hermes 側は現在 fetch failed を繰り返しており到達自体が
+        # 失敗している状態のため、確認せずに deny all を入れると、直っていない
+        # 不具合の上に到達不能をもう1枚重ねることになる。
+        allow 135.181.194.34;
+        deny all;
+
+        proxy_pass http://127.0.0.1:3100;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # 公開トラフィックと同じ方針: X-Internal-Request は強制 strip。
+        # 認証は Bearer HERMES_MCP_API_KEY (app層) に委譲する。
+        proxy_set_header X-Internal-Request "";
         client_max_body_size 1M;
         proxy_read_timeout 60s;
     }
