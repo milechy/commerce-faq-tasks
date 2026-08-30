@@ -1,0 +1,26 @@
+# gitleaks 抑止リスト (fingerprint = commit:file:rule:startline)
+#
+# 下記は「db-connection-string-password」ルールが検知した *実在した* 本番 Postgres の
+# 平文パスワードで、git 履歴の旧コミットに残存しているもの。HEAD からは
+#   commit b9840275 "security: 本番Postgresパスワードの平文記載をドキュメントから削除"
+# で既に除去済みだが、履歴の書き換え無しには過去コミットからは消えないため、
+# 全履歴スキャンが恒久的に赤くなるのを避ける目的でここに fingerprint 単位で登録する。
+#
+# !!! 重要 !!! これは「無害な誤検知」ではなく *本物の資格情報* の履歴残存である。
+#   - 当該 DB パスワードは公開 GitHub 履歴に露出済みのため、**ローテーション必須**。
+#     (ローテーション状況は漏洩監査トラックで別途管理すること)
+#   - このルール自体は生きており、*新規* の同種漏洩は引き続き検知・ブロックする。
+#     ここに登録した既知の過去コミットだけを抑止する。
+#
+# 対象: postgresql://postgres:<20桁実PW>@127.0.0.1:5432/commerce_faq
+07356aeff5f51eeef7dbbb6b51001f409c7abc02:.claude/skills/r2c-deploy-prompt/SKILL.md:db-connection-string-password:230
+0faf117aceb91ef1a1eaf26d2eb003a4e22eff46:src/api/admin/tenants/migration_r2c_default.sql:db-connection-string-password:6
+3772596af18236d08e88be600fcd30f44f2cdb98:docs/R2C_DEVELOPMENT_PLAYBOOK.md:db-connection-string-password:346
+4c1aade27400c5dac43bcbc072649ef77298da97:VPS_OPS_GUIDE.md:db-connection-string-password:73
+56dd62966676afe25c7fb70c75fce7c1af79dc51:project-knowledge-update 2/VPS_OPS_GUIDE.md:db-connection-string-password:73
+56dd62966676afe25c7fb70c75fce7c1af79dc51:project-knowledge-update/VPS_OPS_GUIDE.md:db-connection-string-password:73
+856105a0ba105e358a132d41c221bbea2169134c:VPS_OPS_GUIDE.md:db-connection-string-password:101
+8fdff15d1fa9d6c50ef3f782d8d37326b1e17742:VPS_OPS_GUIDE.md:db-connection-string-password:341
+8fdff15d1fa9d6c50ef3f782d8d37326b1e17742:VPS_OPS_GUIDE.md:db-connection-string-password:344
+8fdff15d1fa9d6c50ef3f782d8d37326b1e17742:VPS_OPS_GUIDE.md:db-connection-string-password:347
+c08a4ec64c90b58d2671249aa039f19cfbacfeb1:.claude/agents/deploy-checker.md:db-connection-string-password:50
