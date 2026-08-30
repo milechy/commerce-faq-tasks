@@ -193,6 +193,21 @@ jobs:
       - name: Test admin-ui (vitest)
         run: cd admin-ui && pnpm test:ui
 
+      # Gate 3 は非決定的に落ちることがある(2026-08-30 時点で根本原因は未特定)。
+      # 失敗したジョブを再実行するとログが最新の試行で上書きされ、失敗時の
+      # エラーと各テストの所要時間が失われる。artifact は試行ごとに残るため、
+      # 次に落ちたときの唯一の手がかりになる。
+      # if: always() は「成功時も残す」ため。失敗時だけだと比較対象(正常時の
+      # duration 分布)が無く、「遅かったのか一瞬で落ちたのか」を判断できない。
+      - name: Upload vitest report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vitest-report-${{ github.run_attempt }}
+          path: admin-ui/vitest-report.json
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Build admin-ui
         run: cd admin-ui && pnpm build
         env:
