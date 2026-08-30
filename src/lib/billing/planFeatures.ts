@@ -100,6 +100,36 @@ function rank(plan: string | null | undefined): number {
   return PLAN_RANK[plan as TenantPlan] ?? PLAN_RANK.free_ad;
 }
 
+// ★プラン文字列 → TenantPlan の唯一の判定ロジック★
+// queryTenantPlan / queryTenantPlanOrThrow / queryTenantPlanResult の3関数は、
+// DBから取得した plan 列(文字列 | null)を既知の5値へ検証する部分だけは
+// 完全に同一で、違うのは「検証に失敗した(未知/null/DB例外)場合にどう振る舞うか」
+// だけだった。以前はこの5値の羅列が3関数にコピペされており、プラン段を
+// 追加するたびに3箇所すべてを直す必要があった(1箇所でも取り残すと、
+// 型チェック・テストは通ったまま該当プランのテナントが常時 free_ad 扱いに
+// なる・DB障害時にしか発現しない等、気づきにくい形で壊れていた)。
+//
+// fail-safe(DB例外・呼び出し失敗時にどちらへ倒すか)はこの関数の外、
+// つまり各呼び出し元の try/catch 側にそのまま残る。この関数自体はDB例外を
+// 一切扱わない純粋関数なので、集約してもfail-safeの向きは1つも変わらない:
+//   - queryTenantPlan:        catch で free_ad へ丸める(既存のまま)
+//   - queryTenantPlanOrThrow: catch を持たず例外をそのまま呼び出し元へ投げる(既存のまま)
+//   - queryTenantPlanResult:  catch で null を返す(既存のまま)
+//
+// ★プラン段を足したらここに必ず加えること★(旧: 3関数それぞれに加える必要があった)
+function parseKnownPlan(plan: string | null | undefined): TenantPlan | null {
+  if (
+    plan === "free_ad" ||
+    plan === "starter" ||
+    plan === "standard" ||
+    plan === "growth" ||
+    plan === "enterprise"
+  ) {
+    return plan;
+  }
+  return null;
+}
+
 export function planHasFeature(plan: string | null | undefined, feature: GatedFeature): boolean {
   return rank(plan) >= PLAN_RANK[FEATURE_MIN_PLAN[feature]];
 }
@@ -119,21 +149,10 @@ export async function queryTenantPlan(
       `SELECT plan FROM tenants WHERE id = $1`,
       [tenantId],
     );
-    const plan = result.rows[0]?.plan;
-    // (b) fail-safe 3箇所のうち2つ目: 既知の5値のみ通す allowlist。
-    // それ以外(null・未知の文字列・テナント不在で rows が空)は free_ad へ倒す。
-    // ★プラン段を足したらここに必ず加えること★ 落とすと、そのプランのテナントが
-    // 恒久的に free_ad 扱いになり、契約済みの機能が全て閉じる(DB障害時ではなく常時)。
-    if (
-      plan === "free_ad" ||
-      plan === "starter" ||
-      plan === "standard" ||
-      plan === "growth" ||
-      plan === "enterprise"
-    ) {
-      return plan;
-    }
-    return "free_ad";
+    // (b) fail-safe 3箇所のうち2つ目: 既知の5値以外(null・未知の文字列・
+    // テナント不在で rows が空)は free_ad へ倒す。判定ロジック自体は
+    // parseKnownPlan に集約済み(詳細はそちらのコメント参照)。
+    return parseKnownPlan(result.rows[0]?.plan) ?? "free_ad";
   } catch {
     // (c) fail-safe 3箇所のうち3つ目: DB障害時も free_ad へ倒す。
     return "free_ad";
@@ -153,9 +172,9 @@ export async function queryTenantPlan(
  * 扱えるよう、ここでは例外を握り潰さない。
  *
  * plan列がnull/未知の文字列/テナント不在(rowsが空)の場合は、DB障害ではなく
- * データの状態そのものなので、従来通り free_ad へ倒す(allowlistは
- * queryTenantPlan/queryTenantPlanResult と同じ理由で独立に持つ。
- * 実装を共有すると、どちらかの修正が他のfail-safeの向きを意図せず変える)。
+ * データの状態そのものなので、従来通り free_ad へ倒す(判定ロジック自体は
+ * parseKnownPlan に集約済み。DB例外時にどう振る舞うかだけが
+ * queryTenantPlan/queryTenantPlanResult と異なる)。
  */
 export async function queryTenantPlanOrThrow(
   pool: Pick<Pool, "query">,
@@ -165,17 +184,7 @@ export async function queryTenantPlanOrThrow(
     `SELECT plan FROM tenants WHERE id = $1`,
     [tenantId],
   );
-  const plan = result.rows[0]?.plan;
-  if (
-    plan === "free_ad" ||
-    plan === "starter" ||
-    plan === "standard" ||
-    plan === "growth" ||
-    plan === "enterprise"
-  ) {
-    return plan;
-  }
-  return "free_ad";
+  return parseKnownPlan(result.rows[0]?.plan) ?? "free_ad";
 }
 
 // /api/chat は全リクエストで getTenantPlan() を呼ぶ(free_ad以外のプランでも毎回)。
@@ -283,19 +292,10 @@ export async function queryTenantPlanResult(
       `SELECT plan FROM tenants WHERE id = $1`,
       [tenantId],
     );
-    const plan = result.rows[0]?.plan;
-    // queryTenantPlan と同じ allowlist を独立に持つ(実装共有すると片方の修正が
-    // もう片方の fail-safe の向きを変える)。プラン段を足すときは両方に加えること。
-    if (
-      plan === "free_ad" ||
-      plan === "starter" ||
-      plan === "standard" ||
-      plan === "growth" ||
-      plan === "enterprise"
-    ) {
-      return plan;
-    }
-    return null;
+    // 判定ロジック自体は parseKnownPlan に集約済み。未確定時に free_ad へ
+    // 丸めず null を返す点が queryTenantPlan/queryTenantPlanOrThrow と異なる
+    // (このfail-safeの向きの違いが本関数の存在理由なので、ここは変えない)。
+    return parseKnownPlan(result.rows[0]?.plan);
   } catch {
     return null;
   }
