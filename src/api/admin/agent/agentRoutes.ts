@@ -15,6 +15,11 @@ import { recordAgentMetric, type AgentMetricInput } from '../../../lib/metrics/a
 import { recordAgentSettingsChange } from './agentAuditLog';
 import { GPT_OSS_120B, groqReasoningParams } from '../../../config/groqModels';
 import { isUnanswered } from '../ai-assist/systemPrompt';
+// L5/L7/L8 多層防御(src/middleware/*)。顧客chat経路(src/api/chat/route.ts)と同じ層を
+// 管理AIエージェント経路にも配線する。プロンプトインジェクション→破壊的ツール実行の攻撃面を塞ぐ。
+import { sanitizeInput as l5SanitizeInput, sessionHistoryStore } from '../../../middleware/inputSanitizer';
+import { applyPromptFirewall } from '../../../middleware/promptFirewall';
+import { redactInternalTerms } from '../../../middleware/outputGuard';
 
 // ---------------------------------------------------------------------------
 // 挙動メトリクス（metric_name / labels / value の契約は docs/AGENT_METRICS.md）
@@ -437,6 +442,10 @@ async function executeHopToolCalls(
   // delete_chat_session が audit_logs に記録する実行者ロール。changedBy(email)と
   // 対にして executeToolCall へ渡す。
   actorRole: string,
+  // このリクエストの店主メッセージが行いたい操作を明示的に述べていたか
+  // (messageIndicatesHumanApproval)。true のときだけ、ターン跨ぎの untrusted-read
+  // ラッチを「今回だけ」バイパスする。同一ターン連鎖ブロックには影響しない。
+  humanApprovedThisRequest: boolean,
 ): Promise<void> {
   for (const toolCall of toolCalls) {
     const { id, name, args } = toolCall;
@@ -453,20 +462,36 @@ async function executeHopToolCalls(
     // ここでの判定結果は従来と完全に同一（挙動不変）。未分類の読み取りツールは
     // WRITE_TOOL_RISK_TIERS のメンバーシップで先に弾かれるため requiresConfirmation は呼ばれない。
     //
-    // ブロック条件は2つ（どちらも「人間の実際の同意を経ていない書き込み」を防ぐ）:
+    // ブロック条件は3つ（いずれも「人間の実際の同意を経ていない書き込み」を防ぐ）:
     //  1. blockedBySuggestChain … suggest_*→save_* の連鎖（SUGGEST_TO_SAVE_TOOL）
-    //  2. blockedByUntrustedRead … 信頼できないテキストの読み取り直後の書き込み（下記参照）
-    const blockedBySuggestChain = alreadySuggestedThisTurn && isConfirmationGatedWriteTool(name);
-    const blockedByUntrustedRead = untrustedReadToolsThisTurn.size > 0 && isConfirmationGatedWriteTool(name);
+    //  2. blockedByUntrustedReadSameTurn … 信頼できないテキストの読み取り直後(同一ターン)の書き込み
+    //  3. blockedByUntrustedReadLatch … 過去ターンで untrusted-read した session で、現ターンの
+    //     店主メッセージが明示的な操作指示でない(相槌のみ)まま破壊ツールを実行しようとする
+    //     ケース。history に残る注入指示に相槌一言で従わせるターン跨ぎ攻撃を塞ぐ。
+    const gatedWrite = isConfirmationGatedWriteTool(name);
+    const blockedBySuggestChain = alreadySuggestedThisTurn && gatedWrite;
+    const untrustedSameTurn = untrustedReadToolsThisTurn.size > 0;
+    const blockedByUntrustedReadSameTurn = untrustedSameTurn && gatedWrite;
+    // ラッチによるブロックは、同一ターン読み取りが無く(=そちらで既に捕捉済みでない)、
+    // かつ現ターンの店主メッセージが明示的な操作指示でない場合にのみ効かせる。
+    const blockedByUntrustedReadLatch =
+      !untrustedSameTurn &&
+      gatedWrite &&
+      hasActiveUntrustedReadLatch(sessionId) &&
+      !humanApprovedThisRequest;
 
     let result: string;
     let card: ActionCardPayload | undefined;
-    if (blockedByUntrustedRead) {
+    if (blockedByUntrustedReadSameTurn) {
       // 同一ターン内で「顧客・外部が書いた文字列」を読んだ直後に書き込みが連鎖しようとしている:
-      // 人間の確認を経ていないためブロック。次ターンで一覧を取り直すと再びこのブロックに
-      // 当たり続けるため（新しいリクエストのたびにフラグはリセットされる）、一覧の再取得ではなく
-      // 直前に得たIDを使って依頼し直すよう明示的に誘導する。
+      // 人間の確認を経ていないためブロック。一覧の再取得ではなく、直前に得たIDを使って
+      // 依頼し直すよう明示的に誘導する。
       result = `この書き込みは、直前に顧客・外部由来のテキストを読み取った同一ターン内での実行のため${BLOCKED_CHAIN_MARKER}。一覧を取り直さず、直前に得た [ID] を使ってもう一度依頼してください。`;
+    } else if (blockedByUntrustedReadLatch) {
+      // ターン跨ぎ: 直近の会話で untrusted なテキストを読み取っており、かつ現ターンの店主
+      // メッセージが明示的な操作指示になっていない。history に残る注入指示へ相槌一言で
+      // 従わせる攻撃を防ぐため、破壊ツールの自動実行をブロックし、明示的な指示を要求する。
+      result = `直近の会話で顧客・外部由来のテキストを読み取ったため、この破壊的な操作は${BLOCKED_CHAIN_MARKER}。実行する場合は、行いたい操作をご自身の言葉で明示的に指示してください（例:「FAQ 12番を削除して」）。`;
     } else if (blockedBySuggestChain) {
       // 同一ターン内で suggest → save が連鎖しようとしている: 人間の確認を経ていないためブロック
       result = `この保存は同一ターン内での連続実行のため${BLOCKED_CHAIN_MARKER}。提案内容を確認のうえ、あらためて「保存して」等のメッセージを送ってください。`;
@@ -496,7 +521,13 @@ async function executeHopToolCalls(
         card = raw.card;
       }
       if (name in SUGGEST_TO_SAVE_TOOL) suggestedThisTurn.add(name);
-      if (UNTRUSTED_TEXT_READ_TOOLS.has(name)) untrustedReadToolsThisTurn.add(name);
+      if (UNTRUSTED_TEXT_READ_TOOLS.has(name)) {
+        // 同一ターン内の連鎖ブロック用(リクエスト単位)
+        untrustedReadToolsThisTurn.add(name);
+        // ターン跨ぎブロック用(session 単位・TTL付き)。以降のターンで破壊ツールを
+        // 相槌一言で通さないためのラッチ。
+        latchUntrustedRead(sessionId, name);
+      }
     }
 
     // card を持たないツールでは JSON に card キー自体を出さない(既存レスポンス形と同一)。
@@ -765,6 +796,73 @@ const UNTRUSTED_TEXT_READ_TOOLS: ReadonlySet<string> = new Set([
 // 必須のため、この制約下では実施できない。列挙方式は残り、登録漏れの再発余地も残る。
 // 実施する場合は別タスクとして起票し、actionExecutor.ts が空くタイミングで着手する。
 
+// ---------------------------------------------------------------------------
+// 会話(session)スコープの untrusted-read ラッチ
+// ---------------------------------------------------------------------------
+// 背景(P1・プロンプトインジェクション→破壊的ツール実行):
+//   untrustedReadToolsThisTurn は HTTPリクエスト(=1ターン)単位でリセットされる。このため
+//   「ターン1で顧客チャット本文(get_chat_session_messages等)を読む→注入指示がassistant要約と
+//   なってフロントの history に残る→ターン2で店主が『続けて』等の一言を送る→モデルが history に
+//   残る注入に従い confirmed=true で破壊ツールを実行」という**ターン跨ぎ**の攻撃を素通しする
+//   (同一ターン連鎖ブロックはターン2では効かない)。
+//
+// 対策: untrusted な外部テキストを読んだ事実を session 単位のラッチとして保持し、ラッチが
+//   生きている間は破壊的(確認ゲート対象)ツールの自動実行をブロックする。ブロックの解除は
+//   「そのターンの店主自身のメッセージが、行いたい操作を明示的に述べている」場合のみ
+//   (messageIndicatesHumanApproval)。単なる相槌(「続けて」「はい」「お願いします」)では解除しない
+//   = confirmed 自己申告だけでは破壊ツールを通さない、を担保する。
+//
+// ラッチは untrusted-read のたびに更新され、TTL(30分)で失効する。history は max 20 件で
+//   いずれ古い注入は押し出されるため、TTLで risk window を有界化するのは妥当。
+//   ※ 承認メッセージでラッチを**消去はしない**(store は据え置き)。消してしまうと、承認ターンの
+//     直後に相槌で注入がトリガーされる穴が復活するため、リクエスト単位で「今回だけバイパス」する。
+interface UntrustedReadLatch {
+  tools: Set<string>;
+  latchedAt: number;
+}
+export const untrustedReadLatchStore: Map<string, UntrustedReadLatch> = new Map();
+const UNTRUSTED_READ_LATCH_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
+/** untrusted-read を session スコープでラッチ(更新)する。 */
+function latchUntrustedRead(sessionId: string, tool: string): void {
+  const existing = untrustedReadLatchStore.get(sessionId);
+  if (existing) {
+    existing.tools.add(tool);
+    existing.latchedAt = Date.now();
+  } else {
+    untrustedReadLatchStore.set(sessionId, { tools: new Set([tool]), latchedAt: Date.now() });
+  }
+}
+
+/** ラッチが TTL 内で生きているか。失効エントリは掃除する。 */
+function hasActiveUntrustedReadLatch(sessionId: string): boolean {
+  const entry = untrustedReadLatchStore.get(sessionId);
+  if (!entry) return false;
+  if (Date.now() - entry.latchedAt > UNTRUSTED_READ_LATCH_TTL_MS) {
+    untrustedReadLatchStore.delete(sessionId);
+    return false;
+  }
+  return true;
+}
+
+/** テスト専用: プロセス内Mapをリセット(jest.resetAllMocks は Map を消さないため)。 */
+export function __resetUntrustedReadLatchForTest(): void {
+  untrustedReadLatchStore.clear();
+}
+
+// 店主自身のメッセージが「行いたい操作を明示的に述べている」か(=操作名を含むか)。
+// 単なる相槌(続けて/はい/お願いします/OK/どうぞ 等)は操作名を含まないため false になる。
+// ここが true のときだけ、ターン跨ぎの untrusted-read ラッチを「今回だけ」バイパスする。
+// 注意: これは注入テキストが history に残っていても、破壊的実行が**店主の現ターンの明示指示**に
+// 由来することを最低限担保するためのヒューリスティック(操作動詞ベース)。完全な人間-in-the-loop
+// 証跡(提示された具体操作に紐づく署名付き確認トークン)は恒久対応として別タスク化する(PR本文TODO)。
+const HUMAN_APPROVAL_INTENT =
+  /(削除|消して|消去|削って|破棄|送信|返信|送って|実行|公開|非公開|停止|再開|有効化|無効化|更新|変更|上書き|反映|保存|登録|設定して|直して|修正して|依頼して|リセット|対応完了|完了にして|承認|確定)/;
+
+function messageIndicatesHumanApproval(message: string): boolean {
+  return HUMAN_APPROVAL_INTENT.test(message);
+}
+
 // MAX_TOOL_HOPS到達後の強制まとめ呼び出し用。tools無しにしただけでは、モデルがまだ
 // ツールを呼びたい場合に "<function=...>" のような擬似構文をテキストとして出力することが
 // 実測で確認されたため、明示的に禁止する一文を最後に差し込む。
@@ -818,6 +916,34 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
       });
     }
 
+    // -----------------------------------------------------------------
+    // 入力ガード(L5/L7): 店主メッセージにも顧客chat経路(src/api/chat/route.ts)と同じ
+    // 注入対策層を適用する。管理経路では URL拒否・繰り返し乱用・長さ切り詰めは正当な
+    // 管理操作(allowed_origins設定/URLからのFAQ取り込み/長文からの一括生成/同一操作の
+    // 反復)を妨げるため無効化し、エンコーディング攻撃検知(L5)と promptFirewall の注入
+    // マーカー除去(L7)のみを効かせる。ON/OFF は securityLayerConfig に従う
+    // (既定: 本番ON・dev/test OFF。test で既定OFFのため既存テストの挙動は不変)。
+    const l5 = l5SanitizeInput(message, sessionId, sessionHistoryStore, {
+      skipUrlCheck: true,
+      skipLengthTruncation: true,
+      skipRepeatCheck: true,
+    });
+    if (!l5.allowed) {
+      return res.status(400).json({ error: l5.userFacingMessage ?? 'メッセージを確認してください。' });
+    }
+    const firewall = applyPromptFirewall(l5.sanitizedMessage ?? message);
+    if (!firewall.allowed) {
+      // メッセージ全体が注入パターンのみ(除去後に空)の場合はブロック。混在時は該当部分だけ
+      // 除去した sanitizedMessage で続行するため、正当な管理質問を過剰ブロックしない。
+      return res.status(400).json({ error: firewall.userFacingMessage ?? 'その質問にはお答えできません。' });
+    }
+    // モデルへ渡す店主メッセージは注入マーカー除去済みのものを使う。
+    const sanitizedUserMessage = firewall.sanitizedMessage;
+
+    // ターン跨ぎ untrusted-read ラッチの「今回だけバイパス」判定。店主が現ターンで
+    // 行いたい操作を明示的に述べている場合のみ true(相槌一言では false)。元メッセージ基準。
+    const humanApprovedThisRequest = messageIndicatesHumanApproval(message);
+
     try {
       const systemPrompt =
         `あなたはテナント管理AIエージェントです。テナントID "${effectiveTenantId}" の管理者をサポートします。` +
@@ -862,7 +988,7 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
       const messages: GroqMessage[] = [
         { role: 'system', content: systemPrompt },
         ...historyMessages,
-        { role: 'user', content: message },
+        { role: 'user', content: sanitizedUserMessage },
       ];
 
       let totalPromptTokens = 0;
@@ -910,7 +1036,7 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
             }));
 
             const beforeCount = actions.length;
-            await executeHopToolCalls(parsedToolCalls, effectiveTenantId, db, suggestedThisTurn, untrustedReadToolsThisTurn, actions, messages, isSuperAdmin, sessionId, email, surface, role);
+            await executeHopToolCalls(parsedToolCalls, effectiveTenantId, db, suggestedThisTurn, untrustedReadToolsThisTurn, actions, messages, isSuperAdmin, sessionId, email, surface, role, humanApprovedThisRequest);
             for (const action of actions.slice(beforeCount)) {
               res.write(`event: action\ndata: ${JSON.stringify(action)}\n\n`);
             }
@@ -953,7 +1079,14 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
             surface,
           });
 
-          res.write(`event: done\ndata: ${JSON.stringify({ reply: finalReply, actions, answered_from: answeredFrom })}\n\n`);
+          // L8 出力ガード(社内用語の伏せ字)。OUTPUT_GUARD_ENABLED に依存せず常に適用する
+          // (顧客chat経路と同じ。フラグ無効化で社内用語(フレームワーク名)が素通りしないため)。
+          // 注: guardOutput の PII伏せ字は管理経路には掛けない — 認証済みの店主は自テナントの
+          // 顧客連絡先(電話/メール)を閲覧する正当な権限があり、伏せると正常系を壊すため。
+          // ストリーミング途中の delta トークンには未適用(done イベントの確定replyのみ)。
+          // トークン単位の逐次伏せ字(INTERNAL_TERM_HOLD_CHARS バッファ)は恒久対応(PR本文TODO)。
+          const streamSafeReply = redactInternalTerms(finalReply).text;
+          res.write(`event: done\ndata: ${JSON.stringify({ reply: streamSafeReply, actions, answered_from: answeredFrom })}\n\n`);
           res.end();
         } catch (err) {
           logger.warn('[POST /v1/admin/agent/chat stream]', err);
@@ -1008,7 +1141,7 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
           args: parseToolArgs(toolCall.function.arguments),
         }));
 
-        await executeHopToolCalls(parsedToolCalls, effectiveTenantId, db, suggestedThisTurn, untrustedReadToolsThisTurn, actions, messages, isSuperAdmin, sessionId, email, surface, role);
+        await executeHopToolCalls(parsedToolCalls, effectiveTenantId, db, suggestedThisTurn, untrustedReadToolsThisTurn, actions, messages, isSuperAdmin, sessionId, email, surface, role, humanApprovedThisRequest);
       }
 
       const hitHopLimit = finalReply === null;
@@ -1039,7 +1172,10 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
         surface,
       });
 
-      return res.json({ reply: finalReply, actions, answered_from: answeredFrom });
+      // L8 出力ガード(社内用語の伏せ字)。ストリーミング経路と同じく常に適用する。
+      // PII伏せ字は掛けない(店主は自テナント顧客の連絡先を見る正当な権限があるため)。
+      const redactedReply = redactInternalTerms(finalReply).text;
+      return res.json({ reply: redactedReply, actions, answered_from: answeredFrom });
     } catch (err) {
       logger.warn('[POST /v1/admin/agent/chat]', err);
       return res.status(500).json({ error: 'AIエージェントの応答生成に失敗しました' });
