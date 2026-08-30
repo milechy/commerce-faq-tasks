@@ -1,14 +1,26 @@
 title = "RAJIUCE gitleaks configuration"
 # Allowlist policy and rationale: docs/GITLEAKS_ALLOWLIST_POLICY.md
 
-# 注意: 本 config は「標準ルールの拡張」ではなく、下記カスタムルールのみを定義する。
-# gitleaks の標準ルールセット (useDefault) は、このリポジトリの履歴に対して 60 件規模の
-# 未トリアージ検知 (public/widget.min.js の難読化キー, lp/ の公開キー, テスト fixture 等) を
-# 生じさせるため、必須チェック "gitleaks" を壊すリスクがある。標準ルールの有効化は
-# それら既存検知の一括トリアージを伴う別タスクとして扱う (本 PR のスコープ外)。
-#   → 詳細は PR 説明 / docs/GITLEAKS_ALLOWLIST_POLICY.md を参照。
-# 本 PR は「DB 接続文字列パスワード漏洩」という、今回の監査で実際に CI をすり抜けた
-# 単一の穴を塞ぐことに限定する。
+# ---------------------------------------------------------------------------
+# 標準ルールセットを有効化 (Phase6)
+# ---------------------------------------------------------------------------
+# gitleaks 同梱の標準ルール (AWS キー / GitHub PAT / Slack トークン / 汎用高エントロピー
+# API キー 等) を有効化する。これまで本 config は useDefault を入れておらず、標準
+# シークレット検知が実質 no-op で、必須チェック "gitleaks" は DB 接続文字列ルール
+# 1 件しか見ていなかった。標準ルール有効化に伴う既存履歴の検知は、下記
+# [allowlist] / .gitleaksignore で 1 件ずつトリアージ済み。
+#   → トリアージ内訳と本物資格情報のローテ要リスト: docs/GITLEAKS_ALLOWLIST_POLICY.md
+[extend]
+useDefault = true
+
+# 本 config は上記 [extend] useDefault=true で gitleaks 標準ルールを有効化した上で、
+# 下記カスタムルール (DB 接続文字列パスワード) を追加する。
+# 標準ルール有効化に伴い全履歴に現れた既存検知 (計 29 件) は 1 件ずつトリアージ済みで、
+#   - 難読化 min.js / 公開 LP・デモ埋め込みキー / テスト fixture → 下の [allowlist] paths
+#   - 公開キー・識別子・docs プレースホルダ (deploy jwt=Supabase anon / CF beacon token /
+#     org UUID / docs 例) → .gitleaksignore に fingerprint 登録
+# のいずれかで抑止している。実在の生きた資格情報は 0 件だった (DB パスワードのみ #1100 で
+# 既知・ローテ要としてトラック済み)。内訳は docs/GITLEAKS_ALLOWLIST_POLICY.md を参照。
 
 # ---------------------------------------------------------------------------
 # カスタムルール: DB/メッセージング接続文字列にインラインで書かれたパスワード
@@ -69,12 +81,32 @@ paths = [
   # This is the carnation demo tenant key embedded for live widget demo pages.
   # The key grants access only to the sandboxed demo tenant — not a real credential leak.
   '''public/carnation-demo/''',
+  # Sibling single-file demo page (not under the dir above). Same demo-tenant embed key.
+  '''public/carnation-demo\.html''',
+
+  # Public landing / demo pages (Phase6 useDefault triage).
+  # The data-api-key values shown in these marketing/demo pages are widget *embed* keys,
+  # which are public by design (they ship in client-side HTML to every site visitor and
+  # only grant sandboxed demo-tenant access). No server-side secret belongs in this dir.
+  '''public/lp/''',
+
+  # Distributed widget bundle: minified/obfuscated build artifact. The generic-api-key
+  # rule matches base64/obfuscated string chunks that change every build; these are not
+  # committed credentials. Scoped to this single file, not all *.min.js.
+  '''public/widget\.min\.js''',
 
   # Test fixture files: strings are synthetic, clearly marked as test data.
   # e.g. "my-secret-api-key-12345", "test-raw-api-key-abc123", "test-key-abc123"
   # These do not correspond to any real credential in the system.
   '''tests/phase48/apiKeyAuth\.test\.ts''',
   '''tests/widget/trackConversion\.test\.ts''',
+  # Additional synthetic-fixture files surfaced by useDefault (Phase6 triage). The rjc_/r2c_
+  # values here are mocked API-key responses / embed-code assertions, not real credentials.
+  # Listed per-file (not a blanket tests/ path) so real secrets elsewhere stay in scope.
+  '''tests/widget/recordAbExposure\.test\.ts''',
+  '''tests/e2e/helpers/superAdminHarness\.ts''',
+  '''admin-ui/src/pages/admin/tenants/EmbedCodeTab\.test\.tsx''',
+  '''src/api/admin/tenants/routes\.test\.ts''',
 ]
 
 regexes = [

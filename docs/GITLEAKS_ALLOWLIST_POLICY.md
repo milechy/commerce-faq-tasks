@@ -151,15 +151,38 @@ postgresql://postgres:<20桁実PW>@127.0.0.1:5432/commerce_faq
   全て検知、プレースホルダ 10 種を全て非検知
 - `SCRIPTS/security-scan.sh` [3] にも同種 grep を追加 (ホストでなくパスワードで除外)
 
-### 標準ルール (useDefault) を有効化しない理由
+### 標準ルール (useDefault) を有効化 (2026-08-30 / Phase6)
 
-`[extend] useDefault = true` を入れると gitleaks 標準ルールセットがこのリポジトリの履歴に対し
-**60 件規模の未トリアージ検知** (public/widget.min.js の難読化キー, lp/ の公開キー, テスト fixture,
-deploy jwt 等) を生じさせ、必須チェック `gitleaks` を壊す。標準ルールの有効化はそれら既存検知の
-一括トリアージを伴う**別タスク**とし、本対応は「DB 接続文字列パスワード」の 1 穴に限定した。
+> 従前このセクションは「標準ルールを有効化しない理由」だった。#1100 は DB 接続文字列ルール
+> 1 件のみを追加し `useDefault` は入れなかったため、**AWS キー / GitHub PAT / Slack トークン等の
+> 標準シークレット検知が実質 no-op** のままだった。本対応 (`chore/gitleaks-enable-standard-rules`)
+> で `[extend] useDefault = true` を追加し、標準ルールを有効化した上で全履歴の既存検知を
+> トリアージした。
 
-> 補足: 現行の committed `.gitleaks.toml` は `[extend]` も `[[rules]]` も持たず、実は**標準ルールが
-> 一切動いていない (実質 no-op)** 状態だった。この点も別タスクで是正すべき既知課題。
+**標準ルールが実際に効くことの実証**: 本物形式の AWS access key / GitHub PAT / Slack bot token を
+リポジトリ外の一時ファイルに書いて scan → `aws-access-token` / `github-pat` / `slack-bot-token` の
+3 ルールで検知されることを確認済み (一時ファイルは削除、コミットには含めない)。
+
+#### 全履歴トリアージ内訳 (計 29 件)
+
+| 分類 | 件数 | ルール | 対応 | 生きた資格情報か |
+|---|---|---|---|---|
+| 難読化 min.js の文字列断片 | 12 | `generic-api-key` | `[allowlist]` path `public/widget.min.js` | 否 (ビルド生成物) |
+| 公開 LP/デモ埋め込みキー (`rjc_`) | 7 | `generic-api-key` | `[allowlist]` path `public/lp/`, `public/carnation-demo.html` | 否 (クライアント配布の公開キー) |
+| テスト fixture (`rjc_`/`r2c_`/`test`) | 5 | `generic-api-key` | `[allowlist]` path (対象4ファイル) | 否 (合成モック値) |
+| Supabase anon key (deploy workflow) | 1 | `jwt` | `.gitleaksignore` fingerprint | 否 (RLS 前提の公開 anon key) |
+| CF Web Analytics beacon token | 1 | `generic-api-key` | `.gitleaksignore` fingerprint | 否 (公開ビーコン token) |
+| Anthropic API org UUID (docs) | 1 | `generic-api-key` | `.gitleaksignore` fingerprint | 否 (識別子・HEAD redact 済) |
+| docs の curl Authorization 例 | 2 | `curl-auth-header` | `.gitleaksignore` fingerprint | 否 (プレースホルダ) |
+| **合計** | **29** | — | — | **生きた資格情報: 0 件** |
+
+- **本物として要ローテーションの新規資格情報は 0 件**。標準ルール有効化で新たに露出した生きた
+  secret は無かった (DB パスワードのみ #1100 で既知・ローテ要として下記トラック済み)。
+- path allowlist は「その dir/ファイルに server-side secret が入る余地が無い」類型
+  (min.js ビルド生成物 / 公開 LP / 特定テスト fixture) に限定。deploy workflow・ops guide・docs は
+  過去に実 DB パスワードが漏れた種類のため path 一括除外せず、fingerprint 単位に留めている。
+- 検証: `gitleaks git . --config .gitleaks.toml` (全履歴) = **0**、
+  `gitleaks detect --no-git --config .gitleaks.toml` (working tree) = **0**。
 
 ---
 
