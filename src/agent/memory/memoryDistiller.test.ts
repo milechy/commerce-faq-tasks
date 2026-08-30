@@ -723,36 +723,70 @@ describe("H-6 e2e: 会話 → 手動昇格 → learned_memory → 次の回答�
     expect(userMessage).toContain("全車3ヶ月保証付きです");
   });
 
-  it("[回帰リスク] LEARNED_MEMORY_TENANTS allowlistに無いテナントは、手動昇格が成功しても内容が二度とプロンプトに載らない", async () => {
-    // 手動昇格のPR説明は「LEARNED_MEMORY_TENANTS allowlistは経由しない」を書込み側の
-    // 意図として明記しているが、読込み側(isLearnedMemoryReadEnabled)は書込みとは独立に
-    // 同じallowlistを見る(featureFlag.ts)。allowlist外のテナントで手動昇格すると、
-    // 書込みは成功するのに読込みが恒久的に閉じたままになり、H-6の目的(超少数会話でも
-    // 学習ループに載せる)を静かに満たせない組み合わせが存在する。
+  // H-6欠陥修正 (GID 1217972798328871): このテストはPR #1103時点では
+  // 「allowlist外のテナントは手動昇格しても内容が二度とプロンプトに載らない」ことを
+  // [回帰リスク]として固定していた。featureFlag.ts の isLearnedMemoryReadEnabled から
+  // 書込み側allowlistの判定を外した(読込みは「存在する行」しか返せず、行の存在自体を
+  // 書込み側gateが既に制御しているため)ことで、この非対称は解消された。
+  // 本テストは同じ構造(allowlist外テナント)のまま、期待値を「反映される」に反転させ、
+  // H-6の目的(超少数会話でも学習ループに載せる)が満たされることを固定する。
+  it("allowlistに無いテナントでも、手動昇格した内容が次の会話の合成プロンプト(userメッセージ)に実際に含まれる", async () => {
     const tenantId = "not-in-allowlist";
     process.env.LEARNED_MEMORY_ENABLED = "true";
-    process.env.LEARNED_MEMORY_TENANTS = "some-other-tenant"; // tenantIdを含まない
+    process.env.LEARNED_MEMORY_TENANTS = "some-other-tenant"; // tenantIdを含まない(書込み側allowlist外)
 
     const fakePool = makeFakeLearnedMemoryPool();
-    useRealRepositoryWithFakePool(fakePool);
-    mockCall.mockResolvedValue('{"question":"q","answer":"a"}');
+    const realRepo = useRealRepositoryWithFakePool(fakePool);
 
+    mockCall.mockResolvedValue(
+      '{"question":"保証はありますか","answer":"全車3ヶ月保証付きです。延長保証もご用意しています。"}',
+    );
+
+    // 1) 会話 → 手動昇格(allowlist外だが、手動昇格はallowlistをバイパスするため成功する)
     const promoted = await manuallyPromoteSession({
       tenantId,
       sessionId: "sess-e2e-2",
       judgeScore: 10,
       messages: MESSAGES,
     });
-
-    // 書込みは成功する(手動はallowlistをバイパスするため)
     expect(promoted).toEqual({ promoted: true });
     expect(fakePool.table).toHaveLength(1);
 
-    // しかし読込みのallowlistには入っていない → searchAgent.ts は
-    // learnedReadEnabled===false の分岐でsearchLearnedMemoryを一切呼ばない
-    // (このテストは分岐自体を固定する。フラグ運用でallowlistを絞ると、
-    //  手動昇格したはずの内容が「見えない」まま溜まり続ける)。
-    expect(isLearnedMemoryReadEnabled(tenantId)).toBe(false);
+    // 2) 読込み側ゲートも開いていることを確認(書込み側allowlistには入っていないが、
+    //    読込みは書込みallowlistを見ないため true になる)
+    expect(isLearnedMemoryReadEnabled(tenantId)).toBe(true);
+
+    // 3) searchAgent.ts が実際に呼ぶのと同じ実装(searchLearnedMemory)で読み出す
+    const hits = await realRepo.searchLearnedMemory({
+      tenantId,
+      embedding: Array.from({ length: 1536 }, () => 0.01),
+      topK: 5,
+      weight: 0.9,
+    });
+    expect(hits).toHaveLength(1);
+    expect(hits[0].text).toBe("全車3ヶ月保証付きです。延長保証もご用意しています。");
+
+    // 4) searchAgent.ts の merge と同じ形で次ターンの synthesizeAnswer に渡す
+    stubSynthesisPoolQueries();
+    process.env.GROQ_API_KEY = "test-groq-key";
+    process.env.GAP_DETECTION_ENABLED = "false";
+    mockCall.mockResolvedValue("かしこまりました。3ヶ月保証がついております。");
+
+    await synthesizeAnswer({
+      query: "保証について教えて",
+      items: [
+        { id: hits[0].id, text: hits[0].text, score: hits[0].score, source: "pg", metadata: hits[0].metadata },
+      ] as never,
+      tenantId,
+    });
+
+    const synthCall = (groqClient.callWithUsage as jest.Mock).mock.calls[
+      (groqClient.callWithUsage as jest.Mock).mock.calls.length - 1
+    ]![0];
+    const userMessage = synthCall.messages.find((m: { role: string }) => m.role === "user").content as string;
+
+    // 受け入れ条件そのもの: allowlist外テナントでも手動昇格した内容が次の回答生成プロンプトに載る
+    expect(userMessage).toContain("全車3ヶ月保証付きです");
   });
 });
 
