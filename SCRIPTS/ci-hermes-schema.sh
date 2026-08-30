@@ -22,6 +22,13 @@
 # 既に作成済みのため、ここでは CREATE TABLE IF NOT EXISTS により冪等に
 # 再適用されるだけで無害)。
 #
+# ★faq_embeddings / book_uploads もここに同居させている★
+# 書籍チャンク編集の楽観ロック(content_updated_at)を実Postgresで検証する
+# bookChunkOptimisticLockSqlIntegration.test.ts が使う。hermes-mcp固有の
+# テーブルとは無関係だが、Gate 4 は使い捨てPostgres・同一DBをジョブ全体で
+# 使い回す方針(billing-sql ジョブのコメント参照)のため、新しいサービス/
+# 新しい環境変数を増やさずここに追加する。
+#
 # 使い方:
 #   DATABASE_URL=postgres://... bash SCRIPTS/ci-billing-schema.sh
 #   DATABASE_URL=postgres://... bash SCRIPTS/ci-hermes-schema.sh
@@ -71,11 +78,41 @@ FILES=(
   # 無くてもPOSTの成否には影響しないが、無いと毎回42P01のエラーログが出て
   # テスト出力を汚す。実配線に忠実にするためテーブルを用意する)。
   "src/api/admin/notifications/migration_notifications.sql"
+  # faq_embeddings ベーステーブル(vector拡張の CREATE EXTENSION も含む)。
+  # PUT /v1/admin/knowledge/book-pdf/chunks/:chunkId の楽観ロック(CASのUPDATE
+  # WHERE句)を実Postgresで検証するために必要。
+  "docs/sql/0002_faq_embeddings_pgvector.sql"
+  # book_uploads ベーステーブル。PUTハンドラの
+  # `JOIN book_uploads bu ON bu.id = (fe.metadata->>'book_id')::int` が要求する。
+  # ★2つある book_uploads 作成migrationのうちこちらを採用★
+  # src/migrations/phase44_book_uploads.sql という別バージョンも存在するが、
+  # gitログ上こちらのファイル(2026-03-25)の方が phase44_book_uploads.sql
+  # (2026-05-28)より先に追加されており、実際に本番へ最初に適用されたのは
+  # こちら(CREATE TABLE IF NOT EXISTS のため、後追いの phase44版を流しても
+  # 本番のテーブル定義は変わらない)。CIのスキーマを本番の積み上げ順に揃える。
+  "src/api/admin/knowledge/migration_book_uploads.sql"
+  # book_uploads.content_type 等(Phase50)。PUTハンドラ自体は参照しないが、
+  # 本番の積み上げ順どおりに適用する。
+  "src/api/admin/knowledge/migration_book_schema.sql"
 )
 
 for f in "${FILES[@]}"; do
   echo "=== applying ${f} ==="
   psql -v ON_ERROR_STOP=1 -1 "${DATABASE_URL}" -f "${f}"
 done
+
+# faq_embeddings.is_excluded_from_search(PUTハンドラのSELECTが読む列)。
+# ci-billing-schema.sh の tenant_contact_email と同じ理由で、ファイル全体では
+# なく列だけを個別に当てる: 実際の migration ファイル
+# (src/migrations/phase69_2_excluded_ids.sql)は同じトランザクションで
+# faq_docs・tenants にも ALTER するが、faq_docs はこのリポジトリに
+# CREATE TABLE の migration ファイルが存在せず(本番では本スクリプトの
+# 対象外の経路で作成済み)、ここに無い状態でファイル全体を流すと
+# 42P01(relation "faq_docs" does not exist)で丸ごと失敗する。
+echo "=== applying faq_embeddings.is_excluded_from_search (from phase69_2_excluded_ids.sql) ==="
+psql -v ON_ERROR_STOP=1 -1 "${DATABASE_URL}" -c \
+  "ALTER TABLE faq_embeddings ADD COLUMN IF NOT EXISTS is_excluded_from_search BOOLEAN DEFAULT FALSE;"
+psql -v ON_ERROR_STOP=1 -1 "${DATABASE_URL}" -c \
+  "CREATE INDEX IF NOT EXISTS idx_faq_embeddings_excluded ON faq_embeddings (tenant_id, is_excluded_from_search) WHERE is_excluded_from_search = true;"
 
 echo "✅ hermes-mcp schema bootstrap complete"
