@@ -4906,6 +4906,50 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(card.errorUrls).toEqual([{ url: 'https://example.com/broken', error: 'ページの取得に失敗しました' }]);
     });
 
+    // H-5テスト強化: 全URL取得失敗(totalFaqs===0)はカード無しのエラー文言のみを返す
+    // ことを固定する。card が無いツール結果は copilot-preview 側で汎用の agentAction
+    // カード(常に緑の✅表示。成功/失敗を区別しない既存の共通フォールバック挙動)に
+    // 落ちるため、ここでは「サーバがcardを作らない(=成功を装う数値を渡さない)」ことまでを
+    // 保証する。表示側の✅演出自体はこのPR固有の実装ではなく全ツール共通の既存挙動のため、
+    // ここでは変更しない(詳細はPR報告の残存リスク参照)。
+    it('suggest_faq_import_from_urls: 全URLの取得に失敗した場合はcard無しでエラー文言のみを返す(0件を成功と偽らない)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fi-5c', 'suggest_faq_import_from_urls', { urls: ['https://example.com/broken-1', 'https://example.com/broken-2'] }))
+        .mockResolvedValueOnce(makeGroqResponse('取得できませんでした。'));
+
+      mockGenerateScrapeFaqPreview.mockResolvedValueOnce([
+        { url: 'https://example.com/broken-1', faqs: [], error: 'ページの取得に失敗しました' },
+        { url: 'https://example.com/broken-2', faqs: [], error: 'ページの取得に失敗しました' },
+      ]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'このURLたちからFAQを作って', sessionId: 'sess-fi-05c' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('FAQを生成できませんでした');
+      expect(res.body.actions[0].result).toContain('ページの取得に失敗しました');
+      expect(res.body.actions[0].card).toBeUndefined();
+      // DBへは何も書かない読み取り専用ツールであることを、失敗時にも保つ
+      expect(getStagedFaqImport('tenant-abc', 'sess-fi-05c')).toBeNull();
+    });
+
+    // H-5テスト強化: urlsが空配列(0件)は6件以上と同じバリデーション分岐(1〜5件)で
+    // 弾かれることを固定する(空配列は Array.isArray としては true だが length===0)。
+    it('suggest_faq_import_from_urls: urlsが空配列(0件)ならエラーを返しgenerateScrapeFaqPreviewは呼ばない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fi-5d', 'suggest_faq_import_from_urls', { urls: [] }))
+        .mockResolvedValueOnce(makeGroqResponse('URLを指定してください。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'URL無しで作って', sessionId: 'sess-fi-05d' });
+
+      expect(res.status).toBe(200);
+      expect(mockGenerateScrapeFaqPreview).not.toHaveBeenCalled();
+      expect(res.body.actions[0].result).toContain('1〜5件');
+    });
+
     it('suggest_faq_import_from_text: 20件上限で打ち切られても、カードのtotalに切り詰め前の件数が残る', async () => {
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('call-fi-3t', 'suggest_faq_import_from_text', { text: '十分な長さの商品説明文です。'.repeat(5) }))
@@ -4931,6 +4975,35 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(card.total).toBe(25); // 切り詰め前の生成数(黙って切らない)
       expect(card.faqs).toHaveLength(20); // 実際に登録対象になる件数
       expect(card.truncated).toBe(true);
+    });
+
+    // H-5テスト強化: MAX_IMPORT_FAQS(20件)ちょうどは切り詰め対象に含まれない境界値。
+    // actionExecutor.ts の判定が `total > MAX_IMPORT_FAQS`(厳密不等号)であるため、
+    // 21件で発火することは上のテストで確認済みだが、20件ちょうどでtruncatedがtrueに
+    // ならないこと(off-by-oneで21件以上の条件が20件以上になっていないか)は未検証だった。
+    it('suggest_faq_import_from_text: ちょうど20件ならtruncatedにならない(切り詰め境界)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fi-3u', 'suggest_faq_import_from_text', { text: '十分な長さの商品説明文です。'.repeat(5) }))
+        .mockResolvedValueOnce(makeGroqResponse('プレビューを作成しました。'));
+
+      const exactlyTwenty = Array.from({ length: 20 }, (_, i) => ({
+        question: `質問${i}`,
+        answer: `回答${i}`,
+        category: 'store_info',
+        duplicate: null,
+      }));
+      mockGenerateTextFaqPreview.mockResolvedValueOnce(exactlyTwenty);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'このテキストからFAQを作って', sessionId: 'sess-fi-03u' });
+
+      expect(res.status).toBe(200);
+      const card = res.body.actions[0].card;
+      expect(card.total).toBe(20);
+      expect(card.faqs).toHaveLength(20);
+      expect(card.truncated).toBe(false);
+      expect(res.body.actions[0].result as string).not.toContain('上限');
     });
 
     it('suggest_faq_import_from_urls: urlsが6件以上ならエラーを返しgenerateScrapeFaqPreviewは呼ばない', async () => {

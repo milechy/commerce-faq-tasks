@@ -247,6 +247,12 @@ describe('requiresConfirmation', () => {
     ['low', 'dismiss_knowledge_gap'],
     ['medium', 'save_faq'],
     ['medium', 'update_engagement_rule'],
+    // H-5テスト強化: copilot-preview のFAQ取込プレビューカードに追加した「登録して」
+    // チップは commit_faq_import(confirmed=true) を自然文経由で呼ぶだけであり、
+    // この階層表を直接バイパスする経路を新設していないことの固定。medium から
+    // low へ静かに引き下げられていないかをここで検出する(low/high への
+    // 誤分類は他の一致テストでは検出できない具体値の回帰)。
+    ['medium', 'commit_faq_import'],
     ['high', 'delete_faq'],
     ['high', 'request_sai_task'],
   ];
