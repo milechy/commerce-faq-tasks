@@ -200,6 +200,22 @@ async function distillAndSave(params: {
 }): Promise<DistillAndSaveOutcome> {
   const { tenantId, sessionId, judgeScore, messages, promotedBy } = params;
 
+  const repo = createLearnedMemoryRepository();
+
+  // H-11 (GID 1217973238377692): 重複チェックを外部API呼び出し(Groq蒸留 + 埋め込み、
+  // どちらも課金)より前に行う。saveLearnedMemory の ON CONFLICT (tenant_id,
+  // source_session_id) と同じキーで引く。同一セッションに2回昇格を実行すると、
+  // 従来は2回目もGroq/埋め込みAPIを叩いた後にDBのON CONFLICTで捨てるだけになっていた
+  // (learned_memoryは1行のままだが無駄な従量課金が乗る)。
+  // ON CONFLICT DO NOTHING 自体は競合(同時多重リクエスト)に対する最終防壁として残す。
+  if (await repo.isSessionAlreadyPromoted(tenantId, sessionId)) {
+    logger.info(
+      { tenantId, sessionId, promotedBy },
+      "[learnedMemory] already promoted (pre-check, skip external API calls)",
+    );
+    return { promoted: false, reason: "already_promoted" };
+  }
+
   const qa = await distillConversation(tenantId, messages);
   if (!qa) {
     logger.debug({ tenantId, sessionId, promotedBy }, "[learnedMemory] distill yielded no Q&A");
@@ -228,7 +244,6 @@ async function distillAndSave(params: {
     metadata: { distilled_by: GPT_OSS_120B, promoted_by: promotedBy },
   };
 
-  const repo = createLearnedMemoryRepository();
   const inserted = await repo.saveLearnedMemory(entry);
 
   logger.info(
