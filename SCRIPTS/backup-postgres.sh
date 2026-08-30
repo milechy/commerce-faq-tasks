@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # backup-postgres.sh — 本番 PostgreSQL の日次バックアップ
 #
+# オフサイト複製について:
+#   このスクリプトの保存先(/backup)は本番 VPS と同一ホスト。VPS 全損時に道連れになる。
+#   物理的に離れた場所(Cloudflare R2)への複製は SCRIPTS/backup-offsite.sh を
+#   本スクリプトの直後に cron で走らせて行う。詳細は docs/BACKUP_AND_MONITORING.md。
+#
 # なぜ必要か:
 #   2026-08-18 の実測で、本番DBのバックアップが1本も存在しないことが判明した。
 #   さらに docs/DATA_RETENTION_POLICY.md §4.1 は「pg_dump (VPS cron) / 日次 / 7日」と
