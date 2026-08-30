@@ -47,6 +47,7 @@ describe("Tuning Rules API", () => {
 
   beforeAll(() => {
     process.env.NODE_ENV = "development";
+    process.env.ALLOW_INSECURE_DEV_AUTH = "1"; // [P1] dev-decode opt-in（署名検証スキップ）
   });
 
   beforeEach(() => {
