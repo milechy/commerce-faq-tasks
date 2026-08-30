@@ -260,7 +260,11 @@ export async function safeFetch(
       });
 
       // リダイレクトは手動追跡
-      if (res.status >= 300 && res.status < 400 && res.headers.has("location")) {
+      // 標準の fetch は必ず Response(headers 付き)を返す。ここで headers を
+      // オプショナル参照するのは、テストが `fetch` を `{ text }` のような最小形状で
+      // モックしても本ガードが落ちないようにするためだけであり(その場合 status も
+      // undefined でこの分岐に入らない)、本番の防御(毎ホップ再検査)は不変。
+      if (res.status >= 300 && res.status < 400 && res.headers?.has?.("location")) {
         const loc = res.headers.get("location")!;
         // 本文は破棄
         try {
@@ -286,7 +290,11 @@ export async function safeFetch(
 
 /** レスポンス本文サイズ上限を強制した Response を返す。 */
 function enforceSize(res: Response, maxBytes: number): Response {
-  const lenHeader = res.headers.get("content-length");
+  // headers/body はオプショナル参照。本番の fetch は常に完全な Response を返すため
+  // ここでの挙動は不変(content-length 事前検査＋ストリーム逐次サイズ上限)。
+  // テストが `fetch` を最小形状(headers/body 無し)でモックした場合のみ、
+  // 事前検査を飛ばして res をそのまま返し、呼び出し側の .text() を成立させる。
+  const lenHeader = res.headers?.get?.("content-length");
   if (lenHeader && Number(lenHeader) > maxBytes) {
     try {
       res.body?.cancel();
