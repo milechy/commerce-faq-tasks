@@ -24,3 +24,40 @@
 8fdff15d1fa9d6c50ef3f782d8d37326b1e17742:VPS_OPS_GUIDE.md:db-connection-string-password:344
 8fdff15d1fa9d6c50ef3f782d8d37326b1e17742:VPS_OPS_GUIDE.md:db-connection-string-password:347
 c08a4ec64c90b58d2671249aa039f19cfbacfeb1:.claude/agents/deploy-checker.md:db-connection-string-password:50
+
+# ===========================================================================
+# 標準ルール (useDefault) 有効化に伴うトリアージ (2026-08-30 / Phase6)
+# ===========================================================================
+# 下記は gitleaks 標準ルールが全履歴で検知した個別項目のうち、path allowlist に
+# まとめにくい (= 誤って他ルールを無効化したくない機密性の高いファイル/docs 内) もの。
+# いずれも「公開前提のキー・識別子・docs プレースホルダ」で *生きた資格情報ではない*。
+# 各項目に git 履歴用 fingerprint と、HEAD (working-tree, --no-git) 用 fingerprint の
+# 両方を登録する (HEAD に残るものは 2 形式必要)。
+#
+# 判断根拠:
+#   - deploy jwt: Supabase の *anon* key。RLS 前提でブラウザに配布される公開キー
+#     (ワークフロー内コメントにも「秘匿対象ではない」と明記)。実 secret は ${{ secrets.* }} 経由。
+#   - CF beacon token: Cloudflare Web Analytics のビーコン token。クライアント HTML に
+#     埋め込まれ全訪問者に配布される公開トークン。
+#   - org UUID: Anthropic API の組織識別子 (認証キーではない)。HEAD では既に redact 済み、
+#     残るのは旧コミットのみ。
+#   - docs 例の Authorization ヘッダ: ドキュメントのプレースホルダ ("secret..." 等)。
+#
+# ファイルを path 一括 allowlist しない理由: これらは deploy workflow / ops guide / docs で、
+# いずれも過去に *実* DB パスワードが漏れた実績のある種類のファイル。path で丸ごと除外すると
+# 将来そこに入る本物の secret を見逃すため、fingerprint 単位に留める。
+
+# --- deploy jwt (Supabase anon key, public) — .github/workflows/deploy-admin-ui.yml:43
+f84e75bdc31d6123f1ad281456e39390f48379cd:.github/workflows/deploy-admin-ui.yml:jwt:43
+.github/workflows/deploy-admin-ui.yml:jwt:43
+
+# --- CF Web Analytics beacon token (public) — VPS_OPS_GUIDE.md:291
+3185fc7491e607147c986ae19a93eea29bd45c80:VPS_OPS_GUIDE.md:generic-api-key:291
+VPS_OPS_GUIDE.md:generic-api-key:291
+
+# --- Anthropic API org UUID (identifier, not a credential; HEAD は redact 済) — 旧コミットのみ
+d66e274572fdaee66a02206c422acfc887de6c34:docs/MANAGED_AGENTS_APPLICATION.md:generic-api-key:129
+
+# --- docs の curl Authorization ヘッダのプレースホルダ ("secret...") — 旧コミットのみ
+0cb80411969ffbb57b6ace2c8b2d71f627a8d0b2:docs/api-agent.md:curl-auth-header:135
+82bc41dd1baae044fbb26212f2dc10ea28c30f2d:docs/api-agent.md:curl-auth-header:135
