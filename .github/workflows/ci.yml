@@ -133,6 +133,14 @@ jobs:
             src/api/hermes-mcp/hermesProposalsWriteSqlIntegration.test.ts \
             src/api/hermes-mcp/hermesMcpRepositorySqlIntegration.test.ts
 
+      # getRuleEffect(DiD集計。GET /v1/hermes-mcp/proposalsがHermesへの効果測定に使う)は、
+      # before/afterの境界(>=)・tenant_id越境・score=0/NULLの扱い・LIMIT打ち切りなど、
+      # モックでは検証できないSQLの意味論そのものが対象のため、実Postgresで確認する。
+      # 依存テーブル(tuning_rules/chat_sessions/chat_messages/conversation_evaluations/
+      # conversion_attributions)はhermes-mcpスキーマが既に作成済みのため、そのまま使い回す。
+      - name: Test analytics SQL against real Postgres
+        run: pnpm jest --runInBand src/api/admin/analytics/ruleEffectSqlIntegration.test.ts
+
   admin-ui-build:
     name: Gate 3 — admin-ui typecheck + test + build
     runs-on: ubuntu-latest
