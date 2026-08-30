@@ -7,6 +7,9 @@
 import type { Pool } from "pg";
 import { AUTO_OUTCOME_RECORDED_BY } from "../chat-history/chatHistoryRepository";
 import { decryptText } from "../../../lib/crypto/textEncrypt";
+// 型のみの参照(measurementHealth.ts は periodToInterval/userSourceClause を本ファイルから
+// importしているため、型のみのimportに留めて実行時の循環参照を避ける)。
+import type { RateMetric } from "./measurementHealth";
 
 type Db = Pick<Pool, "query">;
 
@@ -1021,5 +1024,54 @@ export async function fetchKnowledgeAttribution(
       top_performer: topPerformer,
       worst_performer: worstPerformer,
     },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// GID 1217972930945091 (H-7): Hermes提案の採択率。
+//
+// src/api/hermes-mcp/CLAUDE.md: 「評価層はR2C側にある。Hermesにeval/LLMOpsは無い。
+// 強化する前に採択率(tuning_rulesのsource='hermes'×status)で測る。測れないものを
+// 強化しない」。月$23を払い続けるか停止するか(Asana 1217848811975968)の判断材料。
+//
+// 新テーブル・新しい計測基盤は作らない(CLAUDE.md禁止32)。既存の tuning_rules を
+// 集計するだけで出す。schemaHealth.ts / ignitionStatus.ts と同じく「テナント固有」
+// ではなく「R2C運用の判断材料」のため、period/tenantIdで絞らない(全期間・全テナント
+// 横断の累計値。measurement-healthエンドポイントでsuper_adminにのみ合成する)。
+// ---------------------------------------------------------------------------
+
+export interface HermesAcceptanceRateResponse {
+  /** active / (active + rejected)。pendingは未判断のため母数に含めない。
+   *  denominator=0ならrate=null(CLAUDE.md禁止34: 母数不足で0%を出さない)。 */
+  acceptanceRate: RateMetric;
+  /** 参考情報。承認/却下いずれの母数にも含めない未処理件数。 */
+  pendingCount: number;
+  /** この集計を行った時刻(UIに必ず併記する)。 */
+  asOf: string;
+}
+
+export async function fetchHermesAcceptanceRate(db: Db): Promise<HermesAcceptanceRateResponse> {
+  const result = await db.query<{ active: string; rejected: string; pending: string }>(
+    `SELECT
+       COUNT(*) FILTER (WHERE status = 'active')   AS active,
+       COUNT(*) FILTER (WHERE status = 'rejected') AS rejected,
+       COUNT(*) FILTER (WHERE status = 'pending')  AS pending
+     FROM tuning_rules
+     WHERE source = 'hermes'`,
+  );
+  const row = result.rows[0];
+  const active = parseInt(row?.active ?? "0", 10);
+  const rejected = parseInt(row?.rejected ?? "0", 10);
+  const pendingCount = parseInt(row?.pending ?? "0", 10);
+  const denominator = active + rejected;
+
+  return {
+    acceptanceRate: {
+      numerator: active,
+      denominator,
+      rate: denominator > 0 ? Math.round((active / denominator) * 1000) / 10 : null,
+    },
+    pendingCount,
+    asOf: new Date().toISOString(),
   };
 }

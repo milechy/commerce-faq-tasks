@@ -10,6 +10,7 @@ import { request } from "../../../../tests/helpers/testServer";
 const mockFetchMeasurementHealth = jest.fn();
 const mockFetchSchemaHealth = jest.fn();
 const mockFetchIgnitionStatus = jest.fn();
+const mockFetchHermesAcceptanceRate = jest.fn();
 
 jest.mock('./measurementHealth', () => ({
   fetchMeasurementHealth: (...args: unknown[]) => mockFetchMeasurementHealth(...args),
@@ -19,6 +20,13 @@ jest.mock('./schemaHealth', () => ({
 }));
 jest.mock('./ignitionStatus', () => ({
   fetchIgnitionStatus: (...args: unknown[]) => mockFetchIgnitionStatus(...args),
+}));
+// H-7(GID 1217972930945091): fetchHermesAcceptanceRateだけ差し替える(他の
+// summaryQueries.tsのexportは本物のまま。空のpool({})に対して本物のクエリを
+// 投げて例外になるのを避けるのはfetchHermesAcceptanceRateだけで十分)。
+jest.mock('./summaryQueries', () => ({
+  ...jest.requireActual('./summaryQueries'),
+  fetchHermesAcceptanceRate: (...args: unknown[]) => mockFetchHermesAcceptanceRate(...args),
 }));
 
 jest.mock('../../../lib/db', () => ({ pool: {}, getPool: () => ({}) }));
@@ -71,6 +79,11 @@ describe('GET /v1/admin/analytics/measurement-health のスキーマ整合', () 
       envControlledFeatures: ['judge_sweep'],
       anyEnabled: false,
     });
+    mockFetchHermesAcceptanceRate.mockReset().mockResolvedValue({
+      acceptanceRate: { numerator: 3, denominator: 4, rate: 75 },
+      pendingCount: 5,
+      asOf: '2026-08-30T00:00:00.000Z',
+    });
   });
 
   it('super_admin には欠落列を返す', async () => {
@@ -94,9 +107,11 @@ describe('GET /v1/admin/analytics/measurement-health のスキーマ整合', () 
     expect(res.status).toBe(200);
     expect(res.body.schemaHealth).toBeUndefined();
     expect(res.body.ignitionStatus).toBeUndefined();
+    expect(res.body.hermesAcceptanceRate).toBeUndefined();
     // テナントに対して余計なクエリを投げない
     expect(mockFetchSchemaHealth).not.toHaveBeenCalled();
     expect(mockFetchIgnitionStatus).not.toHaveBeenCalled();
+    expect(mockFetchHermesAcceptanceRate).not.toHaveBeenCalled();
     // 既存の計測ヘルス自体は従来どおり返る
     expect(res.body.validUserSessionCount).toBe(0);
   });
@@ -121,5 +136,37 @@ describe('GET /v1/admin/analytics/measurement-health のスキーマ整合', () 
     expect(res.body.ignitionStatus.rows[0].tenantId).toBe('carnation');
     expect(res.body.ignitionStatus.envControlledFeatures).toContain('judge_sweep');
     expect(res.body.ignitionStatus.anyEnabled).toBe(false);
+  });
+
+  // H-7(GID 1217972930945091): Hermes提案の採択率。集計ロジック自体(pendingの除外・
+  // rate:nullの条件)は measurementHealth.test.ts の fetchHermesAcceptanceRate で
+  // 純関数として検証済みなので、ここでは「super_adminにだけ合成される」ことだけを固定する。
+  it('super_admin にはHermes提案の採択率も返す', async () => {
+    const res = await request(makeApp())
+      .get('/v1/admin/analytics/measurement-health')
+      .set('x-role', 'super_admin');
+
+    expect(res.status).toBe(200);
+    expect(res.body.hermesAcceptanceRate).toEqual({
+      acceptanceRate: { numerator: 3, denominator: 4, rate: 75 },
+      pendingCount: 5,
+      asOf: '2026-08-30T00:00:00.000Z',
+    });
+    expect(mockFetchHermesAcceptanceRate).toHaveBeenCalledTimes(1);
+  });
+
+  it('母数不足(denominator=0)のときも rate:null をそのまま返す(0%に丸めない)', async () => {
+    mockFetchHermesAcceptanceRate.mockResolvedValueOnce({
+      acceptanceRate: { numerator: 0, denominator: 0, rate: null },
+      pendingCount: 2,
+      asOf: '2026-08-30T00:00:00.000Z',
+    });
+
+    const res = await request(makeApp())
+      .get('/v1/admin/analytics/measurement-health')
+      .set('x-role', 'super_admin');
+
+    expect(res.body.hermesAcceptanceRate.acceptanceRate.rate).toBeNull();
+    expect(res.body.hermesAcceptanceRate.acceptanceRate.denominator).toBe(0);
   });
 });

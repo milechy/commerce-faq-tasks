@@ -115,3 +115,130 @@ describe("MonitoringPage — 計測ヘルス", () => {
     expect(screen.getByText("計測ヘルスの取得に失敗しました")).toBeTruthy();
   });
 });
+
+// H-7(GID 1217972930945091): Hermes提案の採択率カード。super_adminのときだけ
+// hermesAcceptanceRateがAPIレスポンスに含まれる(サーバ側の合成条件は
+// schemaHealthRoute.test.tsで検証済み)。ここではフィールドの有無でカードの
+// 出し分けと、CLAUDE.md禁止34(母数不足で0%を出さない)を検証する。
+describe("MonitoringPage — Hermes提案の採択率", () => {
+  const BASE_HEALTH = {
+    sourceBreakdown: [{ source: "user", count: 13 }],
+    emptySessionCount: 0,
+    cvSessionLinkRate: { numerator: 0, denominator: 0, rate: null },
+    outcomeRecordRate: { numerator: 0, denominator: 0, rate: null, autoRecorded: 0 },
+    validUserSessionCount: 13,
+  };
+
+  it("母数0(Hermes提案が1件も無い)のとき「判定に足りない」を表示し、0%を出さない", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
+      if (url.includes("/measurement-health")) {
+        return mockOk({
+          ...BASE_HEALTH,
+          hermesAcceptanceRate: {
+            acceptanceRate: { numerator: 0, denominator: 0, rate: null },
+            pendingCount: 0,
+            asOf: "2026-08-30T00:00:00.000Z",
+          },
+        });
+      }
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("Hermes提案の採択率")).toBeTruthy();
+    });
+    expect(screen.getAllByText("判定に足りない").length).toBeGreaterThan(0);
+    expect(screen.queryByText("0%")).toBeNull();
+  });
+
+  it("pendingのみ(active/rejectedが0件)のときも「判定に足りない」を表示する", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
+      if (url.includes("/measurement-health")) {
+        return mockOk({
+          ...BASE_HEALTH,
+          hermesAcceptanceRate: {
+            acceptanceRate: { numerator: 0, denominator: 0, rate: null },
+            pendingCount: 7,
+            asOf: "2026-08-30T00:00:00.000Z",
+          },
+        });
+      }
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText(/未判断\(pending\): 7件/)).toBeTruthy();
+    });
+    expect(screen.getAllByText("判定に足りない").length).toBeGreaterThan(0);
+  });
+
+  it("active/rejectedが混在するとき、採択率と集計時点を表示する(矢印は出さない)", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
+      if (url.includes("/measurement-health")) {
+        return mockOk({
+          ...BASE_HEALTH,
+          hermesAcceptanceRate: {
+            acceptanceRate: { numerator: 3, denominator: 4, rate: 75 },
+            pendingCount: 5,
+            asOf: "2026-08-30T00:00:00.000Z",
+          },
+        });
+      }
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("75%")).toBeTruthy();
+    });
+    expect(screen.getByText(/未判断\(pending\): 5件/)).toBeTruthy();
+    expect(screen.queryByText(/[↑↓]/)).toBeNull();
+  });
+
+  it("母数1(承認1件のみ)でも率自体は表示される", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
+      if (url.includes("/measurement-health")) {
+        return mockOk({
+          ...BASE_HEALTH,
+          hermesAcceptanceRate: {
+            acceptanceRate: { numerator: 1, denominator: 1, rate: 100 },
+            pendingCount: 0,
+            asOf: "2026-08-30T00:00:00.000Z",
+          },
+        });
+      }
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("100%")).toBeTruthy();
+    });
+    expect(screen.queryByText(/[↑↓]/)).toBeNull();
+  });
+
+  it("client_admin(APIがhermesAcceptanceRateを返さない)のときカード自体を出さない", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
+      if (url.includes("/measurement-health")) return mockOk(BASE_HEALTH);
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("会話完了率")).toBeTruthy();
+    });
+    expect(screen.queryByText("Hermes提案の採択率")).toBeNull();
+  });
+});
