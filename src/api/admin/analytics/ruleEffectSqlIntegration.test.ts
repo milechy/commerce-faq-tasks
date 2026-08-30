@@ -37,7 +37,7 @@
 //     npx jest src/api/admin/analytics/ruleEffectSqlIntegration.test.ts
 
 import { Pool } from "pg";
-import { getRuleEffect, CANDIDATE_SESSION_LIMIT } from "./ruleEffect";
+import { getRuleEffect, fetchCandidateSessions, CANDIDATE_SESSION_LIMIT } from "./ruleEffect";
 
 const DB_URL = process.env.HERMES_MCP_SQL_TEST_DATABASE_URL;
 const d = DB_URL ? describe : describe.skip;
@@ -474,4 +474,88 @@ d("getRuleEffect（実Postgresに対するDiD集計SQL検証）", () => {
     },
     30_000, // バルク投入(2501件)のため既定タイムアウトを延長
   );
+
+  // 上のテストは「上限超過で切り捨てられない」という結果(getRuleEffectの
+  // 最終出力)からORDER BYの効果を間接的に見ており、判定材料が上限到達という
+  // 状況にもプランナの選択にも依存する(実際、まっさらなDBではORDER BYを
+  // 外しても再現しないことが多い。統計情報が乏しい小さいデータではNested Loop
+  // Joinが選ばれ、CTE内部のソート順がJOIN後もたまたま保持されてしまうため)。
+  //
+  // このテストは不変条件そのもの(「fetchCandidateSessions()が返す行は、
+  // before/after各側でfirst_message_at降順に並んでいる」)を直接見る。
+  // 上限に到達させる必要が無いため少数のデータで済み、判定はプランに依存しない
+  // ―― ORDER BYがSQLに存在する限り、Postgresがどの結合方式(Hash Join/
+  // Nested Loop/Merge Join)を選んでも最終的な行順は保証される(SQL仕様)。
+  //
+  // ★このテストが「ORDER BYの不在」を確実に検出できることの根拠★
+  // enable_nestloop/enable_mergejoinをoffにしてHash Joinを強制する
+  // (chat_sessionsとのJOINでHash Joinが選ばれると、ORDER BYが無い場合は
+  // 挿入順(あえてシャッフルしてある)のまま行が返ってくることを、この
+  // テストを書く過程で実際に確認した — ORDER BYを外した状態でこのGUC設定を
+  // 併用すると、まっさらなDBでも複数回連続で確実に順序が崩れる)。
+  it("回帰: fetchCandidateSessions()が返す行はbefore/after各側でfirst_message_at降順(ORDER BYの不変条件を直接検証・プラン非依存)", async () => {
+    const tenantId = "tenant-order-invariant";
+    // fetchCandidateSessions() は tenantId/sinceIso/approvedAtIso を直接引数で
+    // 受け取り、tuning_rules は参照しない(ルール解決は呼び出し元のgetRuleEffect
+    // が担う)ため、ここではtuning_rulesへの挿入は不要。
+
+    // 意図的にシャッフルした順序で挿入する(挿入順=物理格納順に依存して
+    // たまたま降順になる、という偶然の一致を排除するため)。
+    const beforeTimestamps = Array.from(
+      { length: 20 },
+      (_, i) => `2026-01-${String(2 + i).padStart(2, "0")}T00:00:00.000Z`,
+    );
+    const afterTimestamps = Array.from(
+      { length: 20 },
+      (_, i) => `2026-02-${String(2 + i).padStart(2, "0")}T00:00:00.000Z`,
+    );
+    function shuffle<T>(arr: T[]): T[] {
+      const a = [...arr];
+      for (let i = a.length - 1; i > 0; i--) {
+        const j = Math.floor(((i + 1) * 9301 + 49297) % 233280 / 233280 * (i + 1));
+        [a[i], a[j]] = [a[j], a[i]];
+      }
+      return a;
+    }
+    for (const ts of shuffle([...beforeTimestamps, ...afterTimestamps])) {
+      await insertSession({ tenantId, firstMessageAt: ts, content: NOMATCH_MSG });
+    }
+
+    // SET LOCALはトランザクション内でのみ有効かつコネクション単位のGUCのため、
+    // Poolの使い回しではなく単一のクライアントを明示的にチェックアウトして使う。
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+      // Hash Joinを強制する(Nested Loop/Merge Joinを無効化)。ORDER BYが
+      // SQLに存在する限り、この強制はfetchCandidateSessionsの結果の正しさに
+      // 影響しないはず。
+      await client.query("SET LOCAL enable_nestloop = off");
+      await client.query("SET LOCAL enable_mergejoin = off");
+
+      const result = await fetchCandidateSessions(client, tenantId, RULE_CREATED_AT, APPROVED_AT);
+
+      const approvedAtMs = new Date(APPROVED_AT).getTime();
+      const beforeRows = result.rows.filter(
+        (r) => new Date(r.first_message_at).getTime() < approvedAtMs,
+      );
+      const afterRows = result.rows.filter(
+        (r) => new Date(r.first_message_at).getTime() >= approvedAtMs,
+      );
+      expect(beforeRows.length).toBe(20);
+      expect(afterRows.length).toBe(20);
+
+      const isDescending = (rows: typeof result.rows) =>
+        rows.every(
+          (r, i) =>
+            i === 0 ||
+            new Date(rows[i - 1].first_message_at).getTime() >= new Date(r.first_message_at).getTime(),
+        );
+      expect(isDescending(beforeRows)).toBe(true);
+      expect(isDescending(afterRows)).toBe(true);
+
+      await client.query("COMMIT");
+    } finally {
+      client.release();
+    }
+  });
 });

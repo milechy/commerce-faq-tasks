@@ -271,7 +271,10 @@ export async function fetchRuleMeta(db: Db, ruleId: number): Promise<FetchRuleRe
   return { status: "found", rule };
 }
 
-interface CandidateSessionRow {
+// export: ruleEffectSqlIntegration.test.ts が「行がfirst_message_at降順で
+// 返ってくる」不変条件を直接検証するため(プラン非依存で決定的な検証。
+// getRuleEffect経由の集計値だけでは行順の情報が失われ検証できない)。
+export interface CandidateSessionRow {
   session_uuid: string;
   first_message: string;
   first_message_at: string;
@@ -297,7 +300,7 @@ interface CandidateSessionRow {
 export const CANDIDATE_SESSION_LIMIT = 5000;
 const CANDIDATE_SESSION_PER_SIDE_LIMIT = CANDIDATE_SESSION_LIMIT / 2;
 
-interface FetchCandidateSessionsResult {
+export interface FetchCandidateSessionsResult {
   rows: CandidateSessionRow[];
   truncated: boolean;
 }
@@ -316,7 +319,7 @@ interface FetchCandidateSessionsResult {
  * 直近(first_message_at DESC)を優先するため、上限に掛かると各側とも古い方から
  * 欠落する。
  */
-async function fetchCandidateSessions(
+export async function fetchCandidateSessions(
   db: Db,
   tenantId: string,
   sinceIso: string,
@@ -385,12 +388,11 @@ async function fetchCandidateSessions(
      -- beforeRows.slice(0, CANDIDATE_SESSION_PER_SIDE_LIMIT) で
      -- 「配列の先頭 = first_message_at降順(直近優先)」を前提にしており、
      -- この前提はここで明示的にORDER BYしない限り成立しない。
-     -- 実際、このORDER BYが無い状態では、全体で最も新しいセッションであっても
-     -- 上限超過時に切り捨てられることを実Postgresで確認済み(回帰:
-     -- ruleEffectSqlIntegration.test.ts の該当テスト)。再現はクエリプラン依存で
-     -- 非決定的(統計情報の状態次第でHash Join/Nested Loopが切り替わり、
-     -- 前者を選ぶと順序が崩れる)なため、テストが偶然通っても
-     -- 「安全である証明」にはならない — このORDER BYはプラン非依存の保証として必須。
+     -- 実際、このORDER BYを外し、chat_sessionsとのJOINでHash Joinを強制すると
+     -- (enable_nestloop/enable_mergejoinをoff)、まっさらなDBで5回連続で確実に
+     -- 順序が崩れることを確認済み(ruleEffectSqlIntegration.test.ts の
+     -- 「ORDER BYの不変条件を直接検証」テスト)。このORDER BYはプラン非依存の
+     -- 保証として必須。
      ORDER BY f.first_message_at DESC`,
     [tenantId, sinceIso, approvedAtIso, CANDIDATE_SESSION_PER_SIDE_LIMIT + 1],
   );
