@@ -243,11 +243,14 @@ describe("BookChunksPanel — 取り消し", () => {
 
 describe("BookChunksPanel — 2つの画面で同時編集した場合の挙動(現状固定)", () => {
   // このパネルはURLに紐付かない単なるモーダルで、他の編集者がいることをこの画面自身は
-  // 知らない(サーバー側の409は「反映処理中」の一瞬だけを検知する仕組みで、既に保存済みの
-  // 他人の変更とはすれ違いを検知しない)。同じチャンクを2つのブラウザタブで開いて
-  // 両方成功してしまうケースで何が起きるかをここで固定する。
-  it("先に保存した側の変更を、後から保存した側が気づかず(警告なしで)上書きする", async () => {
-    mockChunksAndDetail([baseChunk()]); // situation: "旧状況", principle: "アンカリング効果"
+  // 知らない。だが保存のたびに「編集を始めた時点で読み込んでいた版」
+  // (metadata.content_updated_at)をサーバーに送り返し、サーバー側で既に他の人が
+  // 保存済み(=版が進んでいる)なら楽観ロックで409(conflict)として弾かれる。
+  // 同じチャンクを2つのブラウザタブで開き、片方が既に保存済みのケースで、
+  // 後から保存した側が気づかず上書きすることはなく、画面にもそれと分かる表示が
+  // 出ることを固定する。
+  it("先に保存した側の変更を、後から保存した側は気づかず上書きせず、409(conflict)として弾かれて画面にも表示される", async () => {
+    mockChunksAndDetail([baseChunk()]); // situation: "旧状況", principle: "アンカリング効果", 版なし
 
     const { container: containerA } = render(
       <BookChunksPanel bookId={1} bookTitle="書籍" bookStatus="embedded" bookTenantId="tenant-a" onClose={() => {}} />
@@ -256,11 +259,11 @@ describe("BookChunksPanel — 2つの画面で同時編集した場合の挙動(
       <BookChunksPanel bookId={1} bookTitle="書籍" bookStatus="embedded" bookTenantId="tenant-a" onClose={() => {}} />
     );
 
-    // 2つのタブ(=2つのパネルインスタンス)がどちらも同じ内容で編集を開始する
+    // 2つのタブ(=2つのパネルインスタンス)がどちらも同じ内容(版なし)で編集を開始する
     fireEvent.click(await within(containerA).findByText("編集"));
     fireEvent.click(await within(containerB).findByText("編集"));
 
-    // タブA: 状況だけ変更して先に保存する
+    // タブA: 状況だけ変更して先に保存する。版なしで読み込んでいるので送信も版なし。
     const situationA = within(containerA).getByPlaceholderText("この知識が適用される状況");
     fireEvent.change(situationA, { target: { value: "新状況A" } });
 
@@ -268,18 +271,39 @@ describe("BookChunksPanel — 2つの画面で同時編集した場合の挙動(
     mockFetch.mockImplementationOnce((_url: string, init?: { method?: string; body?: string }) => {
       expect(init?.method).toBe("PUT");
       bodiesA.push(JSON.parse(init!.body as string));
-      return Promise.resolve(okRes({ id: 1, metadata: { embedding_status: "done" } }));
+      // サーバー側も版なしなので通り、新しい版(content_updated_at)が発行される想定。
+      return Promise.resolve(
+        okRes({
+          id: 1,
+          metadata: {
+            situation: "新状況A",
+            embedding_status: "done",
+            content_updated_at: "2026-08-30T00:00:00.000Z",
+          },
+        })
+      );
     });
     mockFetch.mockImplementationOnce(() =>
-      Promise.resolve(okRes({ chunks: [baseChunk({ situation: "新状況A", embedding_status: "done" })] }))
+      Promise.resolve(
+        okRes({
+          chunks: [
+            baseChunk({
+              situation: "新状況A",
+              embedding_status: "done",
+              content_updated_at: "2026-08-30T00:00:00.000Z",
+            }),
+          ],
+        })
+      )
     );
     mockFetch.mockImplementationOnce(() => Promise.resolve(okRes({})));
 
     fireEvent.click(within(containerA).getByText("保存"));
     await within(containerA).findByText("保存しました");
     expect(bodiesA[0]?.situation).toBe("新状況A");
+    expect(bodiesA[0]?.expected_content_updated_at).toBe(null); // タブAが読み込んだ時点は版なし
 
-    // タブB: タブAの保存を知らないまま(旧状況のまま)、原則だけ変更して保存する
+    // タブB: タブAの保存を知らないまま(版なしのまま)、原則だけ変更して保存する
     const principleB = within(containerB).getByPlaceholderText("適用すべき心理学原則");
     fireEvent.change(principleB, { target: { value: "新原則B" } });
 
@@ -287,24 +311,54 @@ describe("BookChunksPanel — 2つの画面で同時編集した場合の挙動(
     mockFetch.mockImplementationOnce((_url: string, init?: { method?: string; body?: string }) => {
       expect(init?.method).toBe("PUT");
       bodiesB.push(JSON.parse(init!.body as string));
-      return Promise.resolve(okRes({ id: 1, metadata: { embedding_status: "done" } }));
+      // サーバー側は既にタブAの版に進んでいるため、タブBの版なし(=旧版)送信は
+      // 楽観ロックで409(conflict)として弾かれる(実際のサーバー挙動をここで模する)。
+      return Promise.resolve({
+        ok: false,
+        status: 409,
+        json: () =>
+          Promise.resolve({
+            error: "conflict",
+            message: "他の人がこのチャンクを更新しました。最新の内容を読み直してから編集してください。",
+            metadata: {
+              situation: "新状況A",
+              principle: "アンカリング効果",
+              content_updated_at: "2026-08-30T00:00:00.000Z",
+            },
+          }),
+      } as unknown as Response);
     });
+    // 409のあと、画面は裏で一覧を最新化する(編集中の入力欄はそのまま保持し、打ち直しはさせない)
     mockFetch.mockImplementationOnce(() =>
-      Promise.resolve(okRes({ chunks: [baseChunk({ principle: "新原則B", embedding_status: "done" })] }))
+      Promise.resolve(
+        okRes({
+          chunks: [
+            baseChunk({
+              situation: "新状況A",
+              embedding_status: "done",
+              content_updated_at: "2026-08-30T00:00:00.000Z",
+            }),
+          ],
+        })
+      )
     );
     mockFetch.mockImplementationOnce(() => Promise.resolve(okRes({})));
 
     fireEvent.click(within(containerB).getByText("保存"));
-    await within(containerB).findByText("保存しました");
 
-    // タブBは全フィールドを自分の(古い)値で送るため、Aの変更(situation)を静かに元に戻してしまう
-    expect(bodiesB[0]?.situation).toBe("旧状況");
+    // 画面に「他の人が更新した」ことが分かるメッセージが出る(汎用エラーに丸めない)
+    expect(await within(containerB).findByText(/他の人がこの内容を更新しました/)).toBeTruthy();
+    expect(within(containerB).queryByText("保存しました")).not.toBeTruthy();
+
+    // タブBが送ったのは自分の(古い)版。実際のサーバーではこれが409で弾かれるため、
+    // タブAの変更(situation)がタブBの入力によって黙って上書きされることはない。
+    expect(bodiesB[0]?.expected_content_updated_at).toBe(null);
     expect(bodiesB[0]?.principle).toBe("新原則B");
 
-    // 上書きされたことについての警告・通知は一切出ない(トーストは「保存しました」のみ)
-    expect(within(containerB).queryByText(/他の変更/)).not.toBeTruthy();
-    expect(within(containerB).queryByText(/上書き/)).not.toBeTruthy();
-    expect(within(containerB).queryByText(/最新の内容ではありません/)).not.toBeTruthy();
+    // 409のあとも入力欄の内容は残る(保存失敗で打ち直しにさせない)
+    expect((within(containerB).getByPlaceholderText("適用すべき心理学原則") as HTMLTextAreaElement).value).toBe(
+      "新原則B"
+    );
   });
 });
 

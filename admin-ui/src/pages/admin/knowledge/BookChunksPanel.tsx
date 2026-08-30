@@ -20,6 +20,9 @@ interface ChunkMetadata extends Record<string, unknown> {
   // (打ち手を表すフィールドを持たないスキーマ)。
   embedding_status?: "pending" | "done" | "failed";
   edit_history?: EditHistoryEntry[];
+  // 楽観ロックの版。PUTのたびにサーバーが更新する(embedding_status='pending' の間だけ
+  // 弾く連打対策のCASとは別物 — こちらは「読み込んだ後に誰かが更新したか」を見る)。
+  content_updated_at?: string;
 }
 
 interface EditHistoryEntry {
@@ -116,7 +119,12 @@ function reflectionState(metadata: ChunkMetadata): "pending" | "done" | "failed"
 
 // PUTのエラーはサーバーの生メッセージをそのまま出さない
 // (403の「他のテナントのデータには…」のように画面禁止語を含みうるため)。
-function friendlySaveError(status: number): string {
+// 409は原因が2種類ある(サーバー側のbody.errorで判別): 反映処理中の連打と、
+// 楽観ロックによる同時編集の検出。混ぜると「何が起きたか」がユーザーに伝わらない。
+function friendlySaveError(status: number, body?: { error?: string }): string {
+  if (status === 409 && body?.error === "conflict") {
+    return "他の人がこの内容を更新しました。最新の内容を読み直してから編集してください。";
+  }
   switch (status) {
     case 403:
       return "この内容は編集できません。";
@@ -261,12 +269,30 @@ export default function BookChunksPanel({
     setEditingId(null);
   };
 
-  const putChunk = (chunkId: number, body: Record<string, string | null>) =>
-    fetchWithAuth(`${API_BASE}/v1/admin/knowledge/book-pdf/chunks/${chunkId}`, {
+  const putChunk = (chunkId: number, body: Record<string, string | null>) => {
+    // 楽観ロック: 一覧を最後に読み込んだ時点でこのチャンクが持っていた版を一緒に送る。
+    // サーバー側で既に版が進んでいれば(=他の人が先に保存していれば)409(conflict)になる。
+    const current = chunks.find((c) => c.id === chunkId);
+    return fetchWithAuth(`${API_BASE}/v1/admin/knowledge/book-pdf/chunks/${chunkId}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify({
+        ...body,
+        expected_content_updated_at: current?.metadata.content_updated_at ?? null,
+      }),
     });
+  };
+
+  // 409(conflict)のエラー本体からメッセージを作り、必要ならbodyを返す共通処理。
+  // 楽観ロックの409だけ、裏で一覧を最新化しておく(編集中の入力欄はそのまま保持し、
+  // 打ち直しはさせない — SA-I-D-3と同じ方針)。
+  const handleSaveError = async (res: Response) => {
+    const errBody = (await res.json().catch(() => ({}))) as { error?: string };
+    showToast(friendlySaveError(res.status, errBody), false);
+    if (res.status === 409 && errBody.error === "conflict") {
+      void loadChunks();
+    }
+  };
 
   const handleSave = async (chunkId: number) => {
     setSaving(true);
@@ -277,7 +303,7 @@ export default function BookChunksPanel({
       }
       const res = await putChunk(chunkId, body);
       if (!res.ok) {
-        showToast(friendlySaveError(res.status), false);
+        await handleSaveError(res);
         return;
       }
       const data = (await res.json()) as { metadata?: ChunkMetadata };
@@ -311,7 +337,7 @@ export default function BookChunksPanel({
     try {
       const res = await putChunk(chunk.id, body);
       if (!res.ok) {
-        showToast(friendlySaveError(res.status), false);
+        await handleSaveError(res);
         return;
       }
       const data = (await res.json()) as { metadata?: ChunkMetadata };

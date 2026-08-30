@@ -64,7 +64,13 @@ jobs:
     # (Gate 1 と並列実行できるようにし、失敗時にどちらが原因か切り分けやすくする)。
     services:
       postgres:
-        image: postgres:16
+        # 素の postgres:16 には pgvector 拡張が入っておらず、サービスコンテナには
+        # 起動後に exec で apt install する経路が無い(ジョブのステップからは
+        # コンテナ内へ入れない)。書籍チャンク編集の楽観ロックSQL統合テスト
+        # (bookChunkOptimisticLockSqlIntegration.test.ts)が faq_embeddings.embedding
+        # (VECTOR(1536))へ実際に INSERT するため、pgvector 拡張が最初から入っている
+        # 公式イメージに切り替える。Postgres 16 自体の互換性は変わらない。
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: billing_sql_test
@@ -140,6 +146,14 @@ jobs:
       # conversion_attributions)はhermes-mcpスキーマが既に作成済みのため、そのまま使い回す。
       - name: Test analytics SQL against real Postgres
         run: pnpm jest --runInBand src/api/admin/analytics/ruleEffectSqlIntegration.test.ts
+
+      # 書籍チャンク編集の楽観ロック(PUT /v1/admin/knowledge/book-pdf/chunks/:chunkId の
+      # CASのUPDATE WHERE句)は、モックDBでは検証できない(WHERE句から版チェック条件を
+      # 削除してもモック版のJS判定が生き残るため単体テストは落ちない。実際に確認済み)。
+      # faq_embeddings / book_uploads は hermes-mcp スキーマに同居させてある
+      # (SCRIPTS/ci-hermes-schema.sh参照)ため、ここでは既に作成済みの前提でよい。
+      - name: Test book chunk optimistic lock SQL against real Postgres
+        run: pnpm jest --runInBand src/api/admin/knowledge/bookChunkOptimisticLockSqlIntegration.test.ts
 
   admin-ui-build:
     name: Gate 3 — admin-ui typecheck + test + build

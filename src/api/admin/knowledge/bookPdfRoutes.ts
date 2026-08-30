@@ -822,6 +822,30 @@ export function registerBookPdfRoutes(
           return res.status(400).json({ error: "更新するフィールドがありません" });
         }
 
+        // 楽観ロック([T4-1]の tenants PATCH と同じ考え方: 変更を読み込んだ時点の版を
+        // クライアントに送り返し、保存時に一致確認する)。faq_embeddings には updated_at
+        // 列が無く、embedding_updated_at は再埋め込み対象外の編集(例: product_catalog)では
+        // 更新されないため版として使えない。そのため metadata.content_updated_at を
+        // 専用の版として新設する(embedding_updated_at とは独立)。未指定なら従来どおり
+        // 版チェックをスキップする(後方互換。UI更新前の呼び出し元を壊さない)。
+        const hasExpectedContentUpdatedAt = Object.prototype.hasOwnProperty.call(
+          body,
+          "expected_content_updated_at"
+        );
+        const expectedContentUpdatedAtRaw = body["expected_content_updated_at"];
+        if (
+          hasExpectedContentUpdatedAt &&
+          expectedContentUpdatedAtRaw !== null &&
+          typeof expectedContentUpdatedAtRaw !== "string"
+        ) {
+          return res
+            .status(400)
+            .json({ error: "expected_content_updated_at は文字列またはnullで指定してください" });
+        }
+        const expectedContentUpdatedAt = hasExpectedContentUpdatedAt
+          ? (expectedContentUpdatedAtRaw as string | null)
+          : null;
+
         // T6: 実際に値が変わったフィールドだけを編集履歴に残す(平文のmetadata差分のみ、
         // faq_embeddings.text の書籍原文は含めない — Anti-Slop)。連打で同じ値が送られた
         // 場合は差分が空になり、以降の再埋め込みもスキップする。
@@ -859,11 +883,19 @@ export function registerBookPdfRoutes(
         const searchText = buildSearchText(searchTextFields);
         const embeddingEligible = searchText !== '';
 
-        const patchForDb: Record<string, unknown> = { ...patch, edit_history: editHistory };
+        const nowIso = new Date().toISOString();
+        const patchForDb: Record<string, unknown> = {
+          ...patch,
+          edit_history: editHistory,
+          // 楽観ロックの版。埋め込み対象外のスキーマ(product_catalog等)でも
+          // 編集のたびに必ず進む(embedding_updated_at は embeddingEligible の
+          // ときしか進まないため、代わりに使えない)。
+          content_updated_at: nowIso,
+        };
         if (embeddingEligible) {
           patchForDb['embedding_status'] = 'pending';
           // 「状態が最後に変わった時刻」として使う(=CASの期限切れ判定の基準)。
-          patchForDb['embedding_updated_at'] = new Date().toISOString();
+          patchForDb['embedding_updated_at'] = nowIso;
         }
 
         // 保存ボタン連打対策: embedding_status='pending' の間は次の書き込みを CAS で弾く
@@ -872,6 +904,9 @@ export function registerBookPdfRoutes(
         // 奪って再実行できるようにする(でないと運用者のDB直接操作でしか復帰できず、
         // 画面には「AIが覚え直しています」が出たまま永久に編集不能になる)。
         const staleCutoff = new Date(Date.now() - CHUNK_STALE_PENDING_MS).toISOString();
+        // 楽観ロック条件。expected_content_updated_at 未指定なら常に真(スキップ)。
+        // IS NOT DISTINCT FROM で NULL 同士(=一度も編集されていないチャンク)も
+        // 正しく一致判定できるようにする(通常の = だと NULL = NULL は unknown になる)。
         const casResult = await db.query(
           `UPDATE faq_embeddings
            SET metadata = metadata || $1::jsonb
@@ -881,10 +916,35 @@ export function registerBookPdfRoutes(
                OR metadata->>'embedding_updated_at' IS NULL
                OR (metadata->>'embedding_updated_at')::timestamptz < $3::timestamptz
              )
+             AND ($4::boolean IS NOT TRUE OR metadata->>'content_updated_at' IS NOT DISTINCT FROM $5::text)
            RETURNING id, metadata`,
-          [JSON.stringify(patchForDb), chunkId, staleCutoff]
+          [
+            JSON.stringify(patchForDb),
+            chunkId,
+            staleCutoff,
+            hasExpectedContentUpdatedAt,
+            expectedContentUpdatedAt,
+          ]
         );
         if (casResult.rows.length === 0) {
+          // どちらの条件で弾かれたかをDBの最新状態から判別し、別のメッセージを返す
+          // (「反映処理中」と「他の人が更新した」は原因も対処も違うため混ぜない)。
+          if (hasExpectedContentUpdatedAt) {
+            const latest = await db.query(
+              `SELECT metadata FROM faq_embeddings WHERE id = $1`,
+              [chunkId]
+            );
+            const latestMetadata = (latest.rows[0]?.metadata ?? {}) as Record<string, unknown>;
+            const latestContentUpdatedAt =
+              (latestMetadata['content_updated_at'] as string | undefined) ?? null;
+            if (latestContentUpdatedAt !== expectedContentUpdatedAt) {
+              return res.status(409).json({
+                error: "conflict",
+                message: "他の人がこのチャンクを更新しました。最新の内容を読み直してから編集してください。",
+                metadata: latestMetadata,
+              });
+            }
+          }
           return res
             .status(409)
             .json({ error: "他の編集が反映処理中です。少し待ってからもう一度お試しください。" });
