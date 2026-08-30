@@ -160,10 +160,31 @@ function checkRepeat(
   return null;
 }
 
+/**
+ * 呼び出し側で個別のルールを無効化するためのオプション。既定(未指定)は全ルール有効
+ * で、既存の顧客チャット経路の挙動は一切変わらない。
+ *
+ * 管理AIエージェント経路(agentRoutes.ts)向け: 認証済みの店主による正当な管理操作を
+ * 妨げないため、匿名顧客の乱用対策として設計された以下3ルールを無効化して呼ぶ:
+ *   - skipUrlCheck: 店主は allowed_origins 設定・ウィジェット設置・URLからのFAQ取り込み
+ *     (suggest_faq_import_from_urls)で正当にURLを貼るため、URL一律拒否は正常系を壊す。
+ *   - skipLengthTruncation: 商品説明文からのFAQ一括生成など長文入力が正当。既定500字への
+ *     切り詰めは入力を破壊する(chatSchema 側で max 2000 に制限済み)。
+ *   - skipRepeatCheck: 同じ設定操作の繰り返しは管理作業では正当。乱用カウントは不要。
+ * これらを外すことで、エンコーディング攻撃検知(base64 data URI・過剰エスケープ・
+ * ヌルバイト)という注入面に効く検査のみが残る。
+ */
+export interface SanitizeOptions {
+  skipUrlCheck?: boolean;
+  skipLengthTruncation?: boolean;
+  skipRepeatCheck?: boolean;
+}
+
 export function sanitizeInput(
   message: string,
   sessionId: string,
-  sessionHistory?: Map<string, SessionEntry>
+  sessionHistory?: Map<string, SessionEntry>,
+  options?: SanitizeOptions
 ): SanitizeResult {
   // Enabled check — fast path
   if (!isInputSanitizerEnabled()) {
@@ -173,9 +194,11 @@ export function sanitizeInput(
   const store = sessionHistory ?? sessionHistoryStore;
 
   // 1. URL check
-  const urlResult = checkUrl(message);
-  if (urlResult) {
-    return urlResult;
+  if (!options?.skipUrlCheck) {
+    const urlResult = checkUrl(message);
+    if (urlResult) {
+      return urlResult;
+    }
   }
 
   // 2. Encoding check
@@ -195,15 +218,17 @@ export function sanitizeInput(
   // 3. Truncation check
   const maxLength = getMaxLength();
   let truncated = false;
-  if (workingMessage.length > maxLength) {
+  if (!options?.skipLengthTruncation && workingMessage.length > maxLength) {
     workingMessage = workingMessage.slice(0, maxLength);
     truncated = true;
   }
 
   // 4. Repeat check (uses possibly-truncated message for comparison)
-  const repeatResult = checkRepeat(workingMessage, sessionId, store);
-  if (repeatResult) {
-    return repeatResult;
+  if (!options?.skipRepeatCheck) {
+    const repeatResult = checkRepeat(workingMessage, sessionId, store);
+    if (repeatResult) {
+      return repeatResult;
+    }
   }
 
   if (truncated) {
