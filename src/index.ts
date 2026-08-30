@@ -54,7 +54,8 @@ import { registerTestResponseRoutes } from "./api/admin/tuning/testResponseRoute
 import { registerAvatarConfigRoutes } from "./api/admin/avatar/routes";
 import { registerBillingAdminRoutes } from "./lib/billing/billingApi";
 import { createStripeWebhookHandler } from "./lib/billing/stripeWebhook";
-import { initUsageTracker } from "./lib/billing/usageTracker";
+import { initUsageTracker, trackUsage } from "./lib/billing/usageTracker";
+import { buildChatUsageTracking } from "./lib/billing/chatUsage";
 import { initFlowLogger } from "./lib/analytics/flowLogger";
 import { resolveLearningConsentFromFeatures } from "./lib/hermesConsent";
 import { stripeUsageReporter } from "./lib/billing/stripeSync";
@@ -66,6 +67,7 @@ import { createOriginCheckMiddleware } from "./api/middleware/originCheck";
 import { internalNetworkOnly } from "./api/middleware/internalNetworkOnly";
 import { e2eWriteGuard } from "./api/middleware/e2eWriteGuard";
 import { assertInternalSecretConfigured } from "./lib/startup/internalSecretGuard";
+import { assertAuthSecretsConfigured } from "./lib/startup/authSecretsGuard";
 import { registerWidgetRoutes } from "./api/widget/routes";
 import { registerAuthRoutes } from "./api/auth/routes";
 import { registerLiveKitTokenRoutes } from "./api/avatar/livekitTokenRoutes";
@@ -209,6 +211,15 @@ app.use(
 app.get("/ui", (_req, res) => res.redirect("/ui/index.html"));
 // Phase65: 旧demoページから新構成への後方互換リダイレクト
 app.get("/carnation-demo.html", (_req, res) => res.redirect(301, "/carnation-demo/index.html"));
+// widget.min.js(SCRIPTS/build-widget.sh が生成していた静的な難読化ビルド)は撤去済み。
+// 難読化は同一ロジックが /widget.js として平文で配信されているため元々無意味だった上、
+// javascript-obfuscator の出力がビルドごとに変わり widget.js との一致を機械的に固定できず、
+// #871 以降誰も再ビルドしないまま古いコードが本番に残り続けていた(2026-08-29発覚)。
+// 外部に古い埋め込みが残っていた場合に404ではなく最新のwidget.jsへ導くためリダイレクトする。
+// javascript-obfuscator 自体は widgetGenerator.ts の動的ルート(/widget/:tenantSlug.js、
+// リクエスト毎にテナント設定を注入して難読化)が別途requireしており、これとは無関係。
+// devDependencies から削除しないこと(削除するとwidgetGenerator.test.tsが壊れる)。
+app.get("/widget.min.js", (_req, res) => res.redirect(301, "/widget.js"));
 
 // CE status is public (side-effect free)
 app.get("/ce/status", (_req, res) => {
@@ -218,8 +229,20 @@ app.get("/ce/status", (_req, res) => {
 // Health check — public, no sensitive data returned
 app.get("/health", healthHandler);
 
-// Business KPI health check — UATa 事例 #6: scheduler_healthy 誤判断回避
-app.get("/health/business", businessHealthHandler);
+// Business KPI health check — UATa 事例 #6: scheduler_healthy 誤判断回避。
+//
+// ★セキュリティ★ このエンドポイントは アクティブ tenant_id 一覧・24h の会話/CV/RAG
+// 件数・最終会話時刻という営業機微を返すため、素の /health（機微なし）と違い
+// 公開してはならない（外部から無認証で開示できた実績あり）。/metrics と同じ内部
+// 専用防御にそろえる:
+//   - internalNetworkOnly: socket peer が loopback でなければ 403（ヘッダ spoof 不可）
+//   - X-Internal-Request: 1 ヘッダ要求（nginx strip との二重防御）
+app.get("/health/business", internalNetworkOnly, (req, res, next) => {
+  if (req.headers[INTERNAL_REQUEST_HEADER] !== "1") {
+    return res.status(403).json({ error: "forbidden" });
+  }
+  return next();
+}, businessHealthHandler);
 
 // Prometheus metrics — 内部ネットワーク専用
 //   - internalNetworkOnly: socket peer が loopback でなければ 403（spoof不可）
@@ -401,6 +424,26 @@ app.post("/dialog/turn", ...apiStack, async (req, res) => {
   try {
     const tenantId = (req as AuthedRequest).tenantId;
     const turn = await runDialogTurn({ ...parsed.data, tenantId });
+
+    // 課金計上（収益監査ギャップ [P0]）: /dialog/turn は runDialogTurn で LLM 合成・
+    // planner・OpenAI 埋め込みを実行するのに、これまで trackUsage を通っておらず
+    // 完全に未計上だった。/api/chat と同じ抽出ロジック(buildChatUsageTracking)で
+    // synthesis を chat モデル、planner/embedding を extraLlmUsages に内包して計上する。
+    //   - tenantId は認証コンテキスト由来のみ（body/ヘッダ非信用。CLAUDE.md 禁止1）。
+    //   - sessionId は runDialogTurn が確定した会話IDでグルーピングする（会話単位課金）。
+    //   - fire-and-forget（trackUsage は setImmediate）なのでレスポンスをブロックしない。
+    //   - 二重計上防止: /api/chat は自前で trackUsage するため、この計上は HTTP
+    //     直エンドポイント /dialog/turn 経由のみ発火する（合成関数内には仕込まない）。
+    if (tenantId) {
+      trackUsage({
+        tenantId,
+        requestId: req.requestId,
+        sessionId: turn.sessionId,
+        featureUsed: "chat",
+        ...buildChatUsageTracking(turn.meta),
+      });
+    }
+
     return res.json(turn);
   } catch (error) {
     logger.error({ error }, "[dialog] failed to run dialog turn");
@@ -756,6 +799,13 @@ async function startServer() {
   // production / staging / 不明 env では未設定なら exit(1)。
   // dev/test または ALLOW_MISSING_INTERNAL_HMAC_SECRET=true でのみ続行。
   assertInternalSecretConfigured({
+    warn: (msg) => logger.warn(msg),
+    fatal: (msg) => logger.fatal(msg),
+  });
+  // [P1 fail-closed] 認証/署名/暗号 secret（SUPABASE_JWT_SECRET / WIDGET_JWT_SECRET /
+  // KNOWLEDGE_ENCRYPTION_KEY）を NODE_ENV に依らず起動時に検査。production/不明 env で
+  // 欠落していれば exit(1)。dev/test は warn のみ。
+  assertAuthSecretsConfigured({
     warn: (msg) => logger.warn(msg),
     fatal: (msg) => logger.fatal(msg),
   });

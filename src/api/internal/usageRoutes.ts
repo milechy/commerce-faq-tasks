@@ -12,11 +12,16 @@ import { INTERNAL_REQUEST_HEADER } from '../../lib/metrics/kpiDefinitions';
 import { trackUsage, type FeatureUsed } from '../../lib/billing/usageTracker';
 import { FISH_AUDIO_KNOWN_TTS_MODELS } from '../../lib/billing/costCalculator';
 import { internalNetworkOnly } from '../middleware/internalNetworkOnly';
+import { internalHmacMiddleware } from '../../lib/crypto/hmacVerifier';
 
 const ALLOWED_FEATURES: readonly FeatureUsed[] = ['avatar', 'voice'];
 
 export function registerInternalUsageRoutes(app: Express): void {
-  app.post('/api/internal/usage', internalNetworkOnly, (req: Request, res: Response) => {
+  // 多層防御: internalNetworkOnly(loopback限定) の内側に HMAC 署名検証を追加。
+  // 固定ヘッダ X-Internal-Request だけでは body.tenantId を全信用でき、
+  // loopback に到達できる同居プロセス/SSRF から偽課金が可能だった (P0)。
+  // secret 未設定時は internalHmacMiddleware が fail-closed(500) する (ga4 と同一方式)。
+  app.post('/api/internal/usage', internalNetworkOnly, internalHmacMiddleware, (req: Request, res: Response) => {
     if (req.headers[INTERNAL_REQUEST_HEADER] !== '1') {
       return res.status(403).json({ error: 'forbidden' });
     }

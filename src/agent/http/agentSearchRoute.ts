@@ -6,6 +6,8 @@ import type { WebhookNotifier } from "../../integration/webhookNotifier";
 import { runSearchAgent } from "../flow/searchAgent";
 import { fetchDefaultExcludedIds, mergeExcludedIds } from "../../lib/defaultExcludedIds";
 import type { AuthedRequest } from "./authMiddleware";
+import { trackUsage } from "../../lib/billing/usageTracker";
+import { buildChatUsageTracking } from "../../lib/billing/chatUsage";
 
 const AgentSearchSchema = z.object({
   q: z.string().min(1),
@@ -102,6 +104,25 @@ export function createAgentSearchHandler(
       });
 
       const durationMs = Date.now() - startedAt;
+
+      // 課金計上（収益監査ギャップ [P0]）: /agent.search・/agent/search は
+      // runSearchAgent で LLM 合成・planner・OpenAI 埋め込みを実行するのに、これまで
+      // trackUsage を通っておらず完全に未計上だった。/api/chat と同じ抽出ロジック
+      // (buildChatUsageTracking)で synthesis を chat モデル、embedding を
+      // extraLlmUsages に内包して計上する。
+      //   - tenantId は認証コンテキスト由来のみ（上で 401 ガード済み。body/ヘッダ非信用）。
+      //   - searchAgent.ts の埋め込みは skipTracking:true（単独行を作ると unknown 計上 +
+      //     二重計上になる）だが、その embeddingUsage をここで実モデル単価で内包するため
+      //     chat 経路外でも取りこぼさない。
+      //   - agent.search は「会話」概念を持たない一発検索のため sessionId は渡さない
+      //     （NULL 行 = 1リクエスト=1単位として請求側が数える）。
+      //   - fire-and-forget（trackUsage は setImmediate）でレスポンスをブロックしない。
+      trackUsage({
+        tenantId,
+        requestId: req.requestId,
+        featureUsed: "chat",
+        ...buildChatUsageTracking(result),
+      });
 
       const anyResult = result as any;
 

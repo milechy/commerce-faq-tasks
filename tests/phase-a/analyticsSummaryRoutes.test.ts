@@ -44,6 +44,7 @@ function makeApp(db: any) {
   const app = express();
   app.use(express.json());
   process.env.NODE_ENV = "development";
+  process.env.ALLOW_INSECURE_DEV_AUTH = "1"; // [P1] dev-decode opt-in（署名検証スキップ）
   registerAnalyticsSummaryRoutes(app, db);
   return app;
 }
@@ -53,7 +54,7 @@ function makeToken(tenantId: string) {
 }
 
 describe("GET /v1/admin/tenants/:id/analytics-summary", () => {
-  afterEach(() => { delete process.env.NODE_ENV; });
+  afterEach(() => { delete process.env.NODE_ENV; delete process.env.ALLOW_INSECURE_DEV_AUTH; });
 
   it("returns summary with conversations and CV data", async () => {
     const db = makeMockDb({

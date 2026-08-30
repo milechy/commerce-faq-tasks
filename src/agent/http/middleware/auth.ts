@@ -31,17 +31,39 @@ function parseBasicAuth(
   return { user, pass };
 }
 
-function createAuthMiddleware(logger: pino.Logger) {
+const SAFE_INSECURE_AUTH_ENVS = new Set(["development", "test"]);
+
+export function createAuthMiddleware(logger: pino.Logger) {
   const apiKey = process.env.AGENT_API_KEY || "";
   const basicUser = process.env.AGENT_BASIC_USER || "";
   const basicPass = process.env.AGENT_BASIC_PASSWORD || "";
 
-  const authDisabled = !apiKey && !basicUser && !basicPass;
+  const noCredentialsConfigured = !apiKey && !basicUser && !basicPass;
 
-  if (authDisabled) {
-    logger.warn(
-      "Auth middleware is DISABLED (no AGENT_API_KEY / AGENT_BASIC_USER set)"
-    );
+  // [P1 fail-closed] 認証情報が全未設定でも「素通し」しない。
+  // 従来は AGENT_API_KEY / AGENT_BASIC_USER / AGENT_BASIC_PASSWORD が全て未設定だと
+  // 認証を無効化して next() する fail-open だった（本番で env 投入漏れ＝認証全開放）。
+  // ローカル開発で意図的に無効化したい場合のみ、非production かつ
+  // ALLOW_INSECURE_AGENT_AUTH=1 の明示 opt-in を要求する。
+  const insecureBypassOptIn =
+    !SAFE_INSECURE_AUTH_ENVS.has(process.env.NODE_ENV ?? "")
+      ? false
+      : process.env.ALLOW_INSECURE_AGENT_AUTH === "1" ||
+        process.env.ALLOW_INSECURE_AGENT_AUTH === "true";
+  const authBypassed = noCredentialsConfigured && insecureBypassOptIn;
+
+  if (noCredentialsConfigured) {
+    if (authBypassed) {
+      logger.warn(
+        "Auth middleware BYPASSED (no credentials set + ALLOW_INSECURE_AGENT_AUTH opt-in, dev/test only)"
+      );
+    } else {
+      // 素通しはしない。資格情報が無いので全リクエストを 503 で拒否する（fail-closed）。
+      logger.error(
+        "Auth middleware has NO credentials configured (AGENT_API_KEY / AGENT_BASIC_USER / AGENT_BASIC_PASSWORD). " +
+          "Rejecting all requests (fail-closed). Set credentials, or set ALLOW_INSECURE_AGENT_AUTH=1 with NODE_ENV=development|test."
+      );
+    }
   } else {
     logger.info(
       {
@@ -66,8 +88,15 @@ function createAuthMiddleware(logger: pino.Logger) {
       },
       "auth middleware invoked"
     );
-    if (authDisabled) {
+    if (authBypassed) {
       return next();
+    }
+    if (noCredentialsConfigured) {
+      // fail-closed: 資格情報未設定で opt-in も無い → 常に拒否。
+      return res.status(503).json({
+        error: "auth_not_configured",
+        message: "Server authentication is not configured",
+      });
     }
 
     // 1. API Key (X-API-Key)

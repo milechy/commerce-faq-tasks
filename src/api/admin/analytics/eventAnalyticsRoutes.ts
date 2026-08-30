@@ -4,6 +4,33 @@
 // GET /v1/admin/analytics/events
 //   認可: super_admin → 全テナント / client_admin → 自テナントのみ
 //   クエリ: ?tenant_id=xxx&period=7d&group_by=event_type
+//
+// GID 1217972514545047 [オーファンAPI調査, 2026-08-30]: admin-ui のどの画面からも
+// 呼ばれていない(consumer無し)ことを確認済み。PR #1062([H-7])でこのルートに
+// analytics(Standard〜)プランゲートを追加した際に発覚した。
+//
+// 調べた範囲(いずれもヒットなし): admin-ui/src 全体、public/(widget.js含む)、
+// cloudflare-workers/、SCRIPTS/、avatar-agent/、convex/、front/、tools/、
+// .claude/ 配下、src/api/hermes-mcp/(MCP経路)。admin-ui/src/pages/admin/analytics/index.tsx
+// は summary・trends・evaluations・conversions・knowledge-attribution・metrics-history・
+// flow-transitions 等の兄弟エンドポイントは軒並み呼んでいるが、この events だけが
+// 呼ばれていない。
+//
+// 経緯: git log で Phase55 導入コミット(3a0b3ace, 2026-04-05)まで遡ると、
+// このルートは widget側のイベント収集API(POST /api/events)・EventTracker と
+// セットで「イベントストリーム集計 + Analytics API拡張」として計画的に実装された
+// もの(PHASE_ROADMAP.md の Phase55 節に明記)。書き込み経路(behavioral_events
+// テーブルへのINSERT)は temperatureScoring / ProactiveEngine 等の内部ロジックで
+// 現役消費されているが、この読み取り専用の管理者向け集計APIだけは対応する
+// admin-ui画面が最後まで作られなかった可能性が高い。偶発的な残骸ではなく、
+// 「UI側の実装が積み残しになった」パターンと判断。
+//
+// ★このAPIは本番で200を返し続けている。「コード内に呼び出しが無い」だけでは
+// 削除の根拠にならない(テナント独自ツール・運用スクリプト・手動叩き等の
+// 外部利用はコードだけでは否定できない。同種の事例: public/widget.min.js が
+// #871 以降更新されないまま本番で200を返し続けている件, GID 1217972648400209)。
+// 削除を検討する場合は本番アクセスログでの外部利用有無の確認が前提条件。
+// (本タスクでは自分でVPSにSSHしないルールのため未確認 → 人間作業として要対応)
 
 import type { Express, Request, Response } from 'express';
 import { supabaseAuthMiddleware } from '../../../admin/http/supabaseAuthMiddleware';

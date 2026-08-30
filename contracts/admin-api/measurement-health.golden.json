@@ -1,0 +1,75 @@
+{
+  "sourceBreakdown": [
+    { "source": "user", "count": 1204 },
+    { "source": "e2e", "count": 87 },
+    { "source": "(null)", "count": 12 }
+  ],
+  "emptySessionCount": 3,
+  "cvSessionLinkRate": {
+    "numerator": 41,
+    "denominator": 44,
+    "rate": 93.2
+  },
+  "outcomeRecordRate": {
+    "numerator": 38,
+    "denominator": 44,
+    "rate": 86.4,
+    "autoRecorded": 22
+  },
+  "validUserSessionCount": 1204,
+  "chatOpenDropoff": {
+    "trackingSince": "2026-06-01T00:00:00.000Z",
+    "visitorsOpened": 1516,
+    "visitorsConversed": 13,
+    "dropoffRate": 99.1,
+    "sessionCoverage": {
+      "numerator": 1516,
+      "denominator": 1620,
+      "rate": 93.6
+    },
+    "proactive": {
+      "visitorsOpened": 210,
+      "visitorsConversed": 2,
+      "dropoffRate": 99.0
+    },
+    "manual": {
+      "visitorsOpened": 1306,
+      "visitorsConversed": 11,
+      "dropoffRate": 99.2
+    }
+  },
+  "knowledgeIndexDrift": {
+    "dbPublishedCount": 340,
+    "embeddingMissingCount": 0,
+    "orphanEmbeddingCount": 2,
+    "esCount": 340
+  },
+  "answerFeedback": {
+    "upCount": 58,
+    "downCount": 9
+  },
+  "schemaHealth": {
+    "missing": [],
+    "checkedTables": 22,
+    "checkedColumns": 156
+  },
+  "ignitionStatus": {
+    "rows": [
+      {
+        "tenantId": "carnation",
+        "cells": [
+          {
+            "feature": "avatar",
+            "label": "アバター",
+            "enabled": true,
+            "reason": "tenants.features.avatar_enabled = true",
+            "configKey": "avatar_enabled",
+            "controlledBy": "tenants.features"
+          }
+        ]
+      }
+    ],
+    "envControlledFeatures": ["proactive_message"],
+    "anyEnabled": true
+  }
+}

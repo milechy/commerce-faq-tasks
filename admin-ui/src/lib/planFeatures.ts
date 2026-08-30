@@ -26,6 +26,7 @@ const PLAN_RANK: Record<TenantPlan, number> = {
 
 export type GatedFeature =
   | "avatar"
+  | "voice"
   | "avatar_customize"
   | "voice_clone"
   | "analytics"
@@ -39,6 +40,10 @@ export type GatedFeature =
 const FEATURE_MIN_PLAN: Record<GatedFeature, TenantPlan> = {
   // アバター「そのもの」を使えるか。Standard は R2C 既定アバターのみ利用できる。
   avatar: "standard",
+  // 音声入出力(Fish Audio TTS/ASR)を使えるか。TTS/ASR は「AIアバター」体験の一部
+  // (声で話す/聞く)であり機能面では avatar と同格。最低プランは avatar と揃えて Standard。
+  // backend(src/lib/billing/planFeatures.ts)の voice ゲートと一致させること。
+  voice: "standard",
   // アバターを自社向けに作り込めるか（画像生成・声マッチング・声デザイン・
   // プロンプト生成 = Avatar Customization Studio）。Standard との差別化の実体。
   avatar_customize: "growth",
@@ -61,6 +66,7 @@ const FEATURE_MIN_PLAN: Record<GatedFeature, TenantPlan> = {
 /** プラン変更の確認画面で「何が増えるか / 何が使えなくなるか」を出すための表示名。 */
 export const GATED_FEATURE_LABELS: Record<GatedFeature, string> = {
   avatar: "AIアバター（R2C既定アバター）",
+  voice: "音声入出力（読み上げ・音声認識）",
   avatar_customize: "アバターの作成・カスタマイズ",
   voice_clone: "音声クローン",
   analytics: "会話分析",

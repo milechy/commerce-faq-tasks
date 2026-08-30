@@ -4,7 +4,16 @@
 //
 // 環境変数:
 //   KNOWLEDGE_ENCRYPTION_KEY — 64文字hex (= 256bit)
-//   未設定の場合は平文保存のままフォールバック（console.warn を出力）
+//
+// [P1 fail-closed] 未設定時の扱い（保存経路）:
+//   - production / staging / 不明 env → throw（平文での永続化を禁止）。
+//   - development / test → warn を出して平文フォールバック（ローカル開発・
+//     テストを壊さないための明示的なエスケープ）。
+//   これにより「KNOWLEDGE_ENCRYPTION_KEY 未設定のまま本番が知識/書籍を平文保存する」
+//   fail-open（従来は全環境で warn のみ）を塞ぐ。NODE_ENV 未設定=非production 扱いで
+//   平文保存されるトラップも、undefined を fail-closed 側に倒すことで解消する。
+//   起動時にも authSecretsGuard（src/lib/startup/authSecretsGuard.ts）が同じ env を
+//   検査し、production/不明 env では鍵欠落でそもそもブートさせない。
 //
 // 生成方法:
 //   python3 -c "import secrets; print(secrets.token_hex(32))"
@@ -14,6 +23,19 @@ import { logger } from '../logger';
 
 const ALGORITHM = "aes-256-gcm";
 const IV_BYTES = 12;
+
+// 平文フォールバックを許す「安全な非本番」env。internalSecretGuard.ts と同じ方針。
+const SAFE_PLAINTEXT_FALLBACK_ENVS = new Set(["development", "test"]);
+
+/**
+ * 鍵欠落時に平文フォールバック（暗号化せず平文保存）を許可してよい実行環境か。
+ * development / test のみ true（jest は NODE_ENV=test を既定でセットする）。
+ * それ以外（production / staging / NODE_ENV 未設定など）では false = fail-closed。
+ */
+function plaintextFallbackAllowed(): boolean {
+  const nodeEnv = process.env.NODE_ENV ?? "";
+  return SAFE_PLAINTEXT_FALLBACK_ENVS.has(nodeEnv);
+}
 
 function getEncryptionKey(): Buffer | null {
   const hexKey = process.env.KNOWLEDGE_ENCRYPTION_KEY;
@@ -30,16 +52,28 @@ function getEncryptionKey(): Buffer | null {
 
 /**
  * テキストを AES-256-GCM で暗号化する。
- * KNOWLEDGE_ENCRYPTION_KEY 未設定の場合は平文をそのまま返す。
+ *
+ * KNOWLEDGE_ENCRYPTION_KEY 未設定時:
+ *   - development / test（または jest）→ warn を出して平文をそのまま返す（後方互換）。
+ *   - それ以外（production / 不明 env）→ throw（平文での永続化を禁止＝fail-closed）。
  *
  * 出力フォーマット: `<iv_base64>:<authTag_base64>:<encrypted_base64>`
  */
 export function encryptText(plaintext: string): string {
   const key = getEncryptionKey();
   if (!key) {
+    if (!plaintextFallbackAllowed()) {
+      // fail-closed: 本番/不明 env で鍵が無いなら平文保存を拒否する。
+      throw new Error(
+        "[textEncrypt] KNOWLEDGE_ENCRYPTION_KEY is required to store knowledge text. " +
+          "Refusing to persist plaintext (fail-closed). " +
+          "Set KNOWLEDGE_ENCRYPTION_KEY (64 hex characters), " +
+          "or run with NODE_ENV=development|test for local/testing."
+      );
+    }
     logger.warn(
-      "[textEncrypt] KNOWLEDGE_ENCRYPTION_KEY is not set. Storing plaintext. " +
-        "Set this variable to enable encryption."
+      "[textEncrypt] KNOWLEDGE_ENCRYPTION_KEY is not set. Storing plaintext " +
+        "(dev/test fallback). Set this variable to enable encryption."
     );
     return plaintext;
   }

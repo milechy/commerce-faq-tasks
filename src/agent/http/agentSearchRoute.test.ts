@@ -9,15 +9,21 @@ jest.mock("../../lib/defaultExcludedIds", () => ({
   fetchDefaultExcludedIds: jest.fn(),
   mergeExcludedIds: jest.fn((excludedIds: unknown) => excludedIds ?? []),
 }));
+jest.mock("../../lib/billing/usageTracker", () => ({
+  trackUsage: jest.fn(),
+}));
 
 import { createAgentSearchHandler } from "./agentSearchRoute";
 import { runSearchAgent } from "../flow/searchAgent";
 import { fetchDefaultExcludedIds } from "../../lib/defaultExcludedIds";
+import { trackUsage } from "../../lib/billing/usageTracker";
+import { CHAT_LLM_MODEL } from "../../lib/billing/chatUsage";
 
 const mockedRunSearchAgent = runSearchAgent as jest.MockedFunction<typeof runSearchAgent>;
 const mockedFetchDefaultExcludedIds = fetchDefaultExcludedIds as jest.MockedFunction<
   typeof fetchDefaultExcludedIds
 >;
+const mockedTrackUsage = trackUsage as jest.MockedFunction<typeof trackUsage>;
 
 function mockReq(overrides: Record<string, unknown> = {}): AuthedRequest {
   const headers: Record<string, string> = (overrides.headers as Record<string, string>) ?? {};
@@ -28,6 +34,7 @@ function mockReq(overrides: Record<string, unknown> = {}): AuthedRequest {
     headers,
     body: { q: "送料について" },
     tenantId: undefined as unknown as string,
+    requestId: "req-test-1",
     ...overrides,
   } as unknown as AuthedRequest;
 }
@@ -245,6 +252,102 @@ describe("createAgentSearchHandler", () => {
       await handler(req, res);
 
       expect(mockedFetchDefaultExcludedIds).not.toHaveBeenCalled();
+    });
+  });
+
+  // 収益監査ギャップ [P0]: /agent.search・/agent/search は LLM 合成・埋め込みを
+  // 実行するのに trackUsage を通っておらず完全に未計上だった。
+  describe("billing usage tracking (revenue audit gap [P0])", () => {
+    it("counts usage via trackUsage with featureUsed=chat, the authenticated tenantId and requestId", async () => {
+      mockedRunSearchAgent.mockResolvedValue({
+        answer: "ok",
+        llmUsage: { prompt_tokens: 120, completion_tokens: 40 },
+      } as any);
+
+      const handler = createAgentSearchHandler(logger);
+      const req = mockReq({ tenantId: "tenant-a", requestId: "req-42" });
+      const res = mockRes();
+
+      await handler(req, res);
+
+      expect(mockedTrackUsage).toHaveBeenCalledTimes(1);
+      expect(mockedTrackUsage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tenantId: "tenant-a",
+          requestId: "req-42",
+          featureUsed: "chat",
+          model: CHAT_LLM_MODEL,
+          inputTokens: 120,
+          outputTokens: 40,
+        })
+      );
+    });
+
+    it("does not pass a sessionId (agent.search is a one-shot search, not a conversation)", async () => {
+      mockedRunSearchAgent.mockResolvedValue({
+        answer: "ok",
+        llmUsage: { prompt_tokens: 10, completion_tokens: 5 },
+      } as any);
+
+      const handler = createAgentSearchHandler(logger);
+      const req = mockReq({ tenantId: "tenant-a" });
+      const res = mockRes();
+
+      await handler(req, res);
+
+      const params = mockedTrackUsage.mock.calls[0][0];
+      expect(params.sessionId).toBeUndefined();
+    });
+
+    it("folds the OpenAI query embedding into extraLlmUsages at its real model rate (not the chat model)", async () => {
+      mockedRunSearchAgent.mockResolvedValue({
+        answer: "ok",
+        llmUsage: { prompt_tokens: 100, completion_tokens: 20 },
+        embeddingUsage: { model: "text-embedding-3-small", totalTokens: 512 },
+      } as any);
+
+      const handler = createAgentSearchHandler(logger);
+      const req = mockReq({ tenantId: "tenant-a" });
+      const res = mockRes();
+
+      await handler(req, res);
+
+      expect(mockedTrackUsage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          extraLlmUsages: [
+            { model: "text-embedding-3-small", inputTokens: 512, outputTokens: 0 },
+          ],
+        })
+      );
+    });
+
+    it("records {0,0} chat tokens when synthesis produced no usage (still one billable request)", async () => {
+      mockedRunSearchAgent.mockResolvedValue({ answer: "ok" } as any);
+
+      const handler = createAgentSearchHandler(logger);
+      const req = mockReq({ tenantId: "tenant-a" });
+      const res = mockRes();
+
+      await handler(req, res);
+
+      expect(mockedTrackUsage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          featureUsed: "chat",
+          inputTokens: 0,
+          outputTokens: 0,
+        })
+      );
+      // no embedding/planner → extraLlmUsages omitted entirely
+      expect(mockedTrackUsage.mock.calls[0][0]).not.toHaveProperty("extraLlmUsages");
+    });
+
+    it("does not count usage when the request is rejected (401 / 400) before running the agent", async () => {
+      const handler = createAgentSearchHandler(logger);
+
+      await handler(mockReq({ tenantId: undefined }), mockRes()); // 401
+      await handler(mockReq({ tenantId: "tenant-a", body: {} }), mockRes()); // 400
+
+      expect(mockedTrackUsage).not.toHaveBeenCalled();
     });
   });
 });

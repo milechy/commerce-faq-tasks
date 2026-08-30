@@ -54,6 +54,7 @@ describe("DELETE /v1/admin/chat-history/sessions/:sessionId", () => {
 
   beforeAll(() => {
     process.env.NODE_ENV = "development";
+    process.env.ALLOW_INSECURE_DEV_AUTH = "1"; // [P1] dev-decode opt-in（署名検証スキップ）
   });
 
   beforeEach(() => {
@@ -503,6 +504,7 @@ describe("GET /v1/admin/chat-history: tenant_id fallback 削除", () => {
 
   beforeAll(() => {
     process.env.NODE_ENV = "development";
+    process.env.ALLOW_INSECURE_DEV_AUTH = "1"; // [P1] dev-decode opt-in（署名検証スキップ）
   });
 
   beforeEach(() => {
@@ -628,6 +630,7 @@ describe("PATCH /v1/admin/chat-history: role whitelist", () => {
 
   beforeAll(() => {
     process.env.NODE_ENV = "development";
+    process.env.ALLOW_INSECURE_DEV_AUTH = "1"; // [P1] dev-decode opt-in（署名検証スキップ）
   });
 
   beforeEach(() => {

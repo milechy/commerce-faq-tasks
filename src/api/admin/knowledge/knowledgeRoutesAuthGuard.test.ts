@@ -50,12 +50,21 @@ import { logger } from '../../../lib/logger';
 import { registerKnowledgeAdminRoutes } from './routes';
 
 const ORIGINAL_NODE_ENV = process.env['NODE_ENV'];
+const ORIGINAL_ALLOW_INSECURE = process.env['ALLOW_INSECURE_DEV_AUTH'];
 
 beforeAll(() => {
   process.env['NODE_ENV'] = 'development';
+  // [P1] dev-decode 素通しは opt-in 必須化された。この test は requireKnowledgeRole
+  // （下流の role ガード）の検証が目的なので、明示的に opt-in して署名検証をスキップする。
+  process.env['ALLOW_INSECURE_DEV_AUTH'] = '1';
 });
 afterAll(() => {
   process.env['NODE_ENV'] = ORIGINAL_NODE_ENV;
+  if (ORIGINAL_ALLOW_INSECURE === undefined) {
+    delete process.env['ALLOW_INSECURE_DEV_AUTH'];
+  } else {
+    process.env['ALLOW_INSECURE_DEV_AUTH'] = ORIGINAL_ALLOW_INSECURE;
+  }
 });
 beforeEach(() => {
   jest.clearAllMocks();

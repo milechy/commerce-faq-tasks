@@ -9,9 +9,15 @@ import { INTERNAL_REQUEST_HEADER } from "../../lib/metrics/kpiDefinitions";
 import { getPool } from "../../lib/db";
 import { logger } from "../../lib/logger";
 import { internalNetworkOnly } from "../middleware/internalNetworkOnly";
+import { internalHmacMiddleware } from "../../lib/crypto/hmacVerifier";
 
 export function registerInternalAvatarConfigRoutes(app: Express): void {
-  app.get("/api/internal/avatar-config", internalNetworkOnly, async (req: Request, res: Response) => {
+  // 多層防御: loopback限定に加え HMAC 署名検証を課す。固定ヘッダのみでは
+  // 任意の tenantId を指定して他テナントのアバター設定(voice_id/persona 等)を
+  // 読み出せた (P0)。GET は空ボディ {} を署名対象とする。secret 未設定時は
+  // fail-closed(500)。tenantId は query 由来だが、HMAC は「secret を持つ正規の
+  // 呼び出し元であること」を保証し、非正規呼び出しからの読取を遮断する。
+  app.get("/api/internal/avatar-config", internalNetworkOnly, internalHmacMiddleware, async (req: Request, res: Response) => {
     if (req.headers[INTERNAL_REQUEST_HEADER] !== "1") {
       return res.status(403).json({ error: "forbidden" });
     }

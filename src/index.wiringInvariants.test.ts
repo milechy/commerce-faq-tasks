@@ -155,4 +155,62 @@ describe("src/index.ts 配線の不変条件（ソース構造検査）", () => 
       expect(source).toMatch(/billingSyncReconciliationMonitor\.start\(\s*db\s*,\s*logger\s*\)/);
     });
   });
+
+  // [P0] セキュリティ: GET /health/business は アクティブ tenant_id 一覧・24h の
+  // 会話/CV/RAG 件数・最終会話時刻を返すため、素の /health（機微なし）と違い
+  // 内部専用でなければならない（外部から無認証で開示できた実績あり）。/metrics と
+  // 同じ二重防御（internalNetworkOnly + X-Internal-Request:1）に配線されている
+  // ことを固定する。挙動は index.healthBusinessGuard.test.ts で検証する。
+  describe("GET /health/business の内部専用ガード配線 [P0]", () => {
+    function healthBusinessBlock(): string {
+      const idx = firstIndexOf(/app\.get\(\s*["']\/health\/business["']/);
+      // 次の app.get/app.post（/metrics など）までを1ルートのブロックとして切り出す。
+      const rest = source.slice(idx + 1);
+      const nextIdx = rest.search(/app\.(get|post|use)\(/);
+      return source.slice(idx, idx + 1 + (nextIdx >= 0 ? nextIdx : 800));
+    }
+
+    it("internalNetworkOnly ミドルウェアを通している（loopback以外は403、ヘッダspoof不可）", () => {
+      expect(healthBusinessBlock()).toMatch(/internalNetworkOnly/);
+    });
+
+    it("X-Internal-Request ヘッダ（INTERNAL_REQUEST_HEADER）の検査を通している", () => {
+      const block = healthBusinessBlock();
+      expect(block).toMatch(/INTERNAL_REQUEST_HEADER/);
+      expect(block).toMatch(/status\(403\)/);
+    });
+
+    it("素の GET /health は公開のまま（内部ガードを付けない — 機微を含まない）", () => {
+      const idx = firstIndexOf(/app\.get\(\s*["']\/health["'],\s*healthHandler\s*\)/);
+      const block = source.slice(idx, idx + 120);
+      expect(block).not.toMatch(/internalNetworkOnly/);
+    });
+  });
+
+  // [P0] 収益: /dialog/turn・/agent.search・/agent/search は LLM 合成・planner・
+  // 埋め込みを実行するのに trackUsage を通っておらず完全に未計上だった。chat 経路
+  // (/api/chat) と同じ buildChatUsageTracking で計上する配線を固定する。
+  // 二重計上を避けるため合成関数(runDialogTurn/runSearchAgent)の内部ではなく
+  // HTTP 直エンドポイント側で計上する（/api/chat は現状維持）。
+  describe("課金計上ギャップの配線 [P0]", () => {
+    it("/dialog/turn ハンドラが trackUsage を featureUsed:'chat' で呼んでいる", () => {
+      const idx = firstIndexOf(/app\.post\(\s*["']\/dialog\/turn["']/);
+      const block = source.slice(idx, idx + 2500);
+      expect(block).toMatch(/trackUsage\(/);
+      expect(block).toMatch(/featureUsed:\s*["']chat["']/);
+      expect(block).toMatch(/buildChatUsageTracking\(\s*turn\.meta\s*\)/);
+    });
+
+    it("/dialog/turn は認証コンテキスト由来の tenantId でのみ計上する（body/ヘッダ非信用）", () => {
+      const idx = firstIndexOf(/app\.post\(\s*["']\/dialog\/turn["']/);
+      const block = source.slice(idx, idx + 2500);
+      // trackUsage は tenantId ガードの内側にある
+      expect(block).toMatch(/if\s*\(\s*tenantId\s*\)\s*\{[\s\S]*trackUsage\(/);
+    });
+
+    it("index.ts が trackUsage と buildChatUsageTracking を import している", () => {
+      expect(source).toMatch(/import\s*\{[^}]*\btrackUsage\b[^}]*\}\s*from\s*["']\.\/lib\/billing\/usageTracker["']/);
+      expect(source).toMatch(/import\s*\{[^}]*buildChatUsageTracking[^}]*\}\s*from\s*["']\.\/lib\/billing\/chatUsage["']/);
+    });
+  });
 });

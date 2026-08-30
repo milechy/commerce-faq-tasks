@@ -14,6 +14,14 @@ jest.mock('../../lib/billing/usageTracker', () => ({
   trackUsage: (...args: unknown[]) => mockTrackUsage(...args),
 }));
 
+// プランゲート(requireVoicePlan)が `SELECT plan FROM tenants` を1回引く。
+// ASRハンドラ自体はDBを引かないので、リクエストあたりのDBクエリはこの1回のみ。
+// 既定は standard(通過)にし、ゲートを検証するテストだけ plan を差し替える。
+const mockQuery = jest.fn();
+jest.mock('../../lib/db', () => ({
+  getPool: () => ({ query: mockQuery }),
+}));
+
 const mockFetch = jest.fn();
 global.fetch = mockFetch as unknown as typeof fetch;
 
@@ -72,6 +80,9 @@ describe('POST /api/voice/asr', () => {
     process.env.FISH_AUDIO_API_KEY = 'test-fish-key';
     mockTrackUsage.mockReset();
     mockFetch.mockReset();
+    mockQuery.mockReset();
+    // 既定: voice を含む standard プラン。ゲート検証テストで上書きする。
+    mockQuery.mockResolvedValue({ rows: [{ plan: 'standard' }] });
   });
 
   afterEach(() => {
@@ -287,5 +298,49 @@ describe('POST /api/voice/asr', () => {
     expect(mockTrackUsage).toHaveBeenCalledWith(
       expect.objectContaining({ asrAudioSeconds: 0.5 }),
     );
+  });
+
+  // ── プランゲート（原価保護 / 匿名コスト増幅DoS 対策） ──────────────────────
+  // ゲートは multer(最大20MBバッファ)の前で判定する。未認可プランは Fish ASR を
+  // 呼ばず(=請求不能な原価を発生させず)、アップロードも buffer させない。
+  it('プランゲート: free_ad は 403 で multer より前に弾き、Fish/trackUsage を呼ばない', async () => {
+    mockQuery.mockReset();
+    mockQuery.mockResolvedValue({ rows: [{ plan: 'free_ad' }] });
+
+    const res = await request(makeApp('tenant-a'))
+      .post('/api/voice/asr')
+      .attach('audio', Buffer.from('fake-audio-bytes'), { filename: 'test.webm', contentType: 'audio/webm' });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('plan_upgrade_required');
+    expect(res.body.feature).toBe('voice');
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockTrackUsage).not.toHaveBeenCalled();
+  });
+
+  it('プランゲート: starter も 403（voice は Standard 以上）', async () => {
+    mockQuery.mockReset();
+    mockQuery.mockResolvedValue({ rows: [{ plan: 'starter' }] });
+
+    const res = await request(makeApp('tenant-a'))
+      .post('/api/voice/asr')
+      .attach('audio', Buffer.from('fake-audio-bytes'), { filename: 'test.webm', contentType: 'audio/webm' });
+
+    expect(res.status).toBe(403);
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockTrackUsage).not.toHaveBeenCalled();
+  });
+
+  it('プランゲート: DB取得失敗時も fail-closed で 403（free_ad へ倒れる）', async () => {
+    mockQuery.mockReset();
+    mockQuery.mockRejectedValue(new Error('db down')); // queryTenantPlan の catch が free_ad を返す
+
+    const res = await request(makeApp('tenant-a'))
+      .post('/api/voice/asr')
+      .attach('audio', Buffer.from('fake-audio-bytes'), { filename: 'test.webm', contentType: 'audio/webm' });
+
+    expect(res.status).toBe(403);
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockTrackUsage).not.toHaveBeenCalled();
   });
 });

@@ -242,6 +242,12 @@ async function _insertUsageLog(params: TrackUsageParams): Promise<void> {
 
   try {
     await _pool.query(
+      // ★不変条件★ request_id は UNIQUE + ON CONFLICT DO NOTHING の冪等キーとして
+      // 課金計上を左右する。ここに渡す requestId は必ず「サーバ生成の値」であること
+      // （HTTP経路は request-id.ts が req.requestId をサーバ新規採番する。
+      // 再実行dedupが要る内部経路は book-structurize:${bookId} 等の決定的キーを渡す）。
+      // クライアント制御ヘッダ(X-Request-ID)を再利用した固定IDを渡すと、2回目以降が
+      // ON CONFLICT で握り潰され計上・請求から黙って消える（[P0] 課金回避）。
       // 新しい列は末尾に足す（billable / plan / plan_multiplier と同じ流儀）。
       // 途中に差し込むと以降の $n が全てずれ、位置で検証している既存テストが
       // 一斉に嘘の値を見に行くことになる。
