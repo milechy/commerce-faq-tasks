@@ -307,23 +307,105 @@ describe("GET /v1/admin/tenants/:id/analytics-summary — LLM原価はsuper_admi
     expect(res.body.llm_usage.cost_jpy).toBe(Math.round(1.23 * 150));
   });
 
-  // ★穴4: レスポンス全体を走査して、costを含むキーがllm_usage.cost_jpy以外に
-  // 紛れ込んでいないことを固定する(将来フィールドが増えたときの回帰検知用)。
-  // ピンポイントのフィールド名比較(res.body.llm_usage.cost_jpy)だけだと、
-  // 新しい集計フィールド(例: cv側にcost_per_conversionのような値)が
-  // client_adminにも見える形で追加されても検出できない。
-  function findCostKeyPaths(value: unknown, path = ""): string[] {
-    if (value === null || typeof value !== "object") return [];
-    const found: string[] = [];
+  // ★穴4の是正: 上記のfindCostKeyPaths(denylist)は「costという名前を含むキー」しか
+  // 見ておらず、原理的に弱い。margin/unit_price/provider_feeのような別名で漏れても、
+  // 配列要素のようなキー名を持たない生の値が混ざっても素通りしてしまう。
+  // tests/lp/planFeatureBulletInvariants.test.ts で実証済みの「denylist→allowlistへの
+  // 反転」を踏襲し、レスポンスのキーパス全体をroleごとに固定する方式に置き換える
+  // (denylist方式のテストは、この allowlist が完全に上位互換のため削除した)。
+  //
+  // キーパスの表現: ネストしたオブジェクトは "cv.macro.r2c_db" のようにドット区切りへ
+  // 潰す。配列が絡む場合はインデックスを持たず "path[]" にまとめる(このレスポンスに
+  // 現状配列は無いが、将来追加されたときにインデックス爆発を起こさないための決定。
+  // 要素ごとの順序はこのテストの関心事ではなく、「どんな形のキーが出現し得るか」を
+  // 固定したいだけ)。値がnullのキー(llm_usageの client_admin での見え方)は「キー自体は
+  // 存在するが、それ以上は展開しない」ものとして扱う(実装(analyticsSummaryRoutes.ts)を
+  // 確認済み: llmUsage は isSuperAdmin でなければ null がそのままJSONに載る。null は
+  // typeof "object" だが値そのものなので、そこで再帰を止めれば自然にこの表現になる)。
+  function collectKeyPaths(value: unknown, path = ""): Set<string> {
+    const paths = new Set<string>();
+    if (Array.isArray(value)) {
+      const arrayPath = `${path}[]`;
+      for (const item of value) {
+        for (const p of collectKeyPaths(item, arrayPath)) paths.add(p);
+      }
+      return paths;
+    }
+    if (value === null || typeof value !== "object") return paths;
     for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
       const currentPath = path ? `${path}.${key}` : key;
-      if (/cost/i.test(key)) found.push(currentPath);
-      found.push(...findCostKeyPaths(v, currentPath));
+      paths.add(currentPath);
+      for (const p of collectKeyPaths(v, currentPath)) paths.add(p);
     }
-    return found;
+    return paths;
   }
 
-  it("super_adminのレスポンスで cost を含むキーは llm_usage.cost_jpy のみ(他に紛れ込んでいない)", async () => {
+  // super_adminに返す全キーパス(実装を正としてここに書き下す)。
+  const SUPER_ADMIN_ALLOWED_KEY_PATHS: readonly string[] = [
+    "period",
+    "conversations",
+    "conversations.total",
+    "conversations.avg_per_day",
+    "cv",
+    "cv.macro",
+    "cv.macro.r2c_db",
+    "cv.macro.ga4",
+    "cv.macro.posthog",
+    "cv.macro.ranked_a",
+    "cv.macro.ranked_d",
+    "cv.micro",
+    "cv.micro.r2c_db",
+    "cv.micro.ga4",
+    "cv.micro.posthog",
+    "llm_usage",
+    "llm_usage.tokens",
+    "llm_usage.cost_jpy",
+    "llm_usage.generations",
+    "alerts",
+    "alerts.source_mismatch_count",
+    "alerts.ranked_d_count",
+  ];
+
+  // llm_usageの中身(原価)にのみ属するキーパス。client_adminのallowlistから
+  // 機械的に除外するために使う(値を2箇所で決め打ちしない)。
+  const LLM_USAGE_ONLY_PATHS = SUPER_ADMIN_ALLOWED_KEY_PATHS.filter((p) =>
+    p.startsWith("llm_usage."),
+  );
+
+  // client_adminはsuper_adminと同じキーパス集合から、llm_usageの中身(原価)だけを
+  // 除いたもの。"llm_usage" 自体は(値がnullでも)キーとして残るため除外しない。
+  const CLIENT_ADMIN_ALLOWED_KEY_PATHS: readonly string[] =
+    SUPER_ADMIN_ALLOWED_KEY_PATHS.filter((p) => !p.startsWith("llm_usage."));
+
+  /**
+   * 実際のキーパス集合とallowlistを突合する。allowlistに無いキーパスが1つでも
+   * あれば「未知のもの」として即座に落ちる(denylistと違い、何が危険かを
+   * 推測する必要がない)。
+   */
+  function assertExactKeyPaths(
+    actual: Set<string>,
+    allowed: readonly string[],
+    label: string,
+  ): void {
+    const allowedSet = new Set(allowed);
+    const extra = [...actual].filter((p) => !allowedSet.has(p)).sort();
+    const missing = allowed.filter((p) => !actual.has(p)).sort();
+    if (extra.length > 0) {
+      throw new Error(
+        `[${label}] 未分類のキーパスが増えた: [${extra.join(", ")}]。\n` +
+          "新しいフィールドをレスポンスに追加した場合、super_admin限定にすべきかを判断した上で、" +
+          "このファイル内のSUPER_ADMIN_ALLOWED_KEY_PATHS(client_adminにも見せるならCLIENT_ADMIN_ALLOWED_KEY_PATHSにも)に追記すること。",
+      );
+    }
+    if (missing.length > 0) {
+      throw new Error(
+        `[${label}] allowlistにあるキーパスがレスポンスから消えた: [${missing.join(", ")}]。\n` +
+          "意図した削除ならallowlist側からも削除すること。",
+      );
+    }
+  }
+
+  it("super_adminのレスポンスのキーパス集合がallowlistと完全一致する(未知のキーが無い)", async () => {
     mockedGetMonthlyLLMUsage.mockResolvedValue({
       totalInputTokens: 100,
       totalOutputTokens: 50,
@@ -336,10 +418,10 @@ describe("GET /v1/admin/tenants/:id/analytics-summary — LLM原価はsuper_admi
       .set("Authorization", `Bearer ${SUPER_ADMIN_TOKEN}`);
 
     expect(res.status).toBe(200);
-    expect(findCostKeyPaths(res.body)).toEqual(["llm_usage.cost_jpy"]);
+    assertExactKeyPaths(collectKeyPaths(res.body), SUPER_ADMIN_ALLOWED_KEY_PATHS, "super_admin");
   });
 
-  it("client_adminのレスポンスにはcostを含むキーが一切無い(llm_usageがnullのため)", async () => {
+  it("client_adminのレスポンスのキーパス集合がallowlistと完全一致する(llm_usageの中身だけが無い)", async () => {
     mockedGetMonthlyLLMUsage.mockResolvedValue({
       totalInputTokens: 100,
       totalOutputTokens: 50,
@@ -354,6 +436,17 @@ describe("GET /v1/admin/tenants/:id/analytics-summary — LLM原価はsuper_admi
       .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`);
 
     expect(res.status).toBe(200);
-    expect(findCostKeyPaths(res.body)).toEqual([]);
+    assertExactKeyPaths(collectKeyPaths(res.body), CLIENT_ADMIN_ALLOWED_KEY_PATHS, "client_admin");
+  });
+
+  it("super_adminとclient_adminのキーパス差分はllm_usageの中身(3キー)だけである", () => {
+    // 「差がllm_usageだけであること」を明示的に固定する。将来super_admin限定の
+    // フィールドが増えたら、それも意図した追加であることをここで宣言させるため、
+    // 差分の中身そのものを検証する(件数だけの比較にしない)。
+    const diff = SUPER_ADMIN_ALLOWED_KEY_PATHS.filter(
+      (p) => !CLIENT_ADMIN_ALLOWED_KEY_PATHS.includes(p),
+    ).sort();
+    expect(diff).toEqual([...LLM_USAGE_ONLY_PATHS].sort());
+    expect(diff.every((p) => p.startsWith("llm_usage."))).toBe(true);
   });
 });
