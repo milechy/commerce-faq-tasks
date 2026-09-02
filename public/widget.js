@@ -3590,6 +3590,10 @@
       body: JSON.stringify({
         visitor_id: self.visitorId,
         session_id: self.sessionId,
+        // 是正0-4(GID 1218086067416577): behavioral_events(r2c_sid)とchat_sessions
+        // (conversationId)を結合できるキーを載せる。trackConversion(:3989付近)と
+        // 同じ考え方(会話が発生していないページのイベントもあるため任意項目として送る)。
+        chat_session_id: conversationId,
         events: events,
       }),
       keepalive: true,
@@ -3673,6 +3677,31 @@
     // ページ離脱時にflush
     window.addEventListener('beforeunload', function () { self.flush(); });
   };
+
+  // 是正0-3(GID 1218086067477270): chat_open の二重計上防止 + 開き直しの区別。
+  // 自動オープン(TriggerEngine.onRuleFired)がtrack('chat_open')した直後に
+  // openPanel()ラッパーがもう一度track('chat_open')していたため、自動オープン1回で
+  // 2行計上され、しかも2件目にtrigger情報が付かず measurementHealth.ts の
+  // has_manual 判定を誤らせていた(proactiveのみで開いた訪問者がmanual扱いに化ける)。
+  // _adPromoImpressionSent(:64-66, openPanel内)と同じ「1セッション1回」の考え方だが、
+  // chat_openはページ遷移をまたいでも二重計上を防ぐ必要があるため、sessionStorage
+  // (TriggerEngineのr2c_fired_rulesと同じ永続化パターン)で1セッション1回に絞る。
+  // 2回目以降の開き直しは chat_reopen として別イベント名で送る
+  // (既存の離脱率計算の分母=chat_openを壊さないため)。
+  function trackChatOpenOrReopen(extraData) {
+    if (!_tracker) return;
+    var alreadyOpened = false;
+    try { alreadyOpened = sessionStorage.getItem('r2c_chat_opened') === '1'; } catch (_e) {}
+    if (alreadyOpened) {
+      _tracker.track('chat_reopen', extraData || {});
+      return;
+    }
+    try { sessionStorage.setItem('r2c_chat_opened', '1'); } catch (_e) {}
+    _tracker.track('chat_open', extraData || {});
+  }
+  // onRuleFired が chat_open/chat_reopen の計上を済ませた直後に openPanel() を
+  // 呼ぶ際、openPanel ラッパー側の重複計上を1回だけ抑止するフラグ。
+  var _skipNextChatOpenTrack = false;
 
   // Phase56: TriggerEngine — プロアクティブエンゲージメント（LLM不使用）
   // GID 1216275447733308: セッションあたりの声がけは1〜2回が最適、4回以上は逆効果という
@@ -3817,11 +3846,15 @@
 
   TriggerEngine.prototype.onRuleFired = function (rule) {
     if (this.tracker) {
-      this.tracker.track('chat_open', { trigger: 'proactive', trigger_rule_id: rule.id });
+      trackChatOpenOrReopen({ trigger: 'proactive', trigger_rule_id: rule.id });
       this.tracker.flush();
     }
-    // ウィジェットを自動オープン
-    if (!isOpen) openPanel();
+    // ウィジェットを自動オープン。chat_open/chat_reopenの計上は上のtrackChatOpenOrReopenで
+    // 完了しているため、openPanelラッパー側の重複計上を _skipNextChatOpenTrack で抑止する。
+    if (!isOpen) {
+      _skipNextChatOpenTrack = true;
+      openPanel();
+    }
     // プロアクティブメッセージをアシスタントバブルとして挿入
     var proactiveMsg = {
       id: 'proactive-' + rule.id,
@@ -3885,12 +3918,18 @@
         // chat_open / chat_message イベントをwidgetに紐付け
         var _origOpen = window.FaqWidget.open;
         window.FaqWidget.open = function () {
-          if (_tracker) _tracker.track('chat_open', { page_url: window.location.href.slice(0, 2048) });
+          trackChatOpenOrReopen({ page_url: window.location.href.slice(0, 2048) });
           return _origOpen.apply(this, arguments);
         };
         var _origOpenPanel = openPanel;
         openPanel = function () {
-          if (_tracker) _tracker.track('chat_open', { page_url: window.location.href.slice(0, 2048) });
+          // TriggerEngine.onRuleFired が自動オープン直前に既に計上済みの場合は
+          // ここでの二重計上を1回だけスキップする（0-3: chat_open二重計上防止）。
+          if (_skipNextChatOpenTrack) {
+            _skipNextChatOpenTrack = false;
+          } else {
+            trackChatOpenOrReopen({ page_url: window.location.href.slice(0, 2048) });
+          }
           return _origOpenPanel.apply(this, arguments);
         };
 

@@ -151,6 +151,7 @@ VITE_SUPABASE_ANON_KEY=YOUR_ANON_KEY
 | `src/api/admin/knowledge/migration_drop_is_global.sql` | ナレッジ配線是正P19: faq_docs.is_global(読み手も書き手も無い死列。実際のグローバル知識は`tenant_id='global'/'r2c_docs'`)を削除。コード側の参照は本PRで除去済み。**適用前に `SELECT COUNT(*) FROM faq_docs WHERE is_global = true;` で意図しない使用が無いことを確認** | ⬜ 未適用 |
 | `src/lib/billing/migration_usage_logs_session_id.sql` | 会話単位の課金: `usage_logs.session_id` 追加(nullable)。**★migration → デプロイの順。逆順は請求バッチが全滅する**(`computeExpectedBilling` の集計SQLが `session_id` を参照するため、未適用のまま配備すると 42703 で `reportUsageToStripe` が例外を投げ、Stripe送信が一切走らなくなる。`usageTracker` 側は 42703 フォールバックで記録だけは残るが、倍率の焼き付けと会話の紐付けは失われる) | ⬜ 未適用 |
 | `src/api/admin/tenants/migration_billing_sync_status.sql` | `tenants.billing_sync_status` / `billing_sync_at` 追加(nullable)。プラン変更時のStripe同期結果をテナント自身に焼き付け、リロードを跨いでも「支払い設定が未完了」の案内が残るようにする。未適用でも動作は壊れない(コードはSELECTで列が無ければ`null`扱いにfail-open、書き込みUPDATEは列が無いテーブルへの`SET`で42703になるがcatchしてログのみ・レスポンスには影響しない)ため優先度は中 | ⬜ 未適用 |
+| `src/api/events/migration_behavioral_events_chat_session_id.sql` | 是正0-4(GID 1218086067416577): `behavioral_events.chat_session_id`(widgetのconversationId)追加(nullable) + `(tenant_id, chat_session_id)`インデックス。behavioral_events(r2c_sid)とchat_sessions(conversationId)を結合できるキーを通す。未適用でも動作は壊れない(`eventRoutes.ts`が42703で source列のみ→旧カラムの順にフォールバックする) | ⬜ 未適用 |
 
 ### Phase A Day 2 migration 実行手順
 
