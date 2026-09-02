@@ -33,7 +33,7 @@ export const REQUIRED_COLUMNS: Record<string, readonly string[]> = {
   ab_results: ["converted", "experiment_id", "session_id", "variant"],
   admin_feedback: ["ai_answered", "ai_response", "category", "message", "parent_feedback_id", "priority", "tenant_id", "user_email"],
   audit_logs: ["action", "actor_email", "actor_role", "metadata", "target_id", "target_type", "tenant_id"],
-  avatar_configs: ["agent_idle_prompt", "agent_prompt", "anam_avatar_id", "anam_llm_id", "anam_persona_id", "anam_voice_id", "avatar_provider", "behavior_description", "default_name", "default_personality_prompt", "default_template_id", "default_voice_id", "emotion_tags", "image_prompt", "image_url", "is_active", "is_default", "lemonslice_agent_id", "name", "personality_prompt", "tenant_id", "voice_description", "voice_id"],
+  avatar_configs: ["agent_idle_prompt", "agent_prompt", "anam_avatar_id", "anam_llm_id", "anam_persona_id", "anam_voice_id", "avatar_provider", "behavior_description", "category_persona_map", "default_name", "default_personality_prompt", "default_template_id", "default_voice_id", "emotion_tags", "image_prompt", "image_url", "is_active", "is_default", "lemonslice_agent_id", "name", "personality_prompt", "tenant_id", "voice_description", "voice_id"],
   behavioral_events: ["chat_session_id", "event_data", "event_type", "page_url", "referrer", "session_id", "source", "tenant_id", "visitor_id"],
   billing_adjustments: ["adjusted_by", "amount", "reason", "tenant_id"],
   book_pipeline_jobs: ["book_id", "enqueued_at", "status"],
