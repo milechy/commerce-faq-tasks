@@ -496,12 +496,11 @@ export default function AvatarStudioPage() {
       {/* 4. パーソナリティ */}
       <StudioPersonalitySection
         isDefault={isDefault}
+        isSuperAdmin={isSuperAdmin}
         promptRules={promptRules}
         setPromptRules={setPromptRules}
         generatingPrompt={generatingPrompt}
         handleGeneratePrompt={handleGeneratePrompt}
-        personalityPrompt={personalityPrompt}
-        setPersonalityPrompt={setPersonalityPrompt}
         agentPrompt={agentPrompt}
         agentIdlePrompt={agentIdlePrompt}
         behaviorDescription={behaviorDescription}

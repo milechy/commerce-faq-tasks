@@ -6,12 +6,11 @@ import { SECTION_STYLE, LABEL_STYLE, TEXTAREA_STYLE, BTN_PRIMARY } from "./types
 
 export function StudioPersonalitySection({
   isDefault,
+  isSuperAdmin,
   promptRules,
   setPromptRules,
   generatingPrompt,
   handleGeneratePrompt,
-  personalityPrompt,
-  setPersonalityPrompt,
   agentPrompt,
   agentIdlePrompt,
   behaviorDescription,
@@ -19,12 +18,11 @@ export function StudioPersonalitySection({
   emotionTags,
 }: {
   isDefault: boolean;
+  isSuperAdmin: boolean;
   promptRules: string;
   setPromptRules: (v: string) => void;
   generatingPrompt: boolean;
   handleGeneratePrompt: () => Promise<void>;
-  personalityPrompt: string;
-  setPersonalityPrompt: (v: string) => void;
   agentPrompt: string;
   agentIdlePrompt: string;
   behaviorDescription: string;
@@ -63,26 +61,22 @@ export function StudioPersonalitySection({
           : (lang === "ja" ? "プロンプトを生成する" : "Generate Prompt")}
       </button>
 
+      {/* personality_prompt はテキストの回答生成経路に配線されていない（表情・声にのみ影響）ため、
+          「編集できるのに反映されない」という誤認を避けるべく編集欄は表示せず、正しい設定先を案内する。
+          Asana: https://app.asana.com/1/817733952351708/project/1213607637045514/task/1218088953961618 */}
       <div style={{ marginTop: 16 }}>
         <label style={LABEL_STYLE}>
-          {lang === "ja" ? "システムプロンプト" : "System Prompt"}
+          {lang === "ja" ? "口調・人格の設定について" : "About tone & persona settings"}
         </label>
-        <textarea
-          value={personalityPrompt}
-          onChange={(e) => setPersonalityPrompt(e.target.value)}
-          readOnly={isDefault}
-          placeholder={lang === "ja" ? "AIが生成するか、直接入力してください" : "Auto-generated or enter manually"}
-          style={{
-            ...TEXTAREA_STYLE,
-            minHeight: 120,
-            ...(isDefault ? { background: "var(--card)", color: "var(--muted-foreground)", cursor: "default" } : {}),
-          }}
-        />
-        {isDefault && (
-          <p style={{ fontSize: 11, color: "#4b5563", marginTop: 4, marginBottom: 0 }}>
-            {lang === "ja" ? "デフォルト設定 — 変更不可" : "Default setting — read-only"}
-          </p>
-        )}
+        <p style={{ fontSize: 12, color: "var(--muted-foreground)", margin: "4px 0 0", lineHeight: 1.6 }}>
+          {isSuperAdmin
+            ? (lang === "ja"
+                ? "アバターの応答の口調・人格は「テナント詳細 → 設定」の「システムプロンプト（AIへの指示）」で設定してください。ここでの表情・所作用の設定とは別の場所で管理されています。"
+                : "The avatar's response tone and persona are configured under Tenant Detail → Settings → \"System Prompt (Instructions for AI)\". This is managed separately from the expression/motion settings on this page.")
+            : (lang === "ja"
+                ? "アバターの応答の口調・人格のご希望は、担当者までお問い合わせください。"
+                : "For tone/persona requests for the avatar's responses, please contact your account manager.")}
+        </p>
       </div>
 
       {isDefault && (agentPrompt || agentIdlePrompt) && (
