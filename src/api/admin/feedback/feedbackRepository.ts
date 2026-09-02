@@ -1,4 +1,10 @@
 // src/api/admin/feedback/feedbackRepository.ts
+//
+// NOTE(2026-09-02): 旧チャット系フィードバック機能(GET/POST /v1/admin/feedback,
+// /threads, /read, /unread-count, /:messageId/flag を提供していた feedbackRoutes.ts)
+// はルート登録順序の衝突で到達不能になっており廃止した(Asana GID 1218086285251452)。
+// getMessages のみ feedbackAI.ts の会話コンテキスト参照用に残っている。
+// feedback_messages テーブル自体はデータ保持のため削除しない。
 
 import { getPool } from "../../../lib/db";
 
@@ -15,14 +21,6 @@ export interface FeedbackMessage {
   is_read: boolean;
   flagged_for_improvement: boolean;
   created_at: string;
-}
-
-export interface FeedbackThread {
-  tenant_id: string;
-  tenant_name: string;
-  last_message: string;
-  last_message_at: string;
-  unread_count: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -57,109 +55,4 @@ export async function getMessages(params: {
   );
 
   return { messages: res.rows as FeedbackMessage[], total };
-}
-
-/** 改善フラグのトグル（Super Admin専用） */
-export async function flagMessage(messageId: number, flagged: boolean): Promise<FeedbackMessage | null> {
-  const pool = getPool();
-  const res = await pool.query(
-    `UPDATE feedback_messages
-     SET flagged_for_improvement = $1
-     WHERE id = $2
-     RETURNING id, tenant_id, sender_role, sender_email, content, is_read, flagged_for_improvement, created_at`,
-    [flagged, messageId]
-  );
-  return (res.rows[0] as FeedbackMessage) ?? null;
-}
-
-/** メッセージ送信 */
-export async function sendMessage(params: {
-  tenantId: string;
-  senderRole: "client_admin" | "super_admin";
-  senderEmail?: string;
-  content: string;
-}): Promise<FeedbackMessage> {
-  const pool = getPool();
-  const res = await pool.query(
-    `INSERT INTO feedback_messages (tenant_id, sender_role, sender_email, content)
-     VALUES ($1, $2, $3, $4)
-     RETURNING id, tenant_id, sender_role, sender_email, content, is_read, flagged_for_improvement, created_at`,
-    [params.tenantId, params.senderRole, params.senderEmail ?? null, params.content]
-  );
-  return res.rows[0] as FeedbackMessage;
-}
-
-/** テナント別スレッド一覧（Super Admin用）
- *  各テナントの最新メッセージ + client_admin→super_admin の未読数を返す */
-export async function getThreads(): Promise<FeedbackThread[]> {
-  const pool = getPool();
-  const res = await pool.query(`
-    SELECT
-      fm.tenant_id,
-      latest.last_message,
-      latest.last_message_at,
-      COALESCE(unread.cnt, 0)::int AS unread_count
-    FROM (
-      SELECT DISTINCT tenant_id FROM feedback_messages
-    ) fm
-    JOIN LATERAL (
-      SELECT content AS last_message, created_at AS last_message_at
-      FROM feedback_messages
-      WHERE tenant_id = fm.tenant_id
-      ORDER BY created_at DESC
-      LIMIT 1
-    ) latest ON true
-    LEFT JOIN LATERAL (
-      SELECT COUNT(*) AS cnt
-      FROM feedback_messages
-      WHERE tenant_id = fm.tenant_id
-        AND sender_role = 'client_admin'
-        AND is_read = false
-    ) unread ON true
-    ORDER BY latest.last_message_at DESC
-  `);
-  // tenant_name はフロントで解決（テナント一覧APIを使用）
-  return (res.rows as Array<{ tenant_id: string; last_message: string; last_message_at: string; unread_count: number }>).map((r) => ({
-    tenant_id: r.tenant_id as string,
-    tenant_name: r.tenant_id as string, // フロント側で上書き
-    last_message: r.last_message as string,
-    last_message_at: r.last_message_at as string,
-    unread_count: r.unread_count as number,
-  }));
-}
-
-/** 既読処理: そのテナントの client_admin メッセージを既読にする（Super Admin が読む側） */
-export async function markAsRead(tenantId: string): Promise<void> {
-  const pool = getPool();
-  await pool.query(
-    `UPDATE feedback_messages
-     SET is_read = true
-     WHERE tenant_id = $1 AND sender_role = 'client_admin' AND is_read = false`,
-    [tenantId]
-  );
-}
-
-/** Super Admin返信を client_admin 側が既読にする */
-export async function markSuperAdminMessagesAsRead(tenantId: string): Promise<void> {
-  const pool = getPool();
-  await pool.query(
-    `UPDATE feedback_messages
-     SET is_read = true
-     WHERE tenant_id = $1 AND sender_role = 'super_admin' AND is_read = false`,
-    [tenantId]
-  );
-}
-
-/** 未読数取得（Super Admin用: client_admin からの未読、client_admin用: super_admin からの未読） */
-export async function getUnreadCount(tenantId: string, readerRole: "super_admin" | "client_admin"): Promise<number> {
-  const pool = getPool();
-  // super_admin が読む → client_admin が送ったものの未読
-  // client_admin が読む → super_admin が送ったものの未読
-  const senderRole = readerRole === "super_admin" ? "client_admin" : "super_admin";
-  const res = await pool.query(
-    `SELECT COUNT(*) AS cnt FROM feedback_messages
-     WHERE tenant_id = $1 AND sender_role = $2 AND is_read = false`,
-    [tenantId, senderRole]
-  );
-  return parseInt(res.rows[0]?.cnt ?? "0", 10);
 }

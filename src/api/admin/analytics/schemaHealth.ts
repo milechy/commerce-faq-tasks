@@ -45,7 +45,6 @@ export const REQUIRED_COLUMNS: Record<string, readonly string[]> = {
   conversion_attributions: ["conversion_type", "conversion_value", "created_at", "deduplicated_at", "event_id", "event_type", "message_count", "psychology_principle_used", "sales_stage_at_conversion", "session_duration_sec", "session_id", "source", "temp_score_at_conversion", "tenant_id", "trigger_rule_id", "trigger_type"],
   faq_docs: ["answer", "category", "is_published", "product_cta_url", "product_image_url", "product_price", "question", "tags", "tenant_id"],
   faq_embeddings: ["embedding", "is_excluded_from_search", "metadata", "tenant_id", "text"],
-  feedback_messages: ["content", "sender_email", "sender_role", "tenant_id"],
   // recommended_action / suggested_answer は INSERT には現れず、gapRecommender.ts:130-140 の
   // UPDATE でのみ書かれる(推薦生成時に後から埋まる列)。schemaHealth.test.ts の
   // UPDATE_ONLY_COLUMNS で例外扱いされ、別テストでUPDATE文への実在を確認している。

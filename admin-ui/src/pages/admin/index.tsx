@@ -15,7 +15,6 @@ interface DashboardStats {
   publishedFaqCount: number;
   lastUpdated: string | null;
   gapCount: number;
-  feedbackUnread: number;
 }
 
 // ------------------------------------------------------------------ //
@@ -177,11 +176,10 @@ export default function AdminDashboard() {
           ? `${API_BASE}/v1/admin/knowledge-gaps/count?tenant=${effectiveTenantId}`
           : `${API_BASE}/v1/admin/knowledge-gaps/count`;
 
-        const [faqRes, bookRes, gapRes, feedbackRes] = await Promise.allSettled([
+        const [faqRes, bookRes, gapRes] = await Promise.allSettled([
           authFetch(`${API_BASE}/admin/faqs?${faqParams.toString()}`),
           authFetch(knowledgeUrl),
           authFetch(gapCountUrl),
-          authFetch(`${API_BASE}/v1/admin/feedback/unread-count`),
         ]);
 
         let faqCount = 0;
@@ -189,7 +187,6 @@ export default function AdminDashboard() {
         let bookCount = 0;
         let lastUpdated: string | null = null;
         let gapCount = 0;
-        let feedbackUnread = 0;
 
         if (faqRes.status === "fulfilled" && faqRes.value.ok) {
           const data = (await faqRes.value.json()) as {
@@ -214,12 +211,7 @@ export default function AdminDashboard() {
           gapCount = data.count ?? 0;
         }
 
-        if (feedbackRes.status === "fulfilled" && feedbackRes.value.ok) {
-          const data = (await feedbackRes.value.json()) as { count: number };
-          feedbackUnread = data.count ?? 0;
-        }
-
-        setStats({ faqCount, publishedFaqCount, bookCount, lastUpdated, gapCount, feedbackUnread });
+        setStats({ faqCount, publishedFaqCount, bookCount, lastUpdated, gapCount });
       } catch {
         setError(t("dashboard.error"));
       } finally {
@@ -377,16 +369,6 @@ export default function AdminDashboard() {
                 }
                 sub={stats?.lastUpdated ? t("dashboard.last_updated_sub") : t("dashboard.no_updates")}
               />
-              {isSuperAdmin && (stats?.feedbackUnread ?? 0) > 0 && (
-                <StatCard
-                  icon="💬"
-                  label="未読フィードバック"
-                  value={stats?.feedbackUnread ?? 0}
-                  accent="#f59e0b"
-                  sub="お客様からの新着フィードバック"
-                  onClick={() => navigate("/admin/feedback")}
-                />
-              )}
             </>
           )}
         </div>

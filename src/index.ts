@@ -42,7 +42,6 @@ import {
   seedTenantsFromDB,
 } from "./lib/tenant-context";
 import { registerKnowledgeAdminRoutes } from "./api/admin/knowledge/routes";
-import { registerFeedbackRoutes } from "./api/admin/feedback/feedbackRoutes";
 import { registerAdminFeedbackManagementRoutes } from "./api/admin/feedback/routes";
 import { registerAdminAiAssistRoutes } from "./api/admin/ai-assist/routes";
 import { registerFaqAdminRoutes } from "./admin/http/faqAdminRoutes";
@@ -679,7 +678,7 @@ registerTestResponseRoutes(app);
 // 2026-08-25(P10): 2系統に分かれていたAPIをPhase46に一本化(旧
 // registerKnowledgeGapRoutes は削除。admin-ui/copilot-preview も新パスへ移行済み)。
 registerKnowledgeGapPhase46Routes(app);
-// Phase43: admin_feedback チケット管理 API（feedbackRoutes.ts より前に登録）
+// Phase43: admin_feedback チケット管理 API
 registerAdminFeedbackManagementRoutes(app);
 registerAdminAiAssistRoutes(app);
 
@@ -695,8 +694,6 @@ registerEventAnalyticsRoutes(app);
 registerNotificationRoutes(app);
 // Phase61: オプションサービス発注 API
 registerOptionRoutes(app);
-// フィードバックチャット API
-registerFeedbackRoutes(app);
 
 // Avatar: Widget → LiveKit Room トークン発行 API
 registerLiveKitTokenRoutes(app, apiStack);
