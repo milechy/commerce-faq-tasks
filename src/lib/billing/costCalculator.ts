@@ -49,8 +49,12 @@ export const MARGIN_MULTIPLIER = Number(process.env.MARGIN_RATE ?? '5') || 5;
 /**
  * エンドユーザーが直接使う機能（マージン × MARGIN_RATE を適用）。
  * それ以外の管理者・運用向け機能は原価のみ（× 1）。
+ *
+ * agent_search([A2A-1a] 外部エージェント連携API)は、テナントが従量課金で
+ * 契約する対外向けAPIであり運用ツールではないため、chat/avatar/voiceと同格。
+ * 'chat' から分離した経緯は usageTracker.ts の FeatureUsed コメント参照。
  */
-export const END_USER_FEATURES: ReadonlySet<string> = new Set(['chat', 'avatar', 'voice']);
+export const END_USER_FEATURES: ReadonlySet<string> = new Set(['chat', 'avatar', 'voice', 'agent_search']);
 
 /**
  * GID 1216944003337186: usage_logs の行として記録はする（cost_total_centsで原価は可視化する）が、

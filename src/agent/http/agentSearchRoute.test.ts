@@ -12,11 +12,18 @@ jest.mock("../../lib/defaultExcludedIds", () => ({
 jest.mock("../../lib/billing/usageTracker", () => ({
   trackUsage: jest.fn(),
 }));
+// [A2A-1a]: getTenantPlan だけモックし、planHasFeature は実実装のまま使う
+// (プラン→ゲート可否のロジックまでテストがカバーするため)。
+jest.mock("../../lib/billing/planFeatures", () => {
+  const actual = jest.requireActual("../../lib/billing/planFeatures");
+  return { ...actual, getTenantPlan: jest.fn() };
+});
 
 import { createAgentSearchHandler } from "./agentSearchRoute";
 import { runSearchAgent } from "../flow/searchAgent";
 import { fetchDefaultExcludedIds } from "../../lib/defaultExcludedIds";
 import { trackUsage } from "../../lib/billing/usageTracker";
+import { getTenantPlan } from "../../lib/billing/planFeatures";
 import { CHAT_LLM_MODEL } from "../../lib/billing/chatUsage";
 
 const mockedRunSearchAgent = runSearchAgent as jest.MockedFunction<typeof runSearchAgent>;
@@ -24,6 +31,7 @@ const mockedFetchDefaultExcludedIds = fetchDefaultExcludedIds as jest.MockedFunc
   typeof fetchDefaultExcludedIds
 >;
 const mockedTrackUsage = trackUsage as jest.MockedFunction<typeof trackUsage>;
+const mockedGetTenantPlan = getTenantPlan as jest.MockedFunction<typeof getTenantPlan>;
 
 function mockReq(overrides: Record<string, unknown> = {}): AuthedRequest {
   const headers: Record<string, string> = (overrides.headers as Record<string, string>) ?? {};
@@ -53,6 +61,10 @@ describe("createAgentSearchHandler", () => {
     jest.clearAllMocks();
     mockedFetchDefaultExcludedIds.mockResolvedValue([]);
     mockedRunSearchAgent.mockResolvedValue({ answer: "ok" } as any);
+    // [A2A-1a]: agent_search は Growth 以上限定。既存テストは全てゲートを
+    // 通過させたいので、既定は growth にしておく(starter/free_ad が必要な
+    // テストだけ個別に上書きする)。
+    mockedGetTenantPlan.mockResolvedValue("growth");
   });
 
   it("rejects request with no authenticated tenantId (401)", async () => {
@@ -255,10 +267,60 @@ describe("createAgentSearchHandler", () => {
     });
   });
 
+  // [A2A-1a]: 外部エージェント連携APIの商品化。テナントAPIキー認証は既に通って
+  // いたが、プランへの載せ方が無く全プランへ無制限に到達できていた。Growth以上に限定する。
+  describe("plan gate (Growth以上限定, GID [A2A-1a])", () => {
+    it("rejects with 403 plan_upgrade_required when the tenant plan lacks agent_search", async () => {
+      mockedGetTenantPlan.mockResolvedValue("starter");
+      const handler = createAgentSearchHandler(logger);
+      const req = mockReq({ tenantId: "tenant-a" });
+      const res = mockRes();
+
+      await handler(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ error: "plan_upgrade_required" })
+      );
+      expect(mockedRunSearchAgent).not.toHaveBeenCalled();
+      expect(mockedTrackUsage).not.toHaveBeenCalled();
+    });
+
+    it("rejects free_ad and standard plans too (only growth/enterprise pass)", async () => {
+      for (const plan of ["free_ad", "standard"] as const) {
+        mockedGetTenantPlan.mockResolvedValue(plan);
+        const handler = createAgentSearchHandler(logger);
+        const req = mockReq({ tenantId: "tenant-a" });
+        const res = mockRes();
+
+        await handler(req, res);
+
+        expect(res.status).toHaveBeenCalledWith(403);
+      }
+    });
+
+    it("allows growth and enterprise plans through to the search agent", async () => {
+      for (const plan of ["growth", "enterprise"] as const) {
+        jest.clearAllMocks();
+        mockedFetchDefaultExcludedIds.mockResolvedValue([]);
+        mockedRunSearchAgent.mockResolvedValue({ answer: "ok" } as any);
+        mockedGetTenantPlan.mockResolvedValue(plan);
+        const handler = createAgentSearchHandler(logger);
+        const req = mockReq({ tenantId: "tenant-a" });
+        const res = mockRes();
+
+        await handler(req, res);
+
+        expect(res.status).not.toHaveBeenCalledWith(403);
+        expect(mockedRunSearchAgent).toHaveBeenCalled();
+      }
+    });
+  });
+
   // 収益監査ギャップ [P0]: /agent.search・/agent/search は LLM 合成・埋め込みを
   // 実行するのに trackUsage を通っておらず完全に未計上だった。
   describe("billing usage tracking (revenue audit gap [P0])", () => {
-    it("counts usage via trackUsage with featureUsed=chat, the authenticated tenantId and requestId", async () => {
+    it("counts usage via trackUsage with featureUsed=agent_search, the authenticated tenantId and requestId", async () => {
       mockedRunSearchAgent.mockResolvedValue({
         answer: "ok",
         llmUsage: { prompt_tokens: 120, completion_tokens: 40 },
@@ -275,7 +337,7 @@ describe("createAgentSearchHandler", () => {
         expect.objectContaining({
           tenantId: "tenant-a",
           requestId: "req-42",
-          featureUsed: "chat",
+          featureUsed: "agent_search",
           model: CHAT_LLM_MODEL,
           inputTokens: 120,
           outputTokens: 40,
@@ -332,7 +394,7 @@ describe("createAgentSearchHandler", () => {
 
       expect(mockedTrackUsage).toHaveBeenCalledWith(
         expect.objectContaining({
-          featureUsed: "chat",
+          featureUsed: "agent_search",
           inputTokens: 0,
           outputTokens: 0,
         })
