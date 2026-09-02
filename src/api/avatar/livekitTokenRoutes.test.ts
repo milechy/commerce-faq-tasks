@@ -545,6 +545,72 @@ describe("POST /api/avatar/room-token", () => {
       await new Promise(resolve => setImmediate(resolve));
       expect(mockCreateDispatch).toHaveBeenCalledTimes(1);
     });
+
+    // A2A-0i: trackUsageは`if (shouldDispatch)`ブロック内にあり、
+    // shouldDispatch = preDispatchEnabled || connectRequested。既存テストは
+    // preDispatchEnabled=trueの経路でしかtrackUsageの呼び出しを検証していなかった
+    // (382行目以降のpre_dispatch=falseテストは「呼ばれない」側の検証のみ)。
+    // connect=trueのオンデマンド起動(preDispatchEnabled=falseでもshouldDispatch=true)
+    // でも同じくLiveKit課金対象イベントが発生するため、計測が抜けていないことを固定する。
+    it("connect=true(オンデマンド起動、pre_dispatch=false)でもtrackUsageが呼ばれる(shouldDispatch=trueの全経路で計測が抜けないことの固定)", async () => {
+      mockQuery
+        .mockResolvedValueOnce({
+          rows: [{ ...TENANT_ROW, features: { avatar: true, pre_dispatch: false } }],
+          rowCount: 1,
+        })
+        .mockResolvedValueOnce({ rows: [{ image_url: "https://example.com/img.png", name: "Rei" }] }); // Q3 fallback
+
+      const app = makeApp("tenant-a");
+      const res = await request(app)
+        .post("/api/avatar/room-token")
+        .send({ connect: true });
+
+      expect(res.status).toBe(200);
+      expect(res.body.preDispatchEnabled).toBe(false);
+
+      await new Promise(resolve => setImmediate(resolve));
+      expect(mockCreateDispatch).toHaveBeenCalledTimes(1);
+      expect(mockTrackUsage).toHaveBeenCalledTimes(1);
+      expect(mockTrackUsage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tenantId: "tenant-a",
+          featureUsed: "avatar",
+          billable: false,
+          model: "livekit-room-token",
+        }),
+      );
+    });
+
+    // ★発見した欠陥(直さず報告)★ 計測(trackUsage)のためにroom発行という本番機能を
+    // 落としてはならない、という期待をここで固定する。trackUsageの呼び出しは
+    // ルートハンドラの外側try/catch(303行目付近)の内側にあり、専用のtry/catchで
+    // 囲まれていない。実運用ではwarnIfTenantUnresolvedが例外を投げない設計のため
+    // 顕在化しないが、万一同期的に例外を投げると外側catchに捕まり、
+    // 既にcreateRoom/dispatchAgentToRoomが成功していても
+    // `{ enabled: false, reason: "server_error" }` が返り、ウィジェットは
+    // アバターが使えないと解釈する(LiveKit側では既にroom/dispatchのコストが
+    // 発生済みなのに、フロントには失敗として伝わる)。it.failingで現状のギャップを
+    // 明示したまま残す — 修正は対象外(プロダクションコード変更禁止の指示のため)。
+    it.failing("trackUsageが例外を投げても、room発行のレスポンスは成功する(計測失敗が本番機能を道連れにしない)", async () => {
+      mockTrackUsage.mockImplementationOnce(() => {
+        throw new Error("simulated trackUsage failure");
+      });
+      mockQuery
+        .mockResolvedValueOnce({
+          rows: [{ ...TENANT_ROW, features: { avatar: true, pre_dispatch: false } }],
+          rowCount: 1,
+        })
+        .mockResolvedValueOnce({ rows: [{ image_url: "https://example.com/img.png", name: "Rei" }] }); // Q3 fallback
+
+      const app = makeApp("tenant-a");
+      const res = await request(app)
+        .post("/api/avatar/room-token")
+        .send({ connect: true });
+
+      expect(res.status).toBe(200);
+      expect(res.body.enabled).toBe(true);
+      expect(res.body.token).toBeTruthy();
+    });
   });
 
   // enabled:false が返る各経路で reason コードが付与されることを検証

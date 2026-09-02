@@ -345,6 +345,147 @@ describe('checkBillingHealth', () => {
       expect(violations[0].id).toBe('fixed_cost_quota_lemonslice_high');
       expect(mockLogger.warn).toHaveBeenCalled();
     });
+
+    // ★境界値★ upSignal は `ratio >= 0.8`。80.0%ちょうどで発火することを固定する
+    // (`>` だったら 80.0% が見逃されるバグを検知できる)。
+    it('ちょうど80.0%はWARNING(境界は >= 、> ではない)', async () => {
+      const db = makeDb({
+        "billing_status = 'pending'": CLEAN_STUCK,
+        'plan_multiplier IS NULL': CLEAN_UNSTAMPED,
+        'fixed_cost_quota:lemonslice:current': () => ({ rows: [{ used: 12000 }] }), // 12000/15000 = ちょうど80%
+      });
+      const violations = await checkBillingHealth(db as any, mockLogger);
+      expect(violations).toHaveLength(1);
+      expect(violations[0].id).toBe('fixed_cost_quota_lemonslice_high');
+      expect(violations[0].message).toContain('80.0%');
+    });
+
+    it('79.9%(80%未満)は違反にしない(境界値)', async () => {
+      const db = makeDb({
+        "billing_status = 'pending'": CLEAN_STUCK,
+        'plan_multiplier IS NULL': CLEAN_UNSTAMPED,
+        'fixed_cost_quota:lemonslice:current': () => ({ rows: [{ used: 11985 }] }), // 11985/15000 = 79.9%
+      });
+      const violations = await checkBillingHealth(db as any, mockLogger);
+      expect(violations).toEqual([]);
+    });
+
+    it('80.1%(80%をわずかに超える)は違反になる(境界値)', async () => {
+      const db = makeDb({
+        "billing_status = 'pending'": CLEAN_STUCK,
+        'plan_multiplier IS NULL': CLEAN_UNSTAMPED,
+        'fixed_cost_quota:lemonslice:current': () => ({ rows: [{ used: 12015 }] }), // 12015/15000 = 80.1%
+      });
+      const violations = await checkBillingHealth(db as any, mockLogger);
+      expect(violations).toHaveLength(1);
+    });
+
+    // 込み枠を超過した後も動き続けること(上限ではなく通知であるという設計、
+    // [[project_usage_based_billing_no_caps]])。NaN/Infinityが文面に混入しないことも固定する。
+    it('消費が込み枠を超えて120%になっても壊れずWARNINGとして成立する', async () => {
+      const db = makeDb({
+        "billing_status = 'pending'": CLEAN_STUCK,
+        'plan_multiplier IS NULL': CLEAN_UNSTAMPED,
+        'fixed_cost_quota:lemonslice:current': () => ({ rows: [{ used: 18000 }] }), // 18000/15000 = 120%
+      });
+      const violations = await checkBillingHealth(db as any, mockLogger);
+      expect(violations).toHaveLength(1);
+      expect(violations[0].message).toContain('120.0%');
+      expect(violations[0].message).not.toMatch(/NaN|Infinity/);
+    });
+
+    // ★division by zero★ quotaが0(env="0")のとき、ratioはnullになりクラッシュしない。
+    // resolveQuotaEnvは0を「不正値」として弾かない(0<0はfalse)ため、"0"はそのまま
+    // quota=0として通る — デフォルトへのフォールバックは効かない、という現状の挙動を固定する。
+    it('LEMONSLICE_MONTHLY_CREDIT_QUOTA="0"はデフォルトにフォールバックせずquota=0になり、ratioはnullで沈黙する', async () => {
+      process.env.LEMONSLICE_MONTHLY_CREDIT_QUOTA = '0';
+      const warnCallsBefore = mockLogger.warn.mock.calls.length;
+      const db = makeDb({
+        "billing_status = 'pending'": CLEAN_STUCK,
+        'plan_multiplier IS NULL': CLEAN_UNSTAMPED,
+        'fixed_cost_quota:lemonslice:current': () => ({ rows: [{ used: 999 }] }),
+      });
+      const violations = await checkBillingHealth(db as any, mockLogger);
+      // quota=0では 0除算を避けるため ratio=null → upSignal は常にfalseで沈黙する
+      expect(violations).toEqual([]);
+      // 不正値ではないので fail-safe の warn ログは出ない(0は Number.isFinite かつ 0<0=false)
+      expect(mockLogger.warn.mock.calls.length).toBe(warnCallsBefore);
+    });
+
+    // ★env異常系★ env値が数値に変換できない文字列("abc")のときも、負値と同じく
+    // デフォルトへフォールバックする(fail-safe)。
+    it('env値が非数値文字列("abc")ならデフォルトにフォールバックする(fail-safe)', async () => {
+      process.env.LEMONSLICE_MONTHLY_CREDIT_QUOTA = 'abc';
+      const db = makeDb({
+        "billing_status = 'pending'": CLEAN_STUCK,
+        'plan_multiplier IS NULL': CLEAN_UNSTAMPED,
+        'fixed_cost_quota:lemonslice:current': () => ({ rows: [{ used: 13500 }] }), // 90% of デフォルト15000
+      });
+      const violations = await checkBillingHealth(db as any, mockLogger);
+      expect(violations).toHaveLength(1);
+      expect(violations[0].id).toBe('fixed_cost_quota_lemonslice_high');
+      expect(mockLogger.warn).toHaveBeenCalled();
+    });
+
+    // ★盲点★ env値が空文字("")のとき、Number("") === 0 なので resolveQuotaEnv の
+    // 不正値チェック(!isFinite || <0)を素通りし、デフォルトにフォールバックせず
+    // quota=0がそのまま採用される(="0"を渡したのと同じ挙動)。空文字は「未設定のつもり」
+    // で書かれがちな値(.envのプレースホルダ行等)なので、デフォルト15000に落ちる
+    // という誤解をしないよう挙動をここで固定する。
+    it('env値が空文字("")なら"未設定"としてデフォルトへは落ちず、quota=0(=沈黙)になる', async () => {
+      process.env.LEMONSLICE_MONTHLY_CREDIT_QUOTA = '';
+      const warnCallsBefore = mockLogger.warn.mock.calls.length;
+      const db = makeDb({
+        "billing_status = 'pending'": CLEAN_STUCK,
+        'plan_multiplier IS NULL': CLEAN_UNSTAMPED,
+        'fixed_cost_quota:lemonslice:current': () => ({ rows: [{ used: 999999 }] }),
+      });
+      const violations = await checkBillingHealth(db as any, mockLogger);
+      // quota=0 → ratio=null → upSignalは常にfalse。空文字は「デフォルトへのfail-safe」
+      // ではなく「クォータ0=事実上の無効化」に落ちることを固定する(fail-openではないが
+      // 意図したfail-safeとも異なる、要注意ポイント)。
+      expect(violations).toEqual([]);
+      expect(mockLogger.warn.mock.calls.length).toBe(warnCallsBefore);
+    });
+
+    // LiveKitにもLemonSliceと同じ "0" の扱いが適用される(quotaDefaultがnullでも
+    // envValueが"0"なら明示的にquota=0になり、undefinedの「未設定」とは別経路)。
+    it('LIVEKIT_MONTHLY_ROOM_QUOTA="0"はquota=0になり、消費があってもWARNINGにならない', async () => {
+      process.env.LIVEKIT_MONTHLY_ROOM_QUOTA = '0';
+      const db = makeDb({
+        "billing_status = 'pending'": CLEAN_STUCK,
+        'plan_multiplier IS NULL': CLEAN_UNSTAMPED,
+        'fixed_cost_quota:livekit:current': () => ({ rows: [{ used: 500 }] }),
+      });
+      const violations = await checkBillingHealth(db as any, mockLogger);
+      expect(violations).toEqual([]);
+    });
+
+    // usage_logs.avatar_credits がNULLの行が混ざっても(SUM側はCOALESCEで担保されるが、
+    // ここではドライバが `used: null` を返す想定でJS側の防御を確認する) parseIntが
+    // NaNにならず0扱いになる。
+    it('current行のusedがnull(NULL集計)でもNaNにならず0として扱う', async () => {
+      const db = makeDb({
+        "billing_status = 'pending'": CLEAN_STUCK,
+        'plan_multiplier IS NULL': CLEAN_UNSTAMPED,
+        'fixed_cost_quota:lemonslice:current': () => ({ rows: [{ used: null }] }),
+      });
+      const violations = await checkBillingHealth(db as any, mockLogger);
+      expect(violations).toEqual([]);
+    });
+
+    // Slack通知文言に消費率と消費量が含まれること(運用者が数値を見て判断できること)を固定する。
+    it('Slack向けmessageに込み枠・消費量・消費率が具体的な数値として入る', async () => {
+      const db = makeDb({
+        "billing_status = 'pending'": CLEAN_STUCK,
+        'plan_multiplier IS NULL': CLEAN_UNSTAMPED,
+        'fixed_cost_quota:lemonslice:current': () => ({ rows: [{ used: 13500 }] }),
+      });
+      const violations = await checkBillingHealth(db as any, mockLogger);
+      expect(violations[0].message).toContain('15000クレジット');
+      expect(violations[0].message).toContain('13500クレジット');
+      expect(violations[0].message).toContain('90.0%');
+    });
   });
 });
 
@@ -430,6 +571,92 @@ describe('fetchFixedCostQuotaStatus (A2A-0i)', () => {
     expect(status.livekit.upSignal).toBe(false);
     expect(status.livekit.downSignal).toBe(false);
   });
+
+  // env未設定時のデフォルトを直接固定する(checkBillingHealth側の90%テストは
+  // デフォルト15000への依存が暗黙的だったため、ここで明示的に検証する)。
+  it('LEMONSLICE_MONTHLY_CREDIT_QUOTA未設定ならデフォルト15000が使われる', async () => {
+    const db = makeQuotaDb({
+      'fixed_cost_quota:lemonslice:current': () => ({ rows: [{ used: 0 }] }),
+      'fixed_cost_quota:lemonslice:history': () => ({ rows: [] }),
+      'fixed_cost_quota:livekit:current': () => ({ rows: [{ used: 0 }] }),
+    });
+    const status = await fetchFixedCostQuotaStatus(db as any, mockLogger);
+    expect(status.lemonslice.quota).toBe(15000);
+  });
+
+  // ★下げ方向の境界値★ ちょうど50%は「50%未満」に含めない(`<`であって`<=`ではない)。
+  // 3ヶ月のうち1ヶ月がちょうど50%ならその月はストリークを崩す。
+  it('3ヶ月のうち1ヶ月がちょうど50%ならdownSignal=false(境界は < であって <= ではない)', async () => {
+    const db = makeQuotaDb({
+      'fixed_cost_quota:lemonslice:current': () => ({ rows: [{ used: 1000 }] }),
+      'fixed_cost_quota:lemonslice:history': () => ({
+        rows: [
+          { month: '2026-06-01', used: 3000 },
+          { month: '2026-07-01', used: 7500 }, // 7500/15000 = ちょうど50%
+          { month: '2026-08-01', used: 2000 },
+        ],
+      }),
+      'fixed_cost_quota:livekit:current': () => ({ rows: [{ used: 0 }] }),
+    });
+    const status = await fetchFixedCostQuotaStatus(db as any, mockLogger);
+    expect(status.lemonslice.downSignal).toBe(false);
+  });
+
+  // ★消費0件★ 当月・履歴とも使用量0でもクラッシュせず、下げシグナルが正しく立つ
+  // (0/quota = 0 は「50%未満」を満たす)。
+  it('消費が0件の月が3ヶ月連続してもdownSignal=trueになり、0除算やNaNにならない', async () => {
+    const db = makeQuotaDb({
+      'fixed_cost_quota:lemonslice:current': () => ({ rows: [{ used: 0 }] }),
+      'fixed_cost_quota:lemonslice:history': () => ({
+        rows: [
+          { month: '2026-06-01', used: 0 },
+          { month: '2026-07-01', used: 0 },
+          { month: '2026-08-01', used: 0 },
+        ],
+      }),
+      'fixed_cost_quota:livekit:current': () => ({ rows: [{ used: 0 }] }),
+    });
+    const status = await fetchFixedCostQuotaStatus(db as any, mockLogger);
+    expect(status.lemonslice.used).toBe(0);
+    expect(status.lemonslice.ratio).toBe(0);
+    expect(status.lemonslice.downSignal).toBe(true);
+  });
+
+  // ★月境界とタイムゾーン(CLAUDE.md 禁止16 と同型のリスク)★
+  // stripeSync.ts の getPeriodYyyyMm/periodToDateRange は「当月」をJSの
+  // getUTCFullYear/getUTCMonthで明示的にUTC計算し、境界をパラメータとしてSQLへ渡す
+  // (billingHealthCheck.ts のチェック1 stuckPendingRows が currentMonthStart を
+  // $1 で渡しているのと同じ設計)。
+  // 一方このfetchFixedCostQuotaStatusのSQLは `date_trunc('month', NOW())` を
+  // DB側でその場評価しており、月の境界はNode側では一切計算していない。
+  // これはPostgresセッションのtimezone設定に依存する挙動であり、DB接続の
+  // タイムゾーンがUTCでない場合、チェック1(JSでUTC固定)とチェック5(DBのNOW()任せ)
+  // とで「当月」の境界がズレうる。実際にズレるかはDBのtimezone設定次第でモック
+  // テストからは検証できないため、ここでは「SQL文言がNOW()にDB側の月境界計算を
+  // 委ねている」という設計そのものを固定する。将来ここをJS側のUTC境界計算+
+  // パラメータ化に変えるなら、このテストの更新が必要になる。
+  it('[月境界/TZ] current・historyクエリはJS側でUTC境界を計算せず、DBのNOW()にdate_trunc(\'month\', ...)を委ねている', async () => {
+    const seenSql: string[] = [];
+    const db = {
+      query: jest.fn().mockImplementation((sql: string) => {
+        seenSql.push(sql);
+        if (sql.includes('fixed_cost_quota:lemonslice:current')) return Promise.resolve({ rows: [{ used: 0 }] });
+        if (sql.includes('fixed_cost_quota:lemonslice:history')) return Promise.resolve({ rows: [] });
+        if (sql.includes('fixed_cost_quota:livekit:current')) return Promise.resolve({ rows: [{ used: 0 }] });
+        throw new Error(`unexpected query: ${sql}`);
+      }),
+    };
+    await fetchFixedCostQuotaStatus(db as any, mockLogger);
+
+    const lemonsliceCurrentSql = seenSql.find((s) => s.includes('fixed_cost_quota:lemonslice:current'))!;
+    const lemonsliceHistorySql = seenSql.find((s) => s.includes('fixed_cost_quota:lemonslice:history'))!;
+    // 境界計算をDB側のNOW()に委ねている(=JSでUTC計算した日付をパラメータ化していない)ことを固定する。
+    expect(lemonsliceCurrentSql).toContain("date_trunc('month', NOW())");
+    expect(lemonsliceHistorySql).toContain("date_trunc('month', NOW())");
+    // stripeSync.periodToDateRange のような 'YYYY-MM-01' 形式のリテラルをこのSQL自身が
+    // 埋め込んでいない(=JS側UTC計算に置き換わっていない)ことも確認する。
+    expect(lemonsliceCurrentSql).not.toMatch(/\d{4}-\d{2}-01/);
+  });
 });
 
 describe('billingHealthMonitor（定期実行ラッパー）', () => {
@@ -514,5 +741,65 @@ describe('billingHealthMonitor（定期実行ラッパー）', () => {
     violating = false;
     await jest.advanceTimersByTimeAsync(60 * 60 * 1000);
     expect((sendSlackAlert as jest.Mock).mock.calls.some(([m]) => m.status === 'RESOLVED')).toBe(true);
+  });
+
+  // A2A-0i: チェック5(fixedCostQuota)はチェック1〜4と別の violation id
+  // (fixed_cost_quota_lemonslice_high)を使うが、cooldown/RESOLVEDの機構自体は
+  // 共有(lastFiredAt/currentlyFiringはid単位のMap/Set)。ここまでのテストは
+  // チェック1のidでしか cooldown/RESOLVED を検証していなかったため、チェック5でも
+  // 同じ機構が効くことを明示的に固定する。
+  describe('A2A-0i: fixedCostQuotaのcooldown/RESOLVED', () => {
+    function makeMonitorDb(lemonsliceUsed: () => number) {
+      return {
+        query: jest.fn().mockImplementation((sql: string) => {
+          if (sql.includes("billing_status = 'pending'")) return Promise.resolve({ rows: [{ cnt: 0, oldest: null }] });
+          if (sql.includes('plan_multiplier IS NULL')) return Promise.resolve({ rows: [{ total: 0, unstamped: 0 }] });
+          if (sql.includes('information_schema.columns')) return Promise.resolve(SCHEMA_ALL_PRESENT_ROWS()); // スキーマ健全(欠落なし)
+          if (sql.includes("billing_status = 'reported'")) return Promise.resolve({ rows: [{ cnt: 0, oldest: null }] });
+          if (sql.includes('fixed_cost_quota:lemonslice:current')) return Promise.resolve({ rows: [{ used: lemonsliceUsed() }] });
+          if (sql.includes('fixed_cost_quota:lemonslice:history')) return Promise.resolve({ rows: [] });
+          if (sql.includes('fixed_cost_quota:livekit:current')) return Promise.resolve({ rows: [{ used: 0 }] });
+          throw new Error(`unexpected query in monitor test: ${sql}`);
+        }),
+      };
+    }
+
+    it('同じ月に何度tickしても、80%到達中はSlack再送がcooldown(6時間)まで抑制される(重複防止)', async () => {
+      const db = makeMonitorDb(() => 13500); // 90%
+      billingHealthMonitor.start(db as any, mockLogger);
+      await jest.advanceTimersByTimeAsync(0);
+      const firingCalls = (sendSlackAlert as jest.Mock).mock.calls.filter(
+        ([m]) => m.ruleId === 'fixed_cost_quota_lemonslice_high' && m.status === 'FIRING',
+      );
+      expect(firingCalls).toHaveLength(1);
+
+      // 1時間ごとに2回tickしても(cooldown内)、追加送信は起きない
+      await jest.advanceTimersByTimeAsync(60 * 60 * 1000);
+      await jest.advanceTimersByTimeAsync(60 * 60 * 1000);
+      const stillOne = (sendSlackAlert as jest.Mock).mock.calls.filter(
+        ([m]) => m.ruleId === 'fixed_cost_quota_lemonslice_high' && m.status === 'FIRING',
+      );
+      expect(stillOne).toHaveLength(1);
+    });
+
+    it('80%未満に戻ったらfixedCostQuota専用のRESOLVEDが送られる', async () => {
+      let used = 13500; // 90%
+      const db = makeMonitorDb(() => used);
+      billingHealthMonitor.start(db as any, mockLogger);
+      await jest.advanceTimersByTimeAsync(0);
+      expect(
+        (sendSlackAlert as jest.Mock).mock.calls.some(
+          ([m]) => m.ruleId === 'fixed_cost_quota_lemonslice_high' && m.status === 'FIRING',
+        ),
+      ).toBe(true);
+
+      used = 1000; // 6.7%、80%未満に復帰
+      await jest.advanceTimersByTimeAsync(60 * 60 * 1000);
+      expect(
+        (sendSlackAlert as jest.Mock).mock.calls.some(
+          ([m]) => m.ruleId === 'fixed_cost_quota_lemonslice_high' && m.status === 'RESOLVED',
+        ),
+      ).toBe(true);
+    });
   });
 });
