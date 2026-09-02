@@ -9,25 +9,43 @@ export function AvatarCard({
   cfg,
   isSuperAdmin,
   avatarEnabled,
+  effectiveTenantId,
+  tenantFilter,
   activating,
   deleting,
+  adopting,
   handleActivate,
   handleDelete,
+  handleAdopt,
   setWarningTarget,
   formatDate,
 }: {
   cfg: AvatarConfig;
   isSuperAdmin: boolean;
   avatarEnabled: boolean;
+  // client_admin(previewMode含む)では自テナントID。super_adminでは操作対象を
+  // tenantFilter で絞り込んだときのみセットされる（[AV-4] 誤テナント操作防止）。
+  effectiveTenantId: string | null;
+  tenantFilter: string;
   activating: string | null;
   deleting: string | null;
+  adopting: string | null;
   handleActivate: (id: string) => Promise<void>;
   handleDelete: (id: string) => Promise<void>;
+  handleAdopt: (id: string) => Promise<void>;
   setWarningTarget: (t: WarningTarget | null) => void;
   formatDate: (iso: string) => string;
 }) {
   const navigate = useNavigate();
   const { lang } = useLang();
+
+  // 今この画面を通じて操作できるテナントID。
+  // - client_admin(previewMode含む): 自テナント固定
+  // - super_admin: tenantFilterで1テナントに絞ったときだけ（"all"では null = 操作不可）
+  const actingTenantId = isSuperAdmin ? (tenantFilter !== "all" ? tenantFilter : null) : effectiveTenantId;
+  // この行が「actingTenantId が所有する行」かどうか。[AV-2] r2c_default 由来の
+  // デフォルト行を自テナント所有と誤表示しないための判定。
+  const isOwnTenantRow = actingTenantId != null && cfg.tenant_id === actingTenantId;
 
   return (
     <div
@@ -98,7 +116,24 @@ export function AvatarCard({
           <span className="av-name" style={{ color: cfg.name ? "#f9fafb" : "#6b7280", fontStyle: cfg.name ? "normal" : "italic", flex: 1, minWidth: 0 }}>
             {cfg.name || (lang === "ja" ? "名前なし" : "Unnamed")}
           </span>
-          {cfg.is_active && (isSuperAdmin || avatarEnabled) ? (
+          {cfg.is_default && !isOwnTenantRow ? (
+            // [AV-2] r2c_default 所有のデフォルト行はテナントの実際の有効状態を
+            // 表していないため「アクティブ」を名乗らせない。選べる見本であることを示す。
+            cfg.is_active && (
+              <span style={{
+                padding: "2px 9px",
+                borderRadius: 999,
+                background: "rgba(99,102,241,0.15)",
+                border: "1px solid rgba(99,102,241,0.4)",
+                color: "#a5b4fc",
+                fontSize: 11,
+                fontWeight: 700,
+                flexShrink: 0,
+              }}>
+                {lang === "ja" ? "見本" : "Sample"}
+              </span>
+            )
+          ) : cfg.is_active && (isSuperAdmin || avatarEnabled) ? (
             <span style={{
               padding: "2px 9px",
               borderRadius: 999,
@@ -148,7 +183,7 @@ export function AvatarCard({
 
         {/* アクションボタン */}
         <div style={{ display: "flex", gap: 8, marginTop: "auto", flexWrap: "wrap" }}>
-          {!isSuperAdmin && !cfg.is_active && (
+          {!isSuperAdmin && isOwnTenantRow && !cfg.is_active && (
             <button
               className="av-btn-sm"
               onClick={() => void handleActivate(cfg.id)}
@@ -167,6 +202,28 @@ export function AvatarCard({
               {activating === cfg.id
                 ? (lang === "ja" ? "処理中..." : "Activating...")
                 : (lang === "ja" ? "有効化" : "Activate")}
+            </button>
+          )}
+          {/* [AV-1] 自テナント未所有のデフォルト行 = まだ採用していない見本。採用して有効化する導線 */}
+          {!isSuperAdmin && cfg.is_default && !isOwnTenantRow && (
+            <button
+              className="av-btn-sm"
+              onClick={() => void handleAdopt(cfg.id)}
+              disabled={adopting === cfg.id}
+              style={{
+                minHeight: 44,
+                borderRadius: 8,
+                border: "1px solid rgba(99,102,241,0.4)",
+                background: adopting === cfg.id ? "rgba(99,102,241,0.05)" : "rgba(99,102,241,0.1)",
+                color: "#a5b4fc",
+                fontWeight: 600,
+                cursor: adopting === cfg.id ? "not-allowed" : "pointer",
+                opacity: adopting === cfg.id ? 0.6 : 1,
+              }}
+            >
+              {adopting === cfg.id
+                ? (lang === "ja" ? "処理中..." : "Adopting...")
+                : (lang === "ja" ? "このデフォルトを使う" : "Use this default")}
             </button>
           )}
           {!isSuperAdmin && (
@@ -231,6 +288,27 @@ export function AvatarCard({
           {/* Super Admin アクション */}
           {isSuperAdmin && (
             <>
+              {/* [AV-4] テナントを1件に絞ったときだけ代行操作を出す（"all"では絶対に出さない） */}
+              {tenantFilter !== "all" && isOwnTenantRow && !cfg.is_active && (
+                <button
+                  className="av-btn-sm"
+                  onClick={() => void handleActivate(cfg.id)}
+                  disabled={activating === cfg.id}
+                  style={{ minHeight: 44, borderRadius: 8, border: "1px solid rgba(34,197,94,0.4)", background: activating === cfg.id ? "rgba(34,197,94,0.05)" : "rgba(34,197,94,0.1)", color: "#4ade80", fontWeight: 600, cursor: activating === cfg.id ? "not-allowed" : "pointer", opacity: activating === cfg.id ? 0.6 : 1 }}
+                >
+                  {activating === cfg.id ? "処理中..." : "このテナントのアバターとして有効化"}
+                </button>
+              )}
+              {tenantFilter !== "all" && cfg.is_default && !isOwnTenantRow && (
+                <button
+                  className="av-btn-sm"
+                  onClick={() => void handleAdopt(cfg.id)}
+                  disabled={adopting === cfg.id}
+                  style={{ minHeight: 44, borderRadius: 8, border: "1px solid rgba(99,102,241,0.4)", background: adopting === cfg.id ? "rgba(99,102,241,0.05)" : "rgba(99,102,241,0.1)", color: "#a5b4fc", fontWeight: 600, cursor: adopting === cfg.id ? "not-allowed" : "pointer", opacity: adopting === cfg.id ? 0.6 : 1 }}
+                >
+                  {adopting === cfg.id ? "処理中..." : "このテナントでこのデフォルトを使う"}
+                </button>
+              )}
               <button
                 className="av-btn-sm"
                 onClick={() => navigate(`/admin/avatar/studio/${cfg.id}`)}

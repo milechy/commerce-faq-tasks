@@ -27,6 +27,7 @@ export default function AvatarListPage() {
   const [loading, setLoading] = useState(true);
   const [activating, setActivating] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [adopting, setAdopting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [warningTarget, setWarningTarget] = useState<WarningTarget | null>(null);
 
@@ -189,12 +190,18 @@ export default function AvatarListPage() {
     return result;
   }, [configs, tenantFilter, typeFilter, statusFilter, sortKey, isSuperAdmin]);
 
+  // [AV-4] super_adminがテナントを1件に絞ったときだけ、その代行操作である
+  // ことをサーバに明示する。絞っていない("all")間はボタン自体を出していないので
+  // ここには到達しない(AvatarCard側のガードと二重に守る)。
+  const superAdminTenantParam =
+    isSuperAdmin && tenantFilter !== "all" ? `?tenant=${encodeURIComponent(tenantFilter)}` : "";
+
   const handleActivate = async (id: string) => {
     if (activating) return;
     setActivating(id);
     setError(null);
     try {
-      const res = await authFetch(`${API_BASE}/v1/admin/avatar/configs/${id}/activate`, {
+      const res = await authFetch(`${API_BASE}/v1/admin/avatar/configs/${id}/activate${superAdminTenantParam}`, {
         method: "POST",
       });
       if (!res.ok) {
@@ -208,6 +215,28 @@ export default function AvatarListPage() {
       setError(lang === "ja" ? "ネットワークエラーが発生しました" : "A network error occurred");
     } finally {
       setActivating(null);
+    }
+  };
+
+  // [AV-1] r2c_defaultのデフォルト行を自テナント所有として複製・有効化する。
+  // エンドポイントは別ブランチで実装中(POST /v1/admin/avatar/configs/:id/adopt)。
+  const handleAdopt = async (id: string) => {
+    if (adopting) return;
+    setAdopting(id);
+    setError(null);
+    try {
+      const res = await authFetch(`${API_BASE}/v1/admin/avatar/configs/${id}/adopt${superAdminTenantParam}`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        setError(lang === "ja" ? "有効化に失敗しました" : "Failed to activate config");
+        return;
+      }
+      await fetchConfigs();
+    } catch {
+      setError(lang === "ja" ? "ネットワークエラーが発生しました" : "A network error occurred");
+    } finally {
+      setAdopting(null);
     }
   };
 
@@ -350,6 +379,7 @@ export default function AvatarListPage() {
         isSuperAdmin={isSuperAdmin}
         displayedConfigs={displayedConfigs}
         total={total}
+        tenantPlan={tenantPlan}
       />
 
       {/* ── ソート / フィルタパネル ─────────────────────────────── */}
@@ -423,10 +453,14 @@ export default function AvatarListPage() {
               cfg={cfg}
               isSuperAdmin={isSuperAdmin}
               avatarEnabled={avatarEnabled}
+              effectiveTenantId={effectiveTenantId}
+              tenantFilter={tenantFilter}
               activating={activating}
               deleting={deleting}
+              adopting={adopting}
               handleActivate={handleActivate}
               handleDelete={handleDelete}
+              handleAdopt={handleAdopt}
               setWarningTarget={setWarningTarget}
               formatDate={formatDate}
             />
