@@ -95,6 +95,14 @@ FILES=(
   # 未適用だと Standard/Growth のテキスト超過とアバター超過を区別して記録できず、
   # 42703 フォールバックで次元ラベルの無い行になる(送信自体は継続する)。
   "src/lib/billing/migration_stripe_usage_reports_dimension.sql"
+  # usage_logs.feature_used CHECK 制約に agent_search を追加([A2A-1a])。
+  # ★本番はまだ未適用★(migration_agent_search_feature.sql の冒頭コメント参照)。
+  # ここに含めるのは「migration 適用後」の状態で computeExpectedBilling の
+  # text_units 集計SQLが agent_search 行を実際に拾えることを実Postgresで
+  # 検証するため(billingSqlIntegration.test.ts)。本番の未適用状態そのものは
+  # このスクリプトの対象外で、CHECK制約違反時のtrackUsage側の挙動は
+  # usageTracker.test.ts(モックDBでCHECK違反コード23514を再現)で別途固定する。
+  "src/lib/billing/migration_agent_search_feature.sql"
 )
 
 for f in "${FILES[@]}"; do

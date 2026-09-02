@@ -315,6 +315,52 @@ describe("createAgentSearchHandler", () => {
         expect(mockedRunSearchAgent).toHaveBeenCalled();
       }
     });
+
+    // fail-safe方向の確認: getTenantPlan は queryTenantPlan(planFeatures.ts)経由で
+    // 常に5値のいずれかへ丸め込まれる設計だが、その fail-safe 自体が壊れた場合の
+    // 「開いてしまう」方向の退行(未知の値を上位プラン扱いしてしまう)を、
+    // ここでは実装(planHasFeature)を通して直接固定する。
+    it.each([
+      ["null", null],
+      ["undefined", undefined],
+      ["空文字", ""],
+      ["未知のプラン文字列", "bogus_plan"],
+    ] as const)(
+      "getTenantPlanが%sを返しても403で弾く(開く方向に倒れない)",
+      async (_label, planValue) => {
+        mockedGetTenantPlan.mockResolvedValue(planValue as any);
+        const handler = createAgentSearchHandler(logger);
+        const req = mockReq({ tenantId: "tenant-a" });
+        const res = mockRes();
+
+        await handler(req, res);
+
+        expect(res.status).toHaveBeenCalledWith(403);
+        expect(mockedRunSearchAgent).not.toHaveBeenCalled();
+        expect(mockedTrackUsage).not.toHaveBeenCalled();
+      },
+    );
+
+    // このAPIキー認証経路(agent/http/authMiddleware.ts)には role/super_admin の
+    // 概念自体が無い(AuthedRequest は tenantId のみを持つ)。仮に他ミドルウェアの
+    // 混線で req に supabaseUser 相当のプロパティが紛れ込んでも、このハンドラは
+    // それを一切読まないためゲートをすり抜けられないことを固定する
+    // (GID [A2A-1a] コメント: 「このAPIキー認証経路には super_admin ロールの
+    // 概念が無いため、バイパスは設けない」の実装側の裏付け)。
+    it("req に super_admin 相当のロール情報が乗っていてもプランゲートをバイパスしない", async () => {
+      mockedGetTenantPlan.mockResolvedValue("starter");
+      const handler = createAgentSearchHandler(logger);
+      const req = mockReq({
+        tenantId: "tenant-a",
+        supabaseUser: { app_metadata: { role: "super_admin" } },
+      });
+      const res = mockRes();
+
+      await handler(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(mockedRunSearchAgent).not.toHaveBeenCalled();
+    });
   });
 
   // 収益監査ギャップ [P0]: /agent.search・/agent/search は LLM 合成・埋め込みを
@@ -410,6 +456,36 @@ describe("createAgentSearchHandler", () => {
       await handler(mockReq({ tenantId: "tenant-a", body: {} }), mockRes()); // 400
 
       expect(mockedTrackUsage).not.toHaveBeenCalled();
+    });
+
+    // [A2A-1a] migration_agent_search_feature.sql は本番未適用のまま。適用前は
+    // trackUsage 内部のINSERTがCHECK制約違反(23514)で失敗しうる
+    // (usageTracker.test.ts の「23514(CHECK制約違反)でも例外を投げずに終わる」で
+    // 固定済み)。ただしそれは trackUsage が setImmediate 経由でスケジュールする
+    // 「将来のティック」で起きる話で、trackUsage() 自体は呼び出し時点で即座に
+    // void を返す(内部の失敗を呼び出し元へ伝播させない)。
+    //
+    // ここでは agentSearchRoute 側がその契約に実際に乗っている
+    // (= trackUsage の戻り値/内部の失敗を await していない)ことを、
+    // 「trackUsage が絶対に解決しない Promise を返しても handler 自体は完了する」
+    // という形で固定する。もし将来 `await trackUsage(...)` のようなコードに
+    // 変わっていたら、このテストはタイムアウトして落ちる
+    // (=migration未適用時のDB遅延・エラーがレスポンスをブロックするようになる退行の検知)。
+    it("does not await trackUsage's return value (a hanging/never-resolving trackUsage must not block the response)", async () => {
+      mockedTrackUsage.mockImplementation(() => {
+        // 型上は void だが、誤って await されていないかを検出するためにあえて
+        // 解決しない Promise を仕込む(jest.fn の戻り値をキャストして注入)。
+        return new Promise(() => {}) as unknown as void;
+      });
+
+      const handler = createAgentSearchHandler(logger);
+      const req = mockReq({ tenantId: "tenant-a" });
+      const res = mockRes();
+
+      await handler(req, res); // await されていれば永遠にハングし、jestのデフォルトタイムアウトで落ちる
+
+      expect(res.status).not.toHaveBeenCalledWith(500);
+      expect(res.json).toHaveBeenCalled();
     });
   });
 });

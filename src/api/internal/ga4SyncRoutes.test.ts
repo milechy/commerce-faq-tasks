@@ -61,11 +61,46 @@ describe("POST /internal/ga4/health-check-all (plan gate)", () => {
     expect(mockRunGa4HealthCheck).toHaveBeenCalledTimes(1);
     expect(mockRunGa4HealthCheck).toHaveBeenCalledWith("t-growth", "222", db);
   });
+
+  // fail-safe方向の確認: tenants.plan が null / 未知の文字列でも
+  // 「開いてしまう」方向(=GA4 APIを呼んでしまう)に倒れないことを固定する。
+  it("plan列がnull/未知の文字列のテナントもGA4 APIを呼ばずplan_restrictedになる(開く方向に倒れない)", async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        { id: "t-null", ga4_property_id: "111", plan: null },
+        { id: "t-unknown", ga4_property_id: "222", plan: "some_future_plan" },
+      ],
+    });
+
+    const res = await request(app).post("/internal/ga4/health-check-all").send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body.results).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ tenant_id: "t-null", status: "plan_restricted" }),
+        expect.objectContaining({ tenant_id: "t-unknown", status: "plan_restricted" }),
+      ])
+    );
+    expect(mockRunGa4HealthCheck).not.toHaveBeenCalled();
+  });
 });
 
 describe("POST /internal/ga4/health-check (plan gate)", () => {
   it("plan未達なら reason=plan_restricted を返しGA4 APIを呼ばない", async () => {
     mockQuery.mockResolvedValueOnce({ rows: [{ ga4_property_id: "111", plan: "starter" }] });
+
+    const res = await request(app).post("/internal/ga4/health-check").send({ tenant_id: "t1" });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: false, reason: "plan_restricted" });
+    expect(mockRunGa4HealthCheck).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["plan列がnull", null],
+    ["plan列が未知の文字列", "some_future_plan"],
+  ] as const)("%s でも reason=plan_restricted になる(開く方向に倒れない)", async (_label, planValue) => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ ga4_property_id: "111", plan: planValue }] });
 
     const res = await request(app).post("/internal/ga4/health-check").send({ tenant_id: "t1" });
 
@@ -101,5 +136,22 @@ describe("POST /internal/ga4/sync (plan gate)", () => {
 
     expect(res.status).toBe(200);
     expect(mockFetchGa4Conversions).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["plan列がnull", null],
+    ["plan列が未知の文字列", "some_future_plan"],
+  ] as const)("%s(ga4_status=connectedでも) reason=plan_restrictedを返しGA4 APIを呼ばない(開く方向に倒れない)", async (_label, planValue) => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [{ ga4_property_id: "111", ga4_status: "connected", plan: planValue }],
+    });
+
+    const res = await request(app)
+      .post("/internal/ga4/sync")
+      .send({ tenant_id: "t1", start_date: "2026-08-01", end_date: "2026-08-31" });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: false, reason: "plan_restricted" });
+    expect(mockFetchGa4Conversions).not.toHaveBeenCalled();
   });
 });

@@ -627,6 +627,79 @@ d("computeExpectedBilling（実 Postgres に対する集計SQL実行）", () => 
     expect(result.avatarMinutes).toBe(0);
   });
 
+  // ───────────────────────────────────────────────────────────────────────────
+  // [A2A-1a] agent_search(外部エージェント連携API)。usageTracker.ts の
+  // FeatureUsed コメント: 'chat' から 'agent_search' へ分離した際、この
+  // text_units 集計SQLへ追加し忘れると Growth/Standard の agent_search 利用分が
+  // Stripe請求から丸ごと消える。ここではモックDBではなく実Postgresに対して
+  // computeExpectedBilling() を実行し、SQL文の `feature_used IN ('chat',
+  // 'agent_search')` が退行したら直接落ちるようにする
+  // (stripeSync.test.ts はDBをモックしてtext_unitsを決め打ちで返すため、
+  // SQL自体の集計ロジックはここでしか検証できない)。
+  //
+  // ★このスイートを動かすには CHECK 制約に agent_search が必要★
+  // SCRIPTS/ci-billing-schema.sh の FILES に migration_agent_search_feature.sql を
+  // 追加済み(=「migration適用後」の状態を検証する)。本番はまだ未適用のままで、
+  // その状態でのtrackUsage側の挙動(INSERT失敗時に何が起きるか)は
+  // usageTracker.test.ts が別途固定している。
+  // ───────────────────────────────────────────────────────────────────────────
+  it("agent_search単独の利用が textUnits に乗る(session_idを持たないため1行=1単位)", async () => {
+    await db.query(`
+      INSERT INTO usage_logs (tenant_id, request_id, feature_used, plan_multiplier, created_at)
+      SELECT 't1', 'as'||g, 'agent_search', 1.5, '2026-03-05'::timestamptz FROM generate_series(1,3) g;
+    `);
+
+    const result = await computeExpectedBilling(db, "t1", "2026-03-01", "2026-04-01", "growth");
+    expect(result.textUnits).toBe(3);
+    // avatar 次元には一切乗らない(次元が混ざらない)
+    expect(result.avatarMinutes).toBe(0);
+  });
+
+  it("chat(会話)とagent_searchが混在しても合算される(片方だけ数える退行を検知)", async () => {
+    await insertSession("t1", "s-1", 4);
+    await db.query(`
+      INSERT INTO usage_logs (tenant_id, request_id, session_id, feature_used, plan_multiplier, created_at)
+      VALUES
+        ('t1','c1','s-1','chat', 1.5, '2026-03-05'),
+        ('t1','c2','s-1','chat', 1.5, '2026-03-05');
+      INSERT INTO usage_logs (tenant_id, request_id, feature_used, plan_multiplier, created_at)
+      VALUES
+        ('t1','as1','agent_search', 1.5, '2026-03-06'),
+        ('t1','as2','agent_search', 1.5, '2026-03-06');
+    `);
+
+    const result = await computeExpectedBilling(db, "t1", "2026-03-01", "2026-04-01", "growth");
+    // chatは会話1件 + agent_search 2行 = 3。
+    // 'chat'しか数えない退行なら1、'agent_search'しか数えない退行なら2になる
+    // (どちらの片落ちも検知できるよう、両方が非ゼロの構成にしてある)。
+    expect(result.textUnits).toBe(3);
+    expect(result.textUnits).not.toBe(1); // agent_search が抜け落ちた場合の値
+    expect(result.textUnits).not.toBe(2); // chat が抜け落ちた場合の値
+  });
+
+  it("agent_searchはbilledQuantity(加重合計・純従量経路)にも通常どおり乗る(billable=trueのまま)", async () => {
+    await db.query(`
+      INSERT INTO usage_logs (tenant_id, request_id, feature_used, plan_multiplier, created_at)
+      VALUES ('t1','as1','agent_search', 1.0, '2026-03-05');
+    `);
+
+    const result = await computeExpectedBilling(db, "t1", "2026-03-01", "2026-04-01", "starter");
+    expect(result.billableUnits).toBe(1);
+    expect(result.billedQuantity).toBe(1);
+    expect(result.totalRequests).toBe(1);
+  });
+
+  it("agent_searchがbillable=falseで記録された場合はtextUnits/billedQuantityどちらにも乗らない(billable設計を壊していないことの対照)", async () => {
+    await db.query(`
+      INSERT INTO usage_logs (tenant_id, request_id, feature_used, plan_multiplier, billable, created_at)
+      VALUES ('t1','as1','agent_search', 1.0, false, '2026-03-05');
+    `);
+
+    const result = await computeExpectedBilling(db, "t1", "2026-03-01", "2026-04-01", "growth");
+    expect(result.textUnits).toBe(0);
+    expect(result.billedQuantity).toBe(0);
+  });
+
   // PR-6(2026-08-25 収益監査): SCRIPTS/ci-billing-schema.sh の FILES 配列と
   // schemaHealth.ts の REQUIRED_COLUMNS が食い違うと、CI は緑のまま本番だけ
   // 列が欠落する事故が起きる(stripe_webhook_events で実際に発生していた)。
