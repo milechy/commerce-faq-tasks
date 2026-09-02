@@ -183,11 +183,12 @@ describe('detectABWinners の境界値', () => {
 // type + description(文字列)の完全一致で行っている(runAutoTuningCheck 内)。
 // judge_repeated / effectiveness_top の description には件数(cnt/total)が
 // そのまま埋め込まれるため、同じ提案が継続しているだけで件数が増える(3回→4回、
-// 5回→6回)と別物と判定され、同じ提案に対して毎回新しい通知が出てしまう。
-// このテストは「あるべき挙動」ではなく現状の挙動を記録するもの。dedupキーを
-// principle/rule 等の安定値にする是正は別タスクとして報告する(このタスクでは直さない)。
+// 5回→6回)しても、安定した dedupKey(rule/experimentId/principle ベース)で
+// 重複判定するため2件目は正しく抑止される。以前は description 文字列の完全一致
+// で判定しており、件数が変わるだけで別物扱いされ毎回再通知される欠陥があった
+// (#1136 で是正済み。Asana 1218088718682119)。
 // ---------------------------------------------------------------------------
-describe('通知の重複排除キー(description文字列)の弱点', () => {
+describe('通知の重複排除キー(dedupKey)', () => {
   function mockPoolForPrinciple(rows: Array<Record<string, unknown>>) {
     mockQuery.mockImplementation((sql: string) => {
       if (sql.includes('FROM conversion_attributions')) return Promise.resolve({ rows });
@@ -200,14 +201,14 @@ describe('通知の重複排除キー(description文字列)の弱点', () => {
     mockCreateNotification.mockClear();
   });
 
-  it('★欠陥: 同じ心理原則でもCV件数が増えて説明文の数字が変わるだけで、別物として重複通知が出る', async () => {
-    // notificationExists の実装(src/lib/notifications.ts)は description の完全一致で
-    // 過去の通知を検索する。ここではその挙動を「一度見た description は既存扱いにする」
+  it('同じ心理原則でCV件数が増えて説明文の数字が変わっても、dedupKeyが同一なら再通知しない', async () => {
+    // notificationExists の実装(src/lib/notifications.ts)は dedup_key の完全一致で
+    // 過去の通知を検索する。ここではその挙動を「一度見た dedupKey は既存扱いにする」
     // 集合で模す(単純に false 固定するより実挙動に近い)。
-    const seenDescriptions = new Set<string>();
-    mockNotificationExists.mockImplementation((_type: string, _key: string, description: string) => {
-      const exists = seenDescriptions.has(description);
-      seenDescriptions.add(description);
+    const seenDedupKeys = new Set<string>();
+    mockNotificationExists.mockImplementation((_type: string, _key: string, dedupKey: string) => {
+      const exists = seenDedupKeys.has(dedupKey);
+      seenDedupKeys.add(dedupKey);
       return Promise.resolve(exists);
     });
 
@@ -217,9 +218,25 @@ describe('通知の重複排除キー(description文字列)の弱点', () => {
     mockPoolForPrinciple([{ principle: '返報性', total: '6', avg_temp: '42' }]);
     await runAutoTuningCheck('tenant-1'); // 2回目: 同じ原則が6回目のCVに達しただけ
 
-    // 本来は「継続的に効いている同じ提案」として2件目は抑止されてほしいが、
-    // description に total 件数が入っているため notificationExists は別物と判定し、
-    // 2件とも通知される。
+    // dedupKey は `effectiveness_top:返報性` で total を含まないため、
+    // 「継続的に効いている同じ提案」として2件目は抑止される。
+    expect(mockCreateNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it('原則が変われば別提案として通知される', async () => {
+    const seenDedupKeys = new Set<string>();
+    mockNotificationExists.mockImplementation((_type: string, _key: string, dedupKey: string) => {
+      const exists = seenDedupKeys.has(dedupKey);
+      seenDedupKeys.add(dedupKey);
+      return Promise.resolve(exists);
+    });
+
+    mockPoolForPrinciple([{ principle: '返報性', total: '5', avg_temp: '42' }]);
+    await runAutoTuningCheck('tenant-1');
+
+    mockPoolForPrinciple([{ principle: '希少性', total: '5', avg_temp: '42' }]);
+    await runAutoTuningCheck('tenant-1');
+
     expect(mockCreateNotification).toHaveBeenCalledTimes(2);
   });
 });
