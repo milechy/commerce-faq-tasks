@@ -187,6 +187,71 @@ describe('ConversionDashboardPage — 改善提案セクション', () => {
       expect(screen.getByText(/送料に関するFAQを追加する/)).toBeTruthy();
     });
   });
+
+  // ポーリング側(この画面)と通知を作る側(src/api/conversion/autoTuning.ts の
+  // runAutoTuningCheck)の type/is_read の文字列が食い違うと、通知は作られているのに
+  // 画面には一切出ない(=今回直った不具合そのもの)。クエリ文字列を固定して再発を防ぐ。
+  it('type=auto_tuning_suggestion & is_read=false でポーリングする(通知を作る側のtypeと一致させる契約)', async () => {
+    vi.mocked(authFetch).mockImplementation((url) => {
+      const u = String(url);
+      if (u.includes('/v1/admin/notifications')) return mockStatus(200, { items: [] });
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      const call = vi.mocked(authFetch).mock.calls.find(([url]) => String(url).includes('/v1/admin/notifications'));
+      expect(call).toBeTruthy();
+      expect(String(call![0])).toContain('type=auto_tuning_suggestion');
+      expect(String(call![0])).toContain('is_read=false');
+    });
+  });
+
+  // 🏆バッジは metadata.candidate_type === 'ab_winner' のときだけ出る想定
+  // (judge_repeated=🔁, それ以外=⭐)。ab_winner以外にも🏆が出てしまう/
+  // ab_winnerで🏆が出ない、のどちらの回帰も検知する。
+  it('🏆バッジは candidate_type==="ab_winner" の提案にだけ出る', async () => {
+    vi.mocked(authFetch).mockImplementation((url) => {
+      const u = String(url);
+      if (u.includes('/v1/admin/notifications')) {
+        return mockStatus(200, {
+          items: [
+            {
+              id: 1,
+              type: 'auto_tuning_suggestion',
+              message: 'A/Bテスト「CTA文言テスト」でVariant Bが勝利',
+              metadata: { suggested_action: 'Variant Bを適用', candidate_type: 'ab_winner' },
+            },
+            {
+              id: 2,
+              type: 'auto_tuning_suggestion',
+              message: '同じ質問が繰り返されています',
+              metadata: { suggested_action: '送料に関するFAQを追加する', candidate_type: 'judge_repeated' },
+            },
+            {
+              id: 3,
+              type: 'auto_tuning_suggestion',
+              message: '「返報性」が5回のCVに貢献',
+              metadata: { suggested_action: '「返報性」を優先設定', candidate_type: 'effectiveness_top' },
+            },
+          ],
+          unread_count: 3,
+          total: 3,
+        });
+      }
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('A/Bテスト「CTA文言テスト」でVariant Bが勝利')).toBeTruthy();
+    });
+    expect(screen.getAllByText('🏆')).toHaveLength(1);
+    expect(screen.getAllByText('🔁')).toHaveLength(1);
+    expect(screen.getAllByText('⭐')).toHaveLength(1);
+  });
 });
 
 // 母数不足の間、「データがありません」で機能が壊れて見えないようにする回帰テスト
