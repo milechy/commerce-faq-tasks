@@ -8470,6 +8470,7 @@ describe('POST /v1/admin/agent/chat', () => {
       ['avatar_wizard', 'アバター新規作成', '/admin/avatar/wizard'],
       ['knowledge_pdf', 'PDFアップロード', '/admin/knowledge/tenant-abc?tab=pdf'],
       ['knowledge_attribution', '成約への貢献度', '/admin/knowledge/tenant-abc?tab=attribution'],
+      ['account_password', 'アカウント設定', '/admin/account'],
     ])('feature=%s: 旧UIの案内(画面名・URL)を返す', async (feature, label, path) => {
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('call-lu-1', 'get_legacy_ui_link', { feature }))
@@ -8700,7 +8701,7 @@ describe('POST /v1/admin/agent/chat', () => {
         'chat_test', 'avatar_wizard', 'knowledge_pdf', 'knowledge_attribution',
         'analytics', 'conversion',
         'faq_publish_toggle', 'faq_bulk_ops', 'avatar_feature_toggle',
-        'avatar_profile', 'avatar_premium',
+        'avatar_profile', 'avatar_premium', 'account_password',
       ]);
       const untested = LEGACY_UI_FEATURES.filter((f) => !testedFeatures.has(f));
       expect(untested).toEqual([]);
