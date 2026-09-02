@@ -208,4 +208,29 @@ describe('GET /v1/admin/analytics/measurement-health のスキーマ整合', () 
     expect(res.body.fixedCostQuota.livekit.quota).toBeNull();
     expect(mockFetchFixedCostQuotaStatus).toHaveBeenCalledTimes(1);
   });
+
+  // ★発見した欠陥(直さず報告)★ 4本(fetchSchemaHealth/fetchIgnitionStatus/
+  // fetchHermesAcceptanceRate/fetchFixedCostQuotaStatus)は routes.ts で
+  // `Promise.all([...])` に束ねられており、どれか1本が例外を投げると全体が
+  // rejectしてこのエンドポイント全体が500になる(routes.tsのcatchが
+  // 「計測ヘルスの取得に失敗しました」で丸ごと落とす)。これは
+  // fetchMeasurementHealth(基本の計測ヘルス5指標)自身の成功可否とも無関係に
+  // 巻き込まれるため、fixedCostQuotaのDB障害1つで schemaHealth/ignitionStatus/
+  // hermesAcceptanceRate と基本指標まで全損する — 前例(Asana 1217890011615276:
+  // 「KPI/計測ヘルスの欠損で監視画面が全損する」)と同型のフェイルソフトでない構造。
+  // it.failingで期待する挙動(fixedCostQuotaが壊れても他は生き残る)を明示したまま残す。
+  it.failing('fetchFixedCostQuotaStatusが例外を投げても、他の運用カード(schemaHealth等)と基本の計測ヘルスは道連れにしない(フェイルソフト)', async () => {
+    mockFetchFixedCostQuotaStatus.mockReset().mockRejectedValueOnce(new Error('db connection lost'));
+
+    const res = await request(makeApp())
+      .get('/v1/admin/analytics/measurement-health')
+      .set('x-role', 'super_admin');
+
+    expect(res.status).toBe(200);
+    // fixedCostQuota自体は取得できなくても、他のカードと基本指標は生き残ってほしい
+    expect(res.body.schemaHealth).toBeDefined();
+    expect(res.body.ignitionStatus).toBeDefined();
+    expect(res.body.hermesAcceptanceRate).toBeDefined();
+    expect(res.body.validUserSessionCount).toBe(0);
+  });
 });

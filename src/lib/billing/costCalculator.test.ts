@@ -23,6 +23,7 @@ import {
   FLUX_PRO_COST_PER_IMAGE_USD,
   LEMONSLICE_AVATAR_REGISTRATION_COST_USD,
   NON_BILLABLE_FEATURES,
+  LIVEKIT_ROOM_TOKEN_MODEL,
 } from './costCalculator';
 
 // ---------------------------------------------------------------------------
@@ -66,6 +67,15 @@ describe('normalizeModelKey', () => {
   it('不明モデルは undefined を返す', () => {
     expect(normalizeModelKey('unknown-model-v99')).toBeUndefined();
     expect(normalizeModelKey('')).toBeUndefined();
+  });
+
+  // A2A-0i: LIVEKIT_ROOM_TOKEN_MODEL('livekit-room-token')は新しい列を増やさずに
+  // 既存のmodel列を「識別子」として流用したもの(billingHealthCheck.tsのコメント参照)。
+  // LLM価格表に一致してしまうと誤ってコストが計上される事故になるため、
+  // どのLLM系パターン(8b/70b/gemini/embedding/perplexity/gpt-oss)にも
+  // マッチせずundefinedになる(=コスト0扱い)ことを固定する。
+  it('LIVEKIT_ROOM_TOKEN_MODELはLLM価格表のどのパターンにも一致せずundefinedになる(誤課金防止)', () => {
+    expect(normalizeModelKey(LIVEKIT_ROOM_TOKEN_MODEL)).toBeUndefined();
   });
 });
 
@@ -210,6 +220,14 @@ describe('calculateLLMCostCents', () => {
       });
       expect(Number.isInteger(result)).toBe(true);
       expect(result).toBeGreaterThanOrEqual(0);
+    });
+
+    // A2A-0i: livekitTokenRoutes.ts の実際の呼び出し形(model=LIVEKIT_ROOM_TOKEN_MODEL,
+    // inputTokens=0, outputTokens=0)を再現し、0コストで確定することを固定する。
+    it('LIVEKIT_ROOM_TOKEN_MODEL(inputTokens=0,outputTokens=0)は0を返す(billable=falseでも計算経路自体が安全)', () => {
+      expect(
+        calculateLLMCostCents({ model: LIVEKIT_ROOM_TOKEN_MODEL, inputTokens: 0, outputTokens: 0 }),
+      ).toBe(0);
     });
   });
 });

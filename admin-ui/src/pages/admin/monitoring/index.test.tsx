@@ -592,4 +592,45 @@ describe("MonitoringPage — 固定費クォータ消費率(LemonSlice/LiveKit)"
     });
     expect(screen.queryByText("固定費クォータ消費率(LemonSlice/LiveKit)")).toBeNull();
   });
+
+  // fixedCostQuota が null/undefined(欠損)のときは `health?.fixedCostQuota &&` の
+  // 判定でカードごと安全に隠れる。「壊れた形」のうち少なくともこの2パターンは
+  // フェイルソフトであることを固定する。
+  it.each([null, undefined])("fixedCostQuotaが%sのときはクラッシュせず、カードを出さないだけで他のカードは生き残る", async (value) => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
+      if (url.includes("/measurement-health")) return mockOk({ ...BASE_HEALTH, fixedCostQuota: value });
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("会話完了率")).toBeTruthy();
+    });
+    expect(screen.queryByText("固定費クォータ消費率(LemonSlice/LiveKit)")).toBeNull();
+  });
+
+  // ★発見した欠陥(直さず報告)★ fixedCostQuotaがtruthyだが壊れた形(例: 空オブジェクト
+  // {}や、lemonslice/livekitサブフィールドの欠落)で返ると、FixedCostQuotaRowが
+  // `line.quota`等を undefined に対して読もうとして例外を投げる。このページには
+  // (admin/analytics/index.tsxのSectionErrorBoundaryのような)ErrorBoundaryが
+  // 無いため、その例外はページ全体のレンダーを止め、KPIカード(会話完了率など)を
+  // 含む画面全体が白紙になる — 前例(Asana 1217890011615276)と同型のフェイルソフト
+  // でない構造。it.failsで期待する挙動(このカード以外は生き残る)を明示したまま残す。
+  // (再現確認: 使い捨てテストで実際にクラッシュすることを確認済み。5000msの
+  // デフォルトタイムアウトでtimeoutするため、ここではタイムアウトを短く切る。)
+  it.fails("fixedCostQuotaが壊れた形({})で返っても、ページ全体はクラッシュせず他のカードは生き残る", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
+      if (url.includes("/measurement-health")) return mockOk({ ...BASE_HEALTH, fixedCostQuota: {} });
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("会話完了率")).toBeTruthy();
+    }, { timeout: 300 });
+  }, 1000);
 });
