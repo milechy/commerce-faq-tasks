@@ -1,7 +1,7 @@
 // src/api/admin/feedback/routes.ts
 
 // Phase43: admin_feedback テーブル CRUD API
-// チケットスタイルのフィードバック管理（既存のチャット系 feedbackRoutes.ts とは別）
+// チケットスタイルのフィードバック管理（feedback_messages チャット系とは別テーブル）
 
 import type { Express, Request, Response } from "express";
 import { z } from "zod";
@@ -82,9 +82,6 @@ const CLIENT_ADMIN_FEEDBACK_FIELDS = [
 
 export function registerAdminFeedbackManagementRoutes(app: Express): void {
   // supabaseAuthMiddleware を先頭に適用
-  // NOTE: /v1/admin/feedback/* は既存の feedbackRoutes.ts とパスを共有するが、
-  //       このファイルのルートを index.ts で先に登録することで GET/POST は上書き。
-  //       /threads, /unread-count, /read, /:id/flag は feedbackRoutes.ts が処理。
 
   // -----------------------------------------------------------------------
   // GET /v1/admin/feedback
