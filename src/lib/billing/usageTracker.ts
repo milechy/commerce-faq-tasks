@@ -12,7 +12,14 @@ import { planMultiplier } from './planPricing';
 // 含まれていたがTS型に無く未使用だった値（GID 1216944049264977 で配線）。
 // admin_tuning / admin_ai_assist / admin_engagement_suggest / admin_option_estimator は
 // GID 1216944003337186 で新設（いずれもNON_BILLABLE_FEATURES、原価可視化のみが目的）。
-export type FeatureUsed = 'chat' | 'avatar' | 'voice' | 'admin_guide' | 'avatar_config_image' | 'avatar_config_voice' | 'avatar_config_prompt' | 'avatar_config_test' | 'anam_session' | 'feedback_ai' | 'book_analysis' | 'book_structurize' | 'option_service' | 'premium_avatar_generation' | 'admin_agent' | 'sai_agent' | 'admin_tuning' | 'admin_ai_assist' | 'admin_engagement_suggest' | 'admin_option_estimator';
+// agent_search は [A2A-1a] で新設（/agent.search・/agent/search の外部エージェント連携API）。
+// これまで 'chat' に相乗りして計上していたが、他機能と原価を混ぜずに可視化するため分離した。
+// ★billable=trueのまま維持すること★ NON_BILLABLE_FEATURES には入れない
+// （外部API課金は '会話' と同じ課金対象。costCalculator.ts の END_USER_FEATURES と
+// stripeSync.ts の text_units 集計SQLにも 'chat' の兄弟として追加済み。この2箇所を
+// 追随させないと、Growth/Standardプランのテナントで agent_search 分が
+// 一切請求されなくなる — CLAUDE.md 禁止55と同じ「複数箇所を同時に直す」種類の罠）。
+export type FeatureUsed = 'chat' | 'avatar' | 'voice' | 'admin_guide' | 'avatar_config_image' | 'avatar_config_voice' | 'avatar_config_prompt' | 'avatar_config_test' | 'anam_session' | 'feedback_ai' | 'book_analysis' | 'book_structurize' | 'option_service' | 'premium_avatar_generation' | 'admin_agent' | 'sai_agent' | 'admin_tuning' | 'admin_ai_assist' | 'admin_engagement_suggest' | 'admin_option_estimator' | 'agent_search';
 
 export interface TrackUsageParams {
   tenantId: string;

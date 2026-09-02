@@ -344,10 +344,10 @@ export default function TenantDetailPage() {
             />
           )}
           {activeTab === "ga4" && (
-            <Ga4IntegrationTab tenantId={tenantId} />
+            <Ga4IntegrationTab tenantId={tenantId} plan={tenant?.plan ?? null} />
           )}
           {activeTab === "posthog" && (
-            <PostHogIntegrationTab tenantId={tenantId} />
+            <PostHogIntegrationTab tenantId={tenantId} plan={tenant?.plan ?? null} />
           )}
           {activeTab === "analytics" && (
             <AnalyticsSummaryTab tenantId={tenantId} />

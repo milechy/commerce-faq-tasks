@@ -51,8 +51,8 @@ describe("POST /internal/ga4/health-check-all", () => {
       .mockResolvedValueOnce({ status: "connected", connectedAt: new Date() });
 
     const { app } = makeApp([
-      { id: "tenant-a", ga4_property_id: "111" },
-      { id: "tenant-b", ga4_property_id: "222" },
+      { id: "tenant-a", ga4_property_id: "111", plan: "growth" },
+      { id: "tenant-b", ga4_property_id: "222", plan: "growth" },
     ]);
 
     const body = {};
@@ -69,14 +69,41 @@ describe("POST /internal/ga4/health-check-all", () => {
     expect(res.body.checked_at).toBeTruthy();
   });
 
+  // GID [A2A-0d]: 外部アナリティクス連携(GA4)はGrowth以上限定。プラン降格後も
+  // ga4_property_id が残るテナントで、Cronが原価の発生するGA4 API呼び出しを
+  // 続けないことと、対象プランのテナントは従来どおり処理されることを両方確認する。
+  it("marks tenants below Growth plan as plan_restricted while still processing eligible tenants", async () => {
+    mockHealthCheck.mockResolvedValueOnce({ status: "connected", connectedAt: new Date() });
+
+    const { app } = makeApp([
+      { id: "tenant-a", ga4_property_id: "111", plan: "growth" },
+      { id: "tenant-d", ga4_property_id: "444", plan: "standard" },
+    ]);
+
+    const body = {};
+    const res = await request(app)
+      .post("/internal/ga4/health-check-all")
+      .set(makeHmacHeaders(body))
+      .send(body);
+
+    expect(res.status).toBe(200);
+    expect(res.body.results).toHaveLength(2);
+    // plan_restricted のテナントでは原価の発生するAPI呼び出しが一切走らない。
+    expect(mockHealthCheck).toHaveBeenCalledTimes(1);
+    const restricted = res.body.results.find((r: any) => r.tenant_id === "tenant-d");
+    expect(restricted.status).toBe("plan_restricted");
+    const eligible = res.body.results.find((r: any) => r.tenant_id === "tenant-a");
+    expect(eligible.status).toBe("connected");
+  });
+
   it("includes error tenants in results", async () => {
     mockHealthCheck
       .mockResolvedValueOnce({ status: "connected", connectedAt: new Date() })
       .mockResolvedValueOnce({ status: "error", errorMessage: "permission_denied" });
 
     const { app } = makeApp([
-      { id: "tenant-a", ga4_property_id: "111" },
-      { id: "tenant-c", ga4_property_id: "333" },
+      { id: "tenant-a", ga4_property_id: "111", plan: "growth" },
+      { id: "tenant-c", ga4_property_id: "333", plan: "growth" },
     ]);
 
     const body = {};

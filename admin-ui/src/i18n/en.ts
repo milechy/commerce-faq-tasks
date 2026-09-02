@@ -281,6 +281,7 @@ const en: Record<TranslationKey, string> = {
   "tenant_detail.origin_warning_empty": "⚠️ The allowed domains list is empty. As-is, the chat will work when embedded on any site. We recommend entering your website's actual URL.",
   "tenant_detail.origin_warning_r2c_own_only": "❌ The allowed domains contain only admin console URLs. As-is, the chat widget won't display on your actual website. The information sent by a visitor's browser only matches your website's own address, never the admin console URL. Please add your website's actual URL.",
   "tenant_detail.origin_warning_r2c_own_mixed": "⚠️ The allowed domains include an admin console URL. The widget already works using the actual website URL(s) you've added, but the admin console URL will never match what a visitor's browser sends, so this entry is unnecessary. We recommend removing it.",
+  "tenant_detail.external_analytics_locked": "🔒 External analytics integration ({product}) is available on the Growth plan or above",
 
   // Billing page
   "billing.title": "💰 Billing & Usage",

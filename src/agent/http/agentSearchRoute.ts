@@ -2,12 +2,12 @@
 import type { Request, Response } from "express";
 import type pino from "pino";
 import { z } from "zod";
-import type { WebhookNotifier } from "../../integration/webhookNotifier";
 import { runSearchAgent } from "../flow/searchAgent";
 import { fetchDefaultExcludedIds, mergeExcludedIds } from "../../lib/defaultExcludedIds";
 import type { AuthedRequest } from "./authMiddleware";
 import { trackUsage } from "../../lib/billing/usageTracker";
 import { buildChatUsageTracking } from "../../lib/billing/chatUsage";
+import { getTenantPlan, planHasFeature } from "../../lib/billing/planFeatures";
 
 const AgentSearchSchema = z.object({
   q: z.string().min(1),
@@ -17,10 +17,6 @@ const AgentSearchSchema = z.object({
   /** Phase69-2: 検索結果から除外するエントリID一覧（最大500件） */
   excluded_ids: z.array(z.string()).max(500).optional(),
 });
-
-type AgentSearchDeps = {
-  webhookNotifier?: WebhookNotifier;
-};
 
 type RagStatsCamel = {
   plannerMs?: number;
@@ -57,11 +53,8 @@ function toCamelRagStats(ragStats: unknown): RagStatsCamel | undefined {
  */
 export function createAgentSearchHandler(
   logger: pino.Logger,
-  deps: AgentSearchDeps = {}
 ) {
   return async (req: Request, res: Response): Promise<void> => {
-    void deps;
-
     const parsed = AgentSearchSchema.safeParse(req.body);
     if (!parsed.success) {
       logger.warn(
@@ -85,6 +78,19 @@ export function createAgentSearchHandler(
       res.status(401).json({
         error: "unauthorized",
         message: "有効な認証情報が必要です（Bearer JWT / x-api-key / Basic）。",
+      });
+      return;
+    }
+
+    // GID [A2A-1a]: 外部エージェント連携APIの商品化。テナントAPIキー認証は
+    // 既に通っているが、プランへの載せ方が無かった(全プランへ無制限到達可能な抜け穴)。
+    // Growth以上に限定する。LLM呼び出し(原価発生)の手前で弾くこと。
+    // このAPIキー認証経路には super_admin ロールの概念が無いため、バイパスは設けない。
+    const plan = await getTenantPlan(tenantId);
+    if (!planHasFeature(plan, "agent_search")) {
+      res.status(403).json({
+        error: "plan_upgrade_required",
+        message: "外部エージェント連携APIはGrowthプラン以上でご利用いただけます",
       });
       return;
     }
@@ -117,10 +123,15 @@ export function createAgentSearchHandler(
       //   - agent.search は「会話」概念を持たない一発検索のため sessionId は渡さない
       //     （NULL 行 = 1リクエスト=1単位として請求側が数える）。
       //   - fire-and-forget（trackUsage は setImmediate）でレスポンスをブロックしない。
+      //
+      // [A2A-1a] featureUsed は 'chat' から 'agent_search' へ分離した(他機能と原価を
+      // 混ぜずに可視化するため)。billable=true・END_USER_FEATURES・stripeSync.ts の
+      // text_units 集計は 'chat' と同格のまま維持している（usageTracker.ts の
+      // FeatureUsed コメント参照。ここだけ変えると請求から抜け落ちる）。
       trackUsage({
         tenantId,
         requestId: req.requestId,
-        featureUsed: "chat",
+        featureUsed: "agent_search",
         ...buildChatUsageTracking(result),
       });
 

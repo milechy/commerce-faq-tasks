@@ -1,5 +1,8 @@
 import { useState, useEffect } from "react";
 import { authFetch, API_BASE } from "../../../lib/api";
+import { useLang } from "../../../i18n/LangContext";
+import { planHasFeature } from "../../../lib/planFeatures";
+import type { TenantPlan } from "../../../auth/useAuth";
 
 type Ga4Status = "not_configured" | "pending" | "connected" | "error" | "timeout" | "permission_revoked";
 
@@ -13,7 +16,12 @@ interface Ga4StatusData {
   recent_tests: { test_type: string; success: boolean; error_message: string | null; tested_at: string }[];
 }
 
-export default function Ga4IntegrationTab({ tenantId }: { tenantId: string }) {
+export default function Ga4IntegrationTab({ tenantId, plan }: { tenantId: string; plan: TenantPlan | null }) {
+  const { t } = useLang();
+  // GID [A2A-0d]: 外部アナリティクス連携はGrowthプラン以上。隠すのではなく
+  // ロック表示＋アップグレード導線にする(connect/testボタンを無効化し理由を表示)。
+  // 状態確認(status)・連携解除(disconnect)は引き続き常に許可する。
+  const planAllowsExternalAnalytics = planHasFeature(plan, "external_analytics");
   const [statusData, setStatusData] = useState<Ga4StatusData | null>(null);
   const [serviceAccountEmail, setServiceAccountEmail] = useState<string | null>(null);
   const [propertyId, setPropertyId] = useState("");
@@ -244,6 +252,22 @@ export default function Ga4IntegrationTab({ tenantId }: { tenantId: string }) {
         <StatusBadge status={currentStatus} />
       </div>
 
+      {/* プラン未達の理由表示（隠すのではなくロック表示＋アップグレード導線） */}
+      {!planAllowsExternalAnalytics && (
+        <div
+          style={{
+            borderRadius: 10,
+            border: "1px solid rgba(234,179,8,0.3)",
+            background: "rgba(234,179,8,0.08)",
+            padding: "12px 16px",
+            fontSize: 13, color: "#fbbf24", lineHeight: 1.6,
+            marginBottom: 20,
+          }}
+        >
+          {t("tenant_detail.external_analytics_locked", { product: "GA4" })}
+        </div>
+      )}
+
       {/* ステップ1: サービスアカウント案内 */}
       <div style={CARD}>
         <h3 style={{ fontSize: 15, fontWeight: 700, color: "var(--muted-foreground)", margin: "0 0 16px" }}>
@@ -313,8 +337,9 @@ export default function Ga4IntegrationTab({ tenantId }: { tenantId: string }) {
         </div>
         <div style={{ marginTop: 16, display: "flex", gap: 10, flexWrap: "wrap" }}>
           <button
-            style={{ ...BTN_PRIMARY, opacity: saving || !propertyId.trim() ? 0.6 : 1 }}
-            disabled={saving || !propertyId.trim()}
+            style={{ ...BTN_PRIMARY, opacity: saving || !propertyId.trim() || !planAllowsExternalAnalytics ? 0.6 : 1 }}
+            disabled={saving || !propertyId.trim() || !planAllowsExternalAnalytics}
+            title={planAllowsExternalAnalytics ? undefined : t("tenant_detail.external_analytics_locked", { product: "GA4" })}
             onClick={() => void handleConnect()}
           >
             {saving ? "⏳ 保存中..." : "💾 識別番号を保存"}
@@ -332,8 +357,9 @@ export default function Ga4IntegrationTab({ tenantId }: { tenantId: string }) {
             識別番号: <code style={{ color: "#a5b4fc", fontSize: 14 }}>{statusData?.ga4_property_id}</code>
           </div>
           <button
-            style={{ ...BTN_PRIMARY, opacity: testing ? 0.6 : 1 }}
-            disabled={testing}
+            style={{ ...BTN_PRIMARY, opacity: testing || !planAllowsExternalAnalytics ? 0.6 : 1 }}
+            disabled={testing || !planAllowsExternalAnalytics}
+            title={planAllowsExternalAnalytics ? undefined : t("tenant_detail.external_analytics_locked", { product: "GA4" })}
             onClick={() => void handleTest()}
           >
             {testing ? "⏳ テスト中..." : "🔗 GA4に接続テスト"}

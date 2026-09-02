@@ -291,6 +291,9 @@ const ja = {
   "tenant_detail.origin_warning_empty": "⚠️ 許可ドメインが空です。このままだと、どのサイトに設置してもチャットが動いてしまいます。テナント様の実際のサイトのURLを入力することをおすすめします。",
   "tenant_detail.origin_warning_r2c_own_only": "❌ 許可ドメインに管理画面のURLしか入っていません。このままだと、テナント様の実際のサイトにウィジェットを設置してもチャットが表示されません。サイトに訪れた方のブラウザから送られる情報はテナント様の実際のサイトのアドレスだけなので、管理画面のURLでは一致しません。実際のサイトのURLを追加してください。",
   "tenant_detail.origin_warning_r2c_own_mixed": "⚠️ 許可ドメインに管理画面のURLが含まれています。ウィジェットは追加済みの実際のサイトのURLで動作しますが、サイトに訪れた方のブラウザから送られる情報と管理画面のURLが一致する場面は無いため、この行は不要です。削除することをおすすめします。",
+  // GID [A2A-0d]: 外部アナリティクス連携(GA4/PostHog)はGrowthプラン以上。
+  // Ga4IntegrationTab.tsx / PostHogIntegrationTab.tsx で {product} に "GA4"/"PostHog" を渡す。
+  "tenant_detail.external_analytics_locked": "🔒 外部アナリティクス連携（{product}）はGrowthプラン以上でご利用いただけます",
 
   // Billing page
   "billing.title": "💰 請求・使用量",
