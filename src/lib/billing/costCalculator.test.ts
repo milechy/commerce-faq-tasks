@@ -945,6 +945,31 @@ describe('END_USER_FEATURES', () => {
     expect(END_USER_FEATURES.has('avatar_config_image')).toBe(false);
     expect(END_USER_FEATURES.has('book_structurize')).toBe(false);
   });
+
+  // [A2A-1a]: agent_search は 'chat' から分離した外部エージェント連携API
+  // (対外向けの従量課金APIであり運用ツールではない)。ここから外れると
+  // MARGIN_MULTIPLIER が適用されなくなり、Growth/Standard向けの粗利が消える。
+  it('agent_searchが含まれる(chat/avatar/voiceと同格の対外課金機能)', () => {
+    expect(END_USER_FEATURES.has('agent_search')).toBe(true);
+  });
+
+  it('featureUsed=agent_searchはMARGIN_MULTIPLIERが適用される(管理機能の原価のみ×1にならない)', () => {
+    // トークン数は小さすぎるとceil()の丸めで margin=1/5 の差が1セント未満に埋もれる
+    // (例: 1000トークンだと両方とも1セントに丸まり差が消える)ため、差が明確に
+    // 出る規模にする。
+    const withDefaultMargin = calculateBillingAmountCents({
+      model: 'gpt-oss-120b', inputTokens: 100_000, outputTokens: 100_000,
+      featureUsed: 'agent_search',
+    });
+    // marginOverride:1 で明示的に原価のみ(×1)にした場合と比較する(sai_agent/
+    // book_analysisの既存テストと同じ比較の型)。agent_search が END_USER_FEATURES
+    // から漏れて管理機能扱い(既定×1)になっていたら、この2つは一致してしまう。
+    const atCostOnly = calculateBillingAmountCents({
+      model: 'gpt-oss-120b', inputTokens: 100_000, outputTokens: 100_000,
+      featureUsed: 'agent_search', marginOverride: 1,
+    });
+    expect(withDefaultMargin).toBeGreaterThan(atCostOnly);
+  });
 });
 
 // ---------------------------------------------------------------------------
