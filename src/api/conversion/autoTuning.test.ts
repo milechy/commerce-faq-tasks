@@ -20,7 +20,12 @@ jest.mock('../../lib/notifications', () => ({
   notificationExists: (...args: unknown[]) => mockNotificationExists(...args),
 }));
 
-import { runAutoTuningCheck, runAutoTuningSweep } from './autoTuning';
+jest.mock('../../lib/logger', () => ({
+  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn() },
+}));
+
+import { runAutoTuningCheck, runAutoTuningSweep, autoTuningMonitor } from './autoTuning';
+import { logger } from '../../lib/logger';
 
 const AB_WINNER_ROW = {
   id: 'exp-1',
@@ -117,5 +122,171 @@ describe('runAutoTuningSweep', () => {
     await runAutoTuningSweep();
 
     expect(mockCreateNotification).not.toHaveBeenCalled();
+  });
+
+  it('テナント一覧取得(listActiveTenantIds)自体が失敗しても例外を投げずに終える。ログに残す', async () => {
+    mockQuery.mockImplementation((sql: string) => {
+      if (sql.includes('FROM tenants')) return Promise.reject(new Error('connection terminated'));
+      return Promise.resolve({ rows: [] });
+    });
+
+    await expect(runAutoTuningSweep()).resolves.toBeUndefined();
+
+    expect(mockCreateNotification).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalled();
+  });
+
+  it('1テナントの通知作成が例外を投げても、残りのテナントの処理は続き、失敗はログに残る(握り潰さない)', async () => {
+    mockPoolFor([{ id: 'broken' }, { id: 'ok' }], [AB_WINNER_ROW]);
+    // 1件目(broken)の createNotification だけ失敗させる。以降の呼び出しはモジュール既定の
+    // mockResolvedValue(undefined) に戻る(afterEachでの復元を要しない)。
+    mockCreateNotification.mockImplementationOnce(() => Promise.reject(new Error('insert failed')));
+
+    await runAutoTuningSweep();
+
+    expect(mockCreateNotification.mock.calls.map((c) => (c[0] as { recipientTenantId?: string }).recipientTenantId)).toEqual(
+      ['broken', 'ok'],
+    );
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ tenantId: 'broken' }),
+      expect.stringContaining('failed for tenant'),
+    );
+  });
+});
+
+describe('detectABWinners の境界値', () => {
+  beforeEach(() => {
+    mockQuery.mockReset();
+    mockCreateNotification.mockClear();
+    mockNotificationExists.mockClear();
+  });
+
+  it('引き分け(rateA === rateB)のときは勝者を通知しない(差 > 0.05 の境界)', async () => {
+    mockPoolFor([], [{ ...AB_WINNER_ROW, conv_a: '10', count_a: '20', conv_b: '10', count_b: '20' }]);
+
+    await runAutoTuningCheck('tenant-1');
+
+    expect(mockCreateNotification).not.toHaveBeenCalled();
+  });
+
+  it('母数0件(count_a=0, count_b=0)でも0除算でNaN化せず、通知しない', async () => {
+    mockPoolFor([], [{ ...AB_WINNER_ROW, conv_a: '0', count_a: '0', conv_b: '0', count_b: '0' }]);
+
+    await runAutoTuningCheck('tenant-1');
+
+    expect(mockCreateNotification).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ★既知の欠陥(未修正・報告のみ): notificationExists による重複排除は
+// type + description(文字列)の完全一致で行っている(runAutoTuningCheck 内)。
+// judge_repeated / effectiveness_top の description には件数(cnt/total)が
+// そのまま埋め込まれるため、同じ提案が継続しているだけで件数が増える(3回→4回、
+// 5回→6回)と別物と判定され、同じ提案に対して毎回新しい通知が出てしまう。
+// このテストは「あるべき挙動」ではなく現状の挙動を記録するもの。dedupキーを
+// principle/rule 等の安定値にする是正は別タスクとして報告する(このタスクでは直さない)。
+// ---------------------------------------------------------------------------
+describe('通知の重複排除キー(description文字列)の弱点', () => {
+  function mockPoolForPrinciple(rows: Array<Record<string, unknown>>) {
+    mockQuery.mockImplementation((sql: string) => {
+      if (sql.includes('FROM conversion_attributions')) return Promise.resolve({ rows });
+      return Promise.resolve({ rows: [] });
+    });
+  }
+
+  beforeEach(() => {
+    mockQuery.mockReset();
+    mockCreateNotification.mockClear();
+  });
+
+  it('★欠陥: 同じ心理原則でもCV件数が増えて説明文の数字が変わるだけで、別物として重複通知が出る', async () => {
+    // notificationExists の実装(src/lib/notifications.ts)は description の完全一致で
+    // 過去の通知を検索する。ここではその挙動を「一度見た description は既存扱いにする」
+    // 集合で模す(単純に false 固定するより実挙動に近い)。
+    const seenDescriptions = new Set<string>();
+    mockNotificationExists.mockImplementation((_type: string, _key: string, description: string) => {
+      const exists = seenDescriptions.has(description);
+      seenDescriptions.add(description);
+      return Promise.resolve(exists);
+    });
+
+    mockPoolForPrinciple([{ principle: '返報性', total: '5', avg_temp: '42' }]);
+    await runAutoTuningCheck('tenant-1'); // 1回目: 5回のCV
+
+    mockPoolForPrinciple([{ principle: '返報性', total: '6', avg_temp: '42' }]);
+    await runAutoTuningCheck('tenant-1'); // 2回目: 同じ原則が6回目のCVに達しただけ
+
+    // 本来は「継続的に効いている同じ提案」として2件目は抑止されてほしいが、
+    // description に total 件数が入っているため notificationExists は別物と判定し、
+    // 2件とも通知される。
+    expect(mockCreateNotification).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('autoTuningMonitor(定期実行ラッパー)', () => {
+  beforeEach(() => {
+    mockQuery.mockReset();
+    mockCreateNotification.mockClear();
+    mockNotificationExists.mockClear();
+    mockPoolFor([], []); // タイマー系テストはsweepの中身ではなくスケジューラ挙動を見るため空巡回にする
+    jest.useFakeTimers();
+  });
+
+  afterEach(() => {
+    autoTuningMonitor.stop();
+    jest.useRealTimers();
+  });
+
+  // ★禁止30: 費用が発生する定期処理を多重起動しうる形で登録しない★
+  it('start() を2回呼んでもタイマーは1本だけ登録される(二重起動防止)', () => {
+    autoTuningMonitor.start();
+    autoTuningMonitor.start();
+    expect(jest.getTimerCount()).toBe(1);
+  });
+
+  it('起動直後に1回実行される(次の周期を待たない)', async () => {
+    autoTuningMonitor.start();
+    await jest.advanceTimersByTimeAsync(0);
+    expect(mockQuery).toHaveBeenCalled();
+  });
+
+  it('1時間ごとに再実行される', async () => {
+    autoTuningMonitor.start();
+    await jest.advanceTimersByTimeAsync(0);
+    const callsAfterStart = mockQuery.mock.calls.length;
+
+    await jest.advanceTimersByTimeAsync(60 * 60 * 1000);
+    expect(mockQuery.mock.calls.length).toBeGreaterThan(callsAfterStart);
+  });
+
+  it('stop() 後はタイマーが残らない(テストプロセスのリーク防止)', () => {
+    autoTuningMonitor.start();
+    autoTuningMonitor.stop();
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  it('stop() の後に start() すると1本だけタイマーが再登録され、初回tickも再実行される', async () => {
+    autoTuningMonitor.start();
+    autoTuningMonitor.stop();
+    autoTuningMonitor.start();
+
+    expect(jest.getTimerCount()).toBe(1);
+    await jest.advanceTimersByTimeAsync(0);
+    expect(mockQuery).toHaveBeenCalled();
+  });
+
+  it('sweep中にエラーが起きてもタイマーは生き続け、次のtickも実行される', async () => {
+    mockQuery.mockImplementation((sql: string) => {
+      if (sql.includes('FROM tenants')) return Promise.reject(new Error('connection terminated'));
+      return Promise.resolve({ rows: [] });
+    });
+
+    autoTuningMonitor.start();
+    await jest.advanceTimersByTimeAsync(0);
+    mockQuery.mockClear();
+
+    await jest.advanceTimersByTimeAsync(60 * 60 * 1000);
+    expect(mockQuery).toHaveBeenCalled(); // 次のtickが来ている = monitor自体は死んでいない
   });
 });
