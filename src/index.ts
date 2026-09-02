@@ -11,6 +11,7 @@ import { fetchSchemaHealth } from "./api/admin/analytics/schemaHealth";
 import { SalesLogWriter, setGlobalSalesLogWriter } from "./agent/orchestrator/sales/salesLogWriter";
 import { createSalesLogNotionSink } from "./integrations/notion/salesLogNotionSink";
 import { judgeSweepRunner } from "./agent/judge/judgeSweepRunner";
+import { autoTuningMonitor } from "./api/conversion/autoTuning";
 import express from "express";
 import multer from "multer";
 import path from "node:path";
@@ -971,6 +972,16 @@ async function startServer() {
     const JUDGE_SWEEP_INTERVAL_MS = 15 * 60 * 1000; // 15分
     judgeSweepRunner.start(JUDGE_SWEEP_INTERVAL_MS);
     logger.info("[startup] judgeSweepRunner started (15min interval)");
+  }
+
+  // A2A-0g: Auto-tuningフライホイール(autoTuning.ts の runAutoTuningCheck)が
+  // export されておらず呼び出し元が無かったため、auto_tuning_suggestion 通知
+  // (ab_winner の🏆バッジを含む)が一度も生成されていなかった。conversion/index.tsx
+  // は既にポーリングしているため、通知を作る側をここに配線する(1h周期。
+  // billingHealthMonitorと同じ周期)。
+  if (db) {
+    autoTuningMonitor.start();
+    logger.info("[startup] autoTuningMonitor started (1h interval)");
   }
 }
 
