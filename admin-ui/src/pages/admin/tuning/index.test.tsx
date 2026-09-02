@@ -131,3 +131,55 @@ describe("AI提案(status=pending)の承認迂回を塞ぐ", () => {
     expect(screen.getByText(/✅/)).toBeTruthy();
   });
 });
+
+// React error #31 の回帰テスト。evidence は manual/judge = 文字列、hermes = JSONB
+// { pattern, rationale, session_ids } の2形式がある。直描画するとオブジェクトの場合に落ちる。
+describe("evidence が object(hermes由来)でも一覧が落ちない(React error #31 の回帰)", () => {
+  const HERMES_PENDING = {
+    id: 3, tenant_id: "tenant-a", trigger_pattern: "送料", expected_behavior: "無料ラインを案内",
+    priority: 50, is_active: false, created_by: "hermes", created_at: "2026-08-31T00:00:00Z",
+    source: "hermes", status: "pending",
+    evidence: {
+      pattern: "送料 に関する質問が繰り返された",
+      rationale: "3件の会話で送料の案内が一致していなかった",
+      session_ids: ["session-abc", "session-def"],
+    },
+  };
+
+  it("evidence がオブジェクトの提案を含む一覧が描画できる(クラッシュしない)", async () => {
+    mockList([HERMES_PENDING]);
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText("送料")).toBeTruthy());
+    expect(screen.getByText(/送料 に関する質問が繰り返された/)).toBeTruthy();
+    expect(screen.getByText(/3件の会話で送料の案内が一致していなかった/)).toBeTruthy();
+  });
+
+  it("evidence が文字列の提案も従来通り表示される", async () => {
+    mockList([PENDING]);
+    renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByText(/会話 #123 で保証期間を答えられなかった/)).toBeTruthy(),
+    );
+  });
+
+  it("evidence が null / 未知の形でも落ちない", async () => {
+    const unknownShape = { ...HERMES_PENDING, id: 4, evidence: { unexpected: "future field" } };
+    mockList([MANUAL_ACTIVE, { ...HERMES_PENDING, id: 5, evidence: 42 }, unknownShape]);
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText("返品")).toBeTruthy());
+    expect(screen.getAllByText("送料").length).toBeGreaterThan(0);
+  });
+
+  it("session_ids のリンクが正しい URL を指す", async () => {
+    mockList([HERMES_PENDING]);
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText("session-abc")).toBeTruthy());
+    fireEvent.click(screen.getByText("session-abc"));
+
+    expect(mockNavigate).toHaveBeenCalledWith("/admin/chat-history/session-abc");
+  });
+});
