@@ -714,6 +714,103 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
   );
 
   // -----------------------------------------------------------------------
+  // POST /v1/admin/avatar/configs/:id/adopt — デフォルトアバターを自テナントへ複製して有効化
+  // r2c_default 所有の is_default=true 行は /activate では有効化できない
+  // （tenant_id不一致でUPDATEが0件 → 404。:658-695）。使うには自テナント所有として
+  // 複製するしかないため、複製と有効化を1トランザクションで行う。
+  // -----------------------------------------------------------------------
+  app.post(
+    "/v1/admin/avatar/configs/:id/adopt",
+    async (req: Request, res: Response) => {
+      const { su, role, tenantId, isSuperAdmin } = extractAuth(req);
+      if (!isAllowedAvatarRole(role)) {
+        return denyAvatarRole(req, res, su, role);
+      }
+      const id = req.params["id"];
+
+      const client = await db.connect();
+      try {
+        await client.query("BEGIN");
+
+        const effectiveTenantId = isSuperAdmin
+          ? (req.query["tenant"] as string || tenantId)
+          : tenantId;
+
+        // プラン制限（LP料金表 Standard〜: 既定アバター利用）。activate と同じ
+        // queryTenantPlan/planHasFeature の実装パターンを踏襲する。avatar_customize
+        // (Growth〜カスタムアバター) は要求しない — デフォルトを使うのはカスタムではない。
+        // super_admin はバイパスする（activate と同じ規則）。
+        if (!isSuperAdmin) {
+          const plan = await queryTenantPlan(client, effectiveTenantId);
+          if (!planHasFeature(plan, "avatar")) {
+            await client.query("ROLLBACK");
+            return res.status(403).json({
+              error: "plan_upgrade_required",
+              message: "アバター機能はStandardプラン以上でご利用いただけます。",
+            });
+          }
+        }
+
+        // 複製元: r2c_default 所有の is_default=true 行のみ許可
+        const source = await client.query(
+          "SELECT * FROM avatar_configs WHERE id = $1 AND is_default = true AND tenant_id = 'r2c_default'",
+          [id]
+        );
+        if (source.rows.length === 0) {
+          await client.query("ROLLBACK");
+          return res.status(404).json({ error: "設定が見つかりません" });
+        }
+        const src = source.rows[0];
+
+        // 全て deactivate（activate と同じ）
+        await client.query(
+          "UPDATE avatar_configs SET is_active = false WHERE tenant_id = $1",
+          [effectiveTenantId]
+        );
+
+        // 自テナント所有として複製し、そのまま有効化する。lemonslice_agent_id は
+        // テナント単位の設定(tenants.lemonslice_agent_id)でありアバター行の値では
+        // ないため複製しない。is_default は複製先では false 固定（カスタム扱い）。
+        const result = await client.query(
+          `INSERT INTO avatar_configs
+            (tenant_id, name, image_url, voice_id, personality_prompt, agent_prompt,
+             agent_idle_prompt, behavior_description, avatar_provider, category_persona_map,
+             is_default, is_active)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, false, true)
+           RETURNING *`,
+          [
+            effectiveTenantId,
+            src.name,
+            src.image_url,
+            src.voice_id,
+            src.personality_prompt,
+            src.agent_prompt,
+            src.agent_idle_prompt,
+            src.behavior_description,
+            src.avatar_provider,
+            JSON.stringify(src.category_persona_map ?? {}),
+          ]
+        );
+
+        // tenants.features.avatar を true に同期（activate と同じ）
+        await client.query(
+          "UPDATE tenants SET features = jsonb_set(COALESCE(features, '{}'), '{avatar}', 'true') WHERE id = $1",
+          [effectiveTenantId]
+        );
+
+        await client.query("COMMIT");
+        return res.json(result.rows[0]);
+      } catch (err) {
+        await client.query("ROLLBACK");
+        logger.warn("[POST /v1/admin/avatar/configs/:id/adopt]", err);
+        return res.status(500).json({ error: "アバター設定の複製に失敗しました" });
+      } finally {
+        client.release();
+      }
+    }
+  );
+
+  // -----------------------------------------------------------------------
   // POST /v1/admin/avatar/configs/:id/reset-to-default — デフォルト値にリセット
   // -----------------------------------------------------------------------
   app.post(
