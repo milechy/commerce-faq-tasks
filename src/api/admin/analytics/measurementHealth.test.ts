@@ -291,6 +291,54 @@ describe("fetchMeasurementHealth — chatOpenDropoff", () => {
     expect(r.chatOpenDropoff.dropoffRate).toBeNull();
   });
 
+  // GID 1218086189953625: 分子(chat_sessions)はsource='user'で浄化済みなのに
+  // 分母(chat_open)がノーフィルタだと比率が意味を持たない。opened_visitors CTEに
+  // source='user'の絞り込みが入っていること、NULLは「不明」として別集計され
+  // 除外理由が可視化されることを固定する。
+  describe("source フィルタ(e2e/不明の除外)", () => {
+    it("opened_visitors のSQLは behavioral_events.source = 'user' で絞り込む", async () => {
+      const db = makeDb([
+        ...BASE,
+        { rows: [{ since: "2026-08-01T00:00:00Z", with_vid: "100", total: "100" }] },
+        { rows: [{ opened: "100", conversed: "25" }] },
+      ]);
+
+      await fetchMeasurementHealth(db, null, "30d");
+
+      const dropoffSql = db.query.mock.calls
+        .map(([sql]: [string]) => sql)
+        .find((sql: string) => sql.includes("opened_visitors AS"));
+      expect(dropoffSql).toContain("b.source = 'user'");
+      expect(dropoffSql).toContain("b.source IS NULL");
+    });
+
+    it("source IS NULL(不明)の訪問者数を除外理由として別途返す", async () => {
+      const db = makeDb([
+        ...BASE,
+        { rows: [{ since: "2026-08-01T00:00:00Z", with_vid: "100", total: "100" }] },
+        { rows: [{ opened: "100", conversed: "25", opened_unknown_source: "42" }] },
+      ]);
+
+      const r = await fetchMeasurementHealth(db, null, "30d");
+
+      expect(r.chatOpenDropoff.unknownSourceVisitorCount).toBe(42);
+      // 不明分は分母(visitorsOpened)には含まれない(別建て集計のため足し込まれていない)
+      expect(r.chatOpenDropoff.visitorsOpened).toBe(100);
+    });
+
+    it("opened_unknown_source が応答に無くても0にフォールバックする(後方互換)", async () => {
+      const db = makeDb([
+        ...BASE,
+        { rows: [{ since: "2026-08-01T00:00:00Z", with_vid: "100", total: "100" }] },
+        { rows: [{ opened: "100", conversed: "25" }] },
+      ]);
+
+      const r = await fetchMeasurementHealth(db, null, "30d");
+
+      expect(r.chatOpenDropoff.unknownSourceVisitorCount).toBe(0);
+    });
+  });
+
   // LB-9: 先回り声がけ(AI起点の自動開封)と能動クリック開封は応答率の意味が違うのに
   // 従来の visitorsOpened/dropoffRate は合算していた。トリガー種別ごとに出し分ける。
   describe("proactive/manual の出し分け", () => {
