@@ -74,7 +74,7 @@ describe('runAutoTuningCheck', () => {
 
     expect(mockNotificationExists).toHaveBeenCalledWith(
       'auto_tuning_suggestion',
-      'description',
+      'dedup_key',
       expect.any(String),
     );
     expect(mockCreateNotification).not.toHaveBeenCalled();
