@@ -210,27 +210,52 @@ describe("SettingsTab — 許可ドメインの警告表示(保存はブロッ�
     fireEvent.click(button);
   }
 
-  it("許可ドメインが空のまま保存すると警告が出るが、保存は実行される", async () => {
+  // useLang は t: (key) => key でモックしているため、警告文言は実際の翻訳文ではなく
+  // i18nキーがそのまま画面に出る。buildOriginWarningLevel が返す level → i18nキーの
+  // 配線を確認するテストなので、それで良い(実際の文言のテストは
+  // admin-ui/src/lib/tenantOriginWarning.test.ts 側で ja 辞書を直接検証している)。
+  it("許可ドメインが空のまま保存すると警告(empty)が出るが、保存は実行される", async () => {
     renderTab();
     // originsText は初期状態で空(makeTenant の allowed_origins: [])
     submit();
 
-    expect(screen.getByText(/許可ドメインが空です/)).toBeTruthy();
+    expect(screen.getByText("tenant_detail.origin_warning_empty")).toBeTruthy();
     await waitFor(() => {
       expect(onSaveMock).toHaveBeenCalledWith(expect.objectContaining({ allowed_origins: [] }));
     });
   });
 
-  it("R2C自身のドメインのみで保存すると警告が出るが、保存は実行される", async () => {
+  it("R2C自身のドメインのみで保存すると警告(r2c_own_only, 致命的)が出るが、保存は実行される", async () => {
     renderTab();
     const textarea = getOriginsTextarea();
     fireEvent.change(textarea, { target: { value: "https://admin.r2c.biz" } });
     submit();
 
-    expect(screen.getByText(/管理画面のURLしか入っていません/)).toBeTruthy();
+    expect(screen.getByText("tenant_detail.origin_warning_r2c_own_only")).toBeTruthy();
     await waitFor(() => {
       expect(onSaveMock).toHaveBeenCalledWith(
         expect.objectContaining({ allowed_origins: ["https://admin.r2c.biz"] })
+      );
+    });
+  });
+
+  it("A2A-0j: R2C自身のドメインが実ドメインに混在すると警告(r2c_own_mixed, 軽度)が出るが、保存は実行される", async () => {
+    renderTab();
+    const textarea = getOriginsTextarea();
+    fireEvent.change(textarea, {
+      target: { value: "https://shop.example.com\nhttps://admin.r2c.biz" },
+    });
+    submit();
+
+    expect(screen.getByText("tenant_detail.origin_warning_r2c_own_mixed")).toBeTruthy();
+    // 致命的(r2c_own_only)や空(empty)の警告は同時に出ない
+    expect(screen.queryByText("tenant_detail.origin_warning_r2c_own_only")).toBeNull();
+    expect(screen.queryByText("tenant_detail.origin_warning_empty")).toBeNull();
+    await waitFor(() => {
+      expect(onSaveMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          allowed_origins: ["https://shop.example.com", "https://admin.r2c.biz"],
+        })
       );
     });
   });
@@ -244,7 +269,8 @@ describe("SettingsTab — 許可ドメインの警告表示(保存はブロッ�
     await waitFor(() => {
       expect(onSaveMock).toHaveBeenCalled();
     });
-    expect(screen.queryByText(/許可ドメインが空です/)).toBeNull();
-    expect(screen.queryByText(/管理画面のURLしか入っていません/)).toBeNull();
+    expect(screen.queryByText("tenant_detail.origin_warning_empty")).toBeNull();
+    expect(screen.queryByText("tenant_detail.origin_warning_r2c_own_only")).toBeNull();
+    expect(screen.queryByText("tenant_detail.origin_warning_r2c_own_mixed")).toBeNull();
   });
 });

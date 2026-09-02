@@ -34,15 +34,33 @@ export function isR2cOwnDomainOnly(allowedOrigins: string[]): boolean {
 }
 
 /**
- * 保存直前に表示する警告文言を返す。専門用語を使わず「このままだと何が起きるか」を書く。
+ * A2A-0j: allowed_origins に R2C 自身の運用ドメインが1件以上含まれるが、
+ * テナントの実サイトのドメインも含まれている(=全件一致ではない)場合に true を返す。
+ * 全件が R2C 自身のみの致命的ケース(ウィジェットが1ページも動かない)は
+ * isR2cOwnDomainOnly が担当する。こちらは「動きはするが不要なエントリが混ざっている」
+ * 軽度のケース(例: Accept の実データ, 2026-09-02 実測)を拾う。
+ * 判定基準は src/lib/tenantConfigAudit.ts と揃えること(両方更新が必要)。
+ */
+export function isR2cOwnDomainMixed(allowedOrigins: string[]): boolean {
+  if (allowedOrigins.every((o) => o.trim().length === 0)) return false;
+  const ownCount = allowedOrigins.filter(isR2cOwnHost).length;
+  return ownCount > 0 && ownCount < allowedOrigins.length;
+}
+
+/** 保存直前に表示する警告の強度。null は警告対象でないことを表す。 */
+export type OriginWarningLevel = "empty" | "r2c_own_only" | "r2c_own_mixed";
+
+/**
+ * 保存直前に表示する警告の強度を返す(表示文言は呼び出し側が i18n 辞書から引く)。
+ * - "empty": fail-open。どのサイトに設置してもチャットが動いてしまう
+ * - "r2c_own_only": 致命的。テナントの実ドメインが1つも無く、ウィジェットが1ページも動かない
+ * - "r2c_own_mixed": 軽度。ウィジェット自体は動くが、R2C自身のドメインは
+ *   サイト訪問者のブラウザが送る情報とは一致しない不要なエントリ
  * 警告対象でなければ null。
  */
-export function buildOriginWarning(allowedOrigins: string[]): string | null {
-  if (hasEmptyOrigins(allowedOrigins)) {
-    return "許可ドメインが空です。このままだと、どのサイトに設置してもチャットが動いてしまいます。テナント様の実際のサイトのURLを入力することをおすすめします。";
-  }
-  if (isR2cOwnDomainOnly(allowedOrigins)) {
-    return "許可ドメインに管理画面のURLしか入っていません。このままだと、テナント様の実際のサイトにウィジェットを設置してもチャットが表示されません。実際のサイトのURLを追加してください。";
-  }
+export function buildOriginWarningLevel(allowedOrigins: string[]): OriginWarningLevel | null {
+  if (hasEmptyOrigins(allowedOrigins)) return "empty";
+  if (isR2cOwnDomainOnly(allowedOrigins)) return "r2c_own_only";
+  if (isR2cOwnDomainMixed(allowedOrigins)) return "r2c_own_mixed";
   return null;
 }

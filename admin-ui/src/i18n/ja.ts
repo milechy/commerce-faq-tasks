@@ -286,6 +286,11 @@ const ja = {
   "tenant_detail.allowed_origins_desc": "入力例: https://shop.example.com　ワイルドカード可: https://*.example.com　空欄の場合は全ドメイン許可（開発用途のみ）",
   "tenant_detail.allowed_origins_placeholder": "https://shop.example.com\nhttps://www.example.com\nhttps://*.example.com",
   "tenant_detail.embed_no_origins_warning": "⚠️ 許可ドメインが設定されていません。セキュリティのため、Widgetを設置するドメインを「設定」タブで登録してください。",
+  // A2A-0j: 保存直前の警告。強度は3段階(空/致命的/軽度混在)。判定は
+  // admin-ui/src/lib/tenantOriginWarning.ts (buildOriginWarningLevel) を参照。
+  "tenant_detail.origin_warning_empty": "⚠️ 許可ドメインが空です。このままだと、どのサイトに設置してもチャットが動いてしまいます。テナント様の実際のサイトのURLを入力することをおすすめします。",
+  "tenant_detail.origin_warning_r2c_own_only": "❌ 許可ドメインに管理画面のURLしか入っていません。このままだと、テナント様の実際のサイトにウィジェットを設置してもチャットが表示されません。サイトに訪れた方のブラウザから送られる情報はテナント様の実際のサイトのアドレスだけなので、管理画面のURLでは一致しません。実際のサイトのURLを追加してください。",
+  "tenant_detail.origin_warning_r2c_own_mixed": "⚠️ 許可ドメインに管理画面のURLが含まれています。ウィジェットは追加済みの実際のサイトのURLで動作しますが、サイトに訪れた方のブラウザから送られる情報と管理画面のURLが一致する場面は無いため、この行は不要です。削除することをおすすめします。",
 
   // Billing page
   "billing.title": "💰 請求・使用量",
