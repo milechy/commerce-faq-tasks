@@ -46,8 +46,13 @@ import { submitSaiTask, getSaiTask } from '../../../lib/sai/saiClient';
 import { recordSaiTask, resolveSaiTaskTenant } from '../../../lib/sai/saiTaskRegistry';
 import { trackUsage } from '../../../lib/billing/usageTracker';
 import { GPT_OSS_120B } from '../../../config/groqModels';
-import { queryTenantPlan, planHasFeature, resolveShareForTenantPlan } from '../../../lib/billing/planFeatures';
-import { fetchBillingCostBreakdown, fetchBillingInvoices, computeBillingEstimateJpy, fetchBillingQuota } from '../../../lib/billing/billingApi';
+import { queryTenantPlan, planHasFeature, resolveShareForTenantPlan, type TenantPlan } from '../../../lib/billing/planFeatures';
+import { fetchBillingCostBreakdown, fetchBillingInvoices, computeBillingEstimateJpy, fetchBillingQuota, createCheckoutSessionForTenant } from '../../../lib/billing/billingApi';
+// CP-3(GID 1218086647623729): change_my_plan / start_billing_checkout。
+// ロジックは共通関数(changeTenantPlan.ts / billingApi.ts)側にのみ持たせ、ここでは
+// 呼び出しと確認ゲート・拒否理由の組み立てだけを行う(HTTPハンドラと2重実装しない)。
+import { changeTenantPlan } from '../../../lib/billing/changeTenantPlan';
+import { isFreeAdTransition, isEnterpriseSelfUpgrade, SELF_SERVICE_PLAN_VALUES } from '../tenants/routes';
 import { fetchAnalyticsSummary, fetchAnalyticsTrend, fetchConversionSummary, fetchKnowledgeAttribution, fetchLowScoreSessions } from '../analytics/summaryQueries';
 import { getRuleEffect } from '../analytics/ruleEffect';
 import { computeAbExperimentResults, fetchAbExperimentsOverview } from '../../conversion/abResultsQuery';
@@ -159,6 +164,32 @@ const BILLING_PLAN_LABEL: Record<string, string> = {
   standard: 'Standard',
   growth: 'Growth',
   enterprise: 'Enterprise',
+};
+
+// CP-3(GID 1218086647623729): change_my_plan の確認プレビュー/実行後カードで使う
+// 月額の表示専用テキスト。BILLING_PLAN_LABEL と同じ理由(旧UI admin-ui/src/pages/
+// admin/tenants/types.ts PLAN_OPTIONS.desc の価格表記をバックエンドから直接
+// importできないため複製する)で、実際の請求計算には一切使わない
+// (計算はStripe price(billingApi.ts)が唯一の出どころのまま)。
+// billing.md §7 の確定価格と揃えること。
+const BILLING_PLAN_MONTHLY_PRICE_LABEL: Record<string, string> = {
+  free_ad: '¥0（広告表示、請求対象外）',
+  starter: '¥20/会話（基本料なし・純従量）',
+  standard: '¥9,800/月〜（込み枠超過分は別途従量）',
+  growth: '¥29,800/月〜（込み枠超過分は別途従量）',
+  enterprise: '個別契約（担当まで問い合わせ）',
+};
+
+// change_my_plan の確認プレビューで「変わる機能」を一言要約するための表示専用テキスト。
+// 旧UI(admin-ui/src/pages/admin/tenants/types.ts PLAN_OPTIONS.desc)の要約と揃える。
+// ★実際にどのfeaturesフラグが落ちるかの正はchangeTenantPlan.tsの
+// computeFeatureRevocationOnDowngradeであり、ここは店主に見せる一言要約に過ぎない★
+const BILLING_PLAN_FEATURE_SUMMARY: Record<string, string> = {
+  free_ad: 'テキストチャットのみ・月200会話まで（アバター/音声なし・「Powered by R2C」バッジ表示）',
+  starter: '小規模サイト向け（〜500対話/月・アバターなし）',
+  standard: '既定アバター利用可・カスタム不可',
+  growth: 'AIアバター/Analytics/A-Bテスト/プレミアムアバター生成',
+  enterprise: '無制限・音声クローン/ディープリサーチ/Sai代行/事前ディスパッチ',
 };
 
 function normalizeFaqTags(raw: unknown): string[] {
@@ -654,9 +685,13 @@ export type KnowledgeAttributionCardPayload = {
 };
 
 // W2-7(docs/COPILOT_UI_PARITY.md §3.1 #15、T4 要約+可視化): 現在の契約プラン・今期の
-// 利用料金(機能別内訳)・直近の請求書。D2決定により閲覧専用 — 請求書の再送/金額調整/
-// 無料期間設定/プラン変更/一時停止再開は一切含めない(それらはsuper_admin専用の別画面の
-// 操作であり、confirmPolicy.tsのNON_WRITE_TOOLSにこのツールを入れているのもそのため)。
+// 利用料金(機能別内訳)・直近の請求書。閲覧専用 — 請求書の再送/金額調整/無料期間設定/
+// 一時停止再開は一切含めない(それらは引き続きsuper_admin専用の別画面の操作であり、
+// confirmPolicy.tsのNON_WRITE_TOOLSにこのツールを入れているのもそのため)。
+// CP-3(GID 1218086647623729、D2改訂 2026-09-02)により、プラン変更・お支払いカード
+// 登録はテナント自身がchange_my_plan/start_billing_checkoutツールで実行できるように
+// なったが、それらは別ツール・別カード(PlanChangedCardPayload)であり、この閲覧専用
+// カードには持たせない(閲覧結果と実行結果を混在させない)。
 // 数値はすべてfetchBillingCostBreakdown/fetchBillingInvoices(billingApi.ts)の
 // サーバ集計値をそのまま持たせる(AbTestResultsCardPayloadと同じ権威分離)。
 // invoicesAvailable=falseはStripe未設定/アクティブなサブスクリプション無しのいずれか
@@ -691,6 +726,20 @@ export type BillingSummaryCardPayload = {
   } | null;
 };
 
+// CP-3(GID 1218086647623729): change_my_plan が confirmed=true で実行した直後のカード。
+// changeTenantPlan.ts の戻り値(previous_plan/plan/billing_sync_needs_attention)を
+// そのまま持たせる(BillingSummaryCardPayloadと同じ権威分離。ここで金額やfeaturesの
+// 再計算はしない)。billingSyncNeedsAttentionは握り潰さず必ずカードに載せること —
+// 握り潰すと「変更しました」とだけ表示され、請求構成が追随していないまま月が終わる。
+export type PlanChangedCardPayload = {
+  kind: 'plan_changed';
+  previousPlan: string;
+  previousPlanLabel: string;
+  plan: string;
+  planLabel: string;
+  billingSyncNeedsAttention: boolean;
+};
+
 export type ActionCardPayload =
   | LegacyLinkCardPayload
   | AvatarPresetCardPayload
@@ -707,7 +756,8 @@ export type ActionCardPayload =
   | AnalyticsTrendCardPayload
   | AbTestResultsCardPayload
   | KnowledgeAttributionCardPayload
-  | BillingSummaryCardPayload;
+  | BillingSummaryCardPayload
+  | PlanChangedCardPayload;
 
 // ツール結果は既定では素の文字列で、構造化データを添えるツールだけが
 // { text, card } 形を返す。card は text の置き換えではなく追加である
@@ -4816,6 +4866,123 @@ export async function executeToolCall(
       } catch (err) {
         logger.warn('[actionExecutor] get_billing_summary failed', err);
         return truncate('ご利用状況・お支払い情報の取得に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // CP-3(GID 1218086647623729、D2改訂 2026-09-02): テナント自身によるプラン変更。
+    // 実処理は src/lib/billing/changeTenantPlan.ts(PUT /v1/admin/my-tenant/plan と
+    // 共有)に切り出してあり、ここでは確認ゲート・拒否理由の組み立て・カード生成のみ行う
+    // (トランザクション・監査・Stripe同期のロジックをここに書き写さない)。
+    // 課金が発生する操作のため confirmPolicy.ts で high(request_sai_taskと同じ階層)。
+    case 'change_my_plan': {
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+      const planArg = String(args['plan'] ?? '');
+      const confirmed = isConfirmed(args['confirmed']);
+
+      // ★判定基準の値("free_ad"/"enterprise")はroutes.ts側の純関数だけが持つ★
+      // ここに書き写さない(2箇所に値を持つと除外対象を増やしたときの追随漏れが起きる)。
+      if (isFreeAdTransition(planArg)) {
+        return truncate('free_adプランは消費者向け同意バナー実装まで新規発行できません。旧UI(管理画面)でも選択できません');
+      }
+      if (isEnterpriseSelfUpgrade(planArg)) {
+        return truncate('Enterprise は個別契約です。担当までお問い合わせください（チャットからは変更できません）');
+      }
+      if (!(SELF_SERVICE_PLAN_VALUES as readonly string[]).includes(planArg)) {
+        return truncate(`plan には ${SELF_SERVICE_PLAN_VALUES.join('/')} のいずれかを指定してください`);
+      }
+      const nextPlan = planArg as TenantPlan;
+
+      const currentPlan = await queryTenantPlan(db, tenantId);
+      if (currentPlan === nextPlan) {
+        return truncate(`既に${BILLING_PLAN_LABEL[currentPlan] ?? currentPlan}プランです`);
+      }
+
+      if (!confirmed) {
+        return truncate(
+          'プラン変更の確認\n' +
+          `• 現プラン: ${BILLING_PLAN_LABEL[currentPlan] ?? currentPlan}（${BILLING_PLAN_MONTHLY_PRICE_LABEL[currentPlan] ?? '不明'}）\n` +
+          `• 新プラン: ${BILLING_PLAN_LABEL[nextPlan] ?? nextPlan}（${BILLING_PLAN_MONTHLY_PRICE_LABEL[nextPlan] ?? '不明'}）\n` +
+          `• 変わる機能: ${BILLING_PLAN_FEATURE_SUMMARY[nextPlan] ?? ''}\n` +
+          'この内容でよいかユーザーに提示し、同意を得てから confirmed=true で再度実行してください'
+        );
+      }
+
+      try {
+        const result = await changeTenantPlan(db, logger, tenantId, nextPlan, actor.email);
+        if (result.kind === 'error') {
+          return truncate(result.body.message ?? `プラン変更に失敗しました（${result.body.error}）`);
+        }
+        if (result.kind === 'no_change') {
+          return truncate(`既に${BILLING_PLAN_LABEL[result.body.plan] ?? result.body.plan}プランです`);
+        }
+
+        const previousPlan = result.body.previous_plan ?? currentPlan;
+        const previousLabel = BILLING_PLAN_LABEL[previousPlan] ?? previousPlan;
+        const nextLabel = BILLING_PLAN_LABEL[result.body.plan] ?? result.body.plan;
+        const lines = [
+          `プランを${previousLabel}から${nextLabel}に変更しました`,
+          `• 新しい月額: ${BILLING_PLAN_MONTHLY_PRICE_LABEL[result.body.plan] ?? '不明'}`,
+        ];
+        // ★握り潰さない★ billing_sync_needs_attention が真のまま黙って
+        // 「変更しました」とだけ返すと、請求構成が追随していないことを誰も知らないまま
+        // 月が終わる(routes.ts の PUT /v1/admin/my-tenant/plan と同じ理由)。
+        if (result.body.billing_sync_needs_attention) {
+          lines.push('• 注意: 請求構成の更新に問題が発生しました。運営（R2Cサポート）までご連絡ください');
+        }
+
+        const card: PlanChangedCardPayload = {
+          kind: 'plan_changed',
+          previousPlan,
+          previousPlanLabel: previousLabel,
+          plan: result.body.plan,
+          planLabel: nextLabel,
+          billingSyncNeedsAttention: result.body.billing_sync_needs_attention,
+        };
+        return { text: truncate(lines.join('\n')), card };
+      } catch (err) {
+        logger.warn('[actionExecutor] change_my_plan failed', err);
+        return truncate('プラン変更に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // CP-3(GID 1218086647623729、D2改訂 2026-09-02): お支払いカードの登録・変更。
+    // Stripe Checkout の URL を返すだけで、Customer/Subscription はこの呼び出しでは
+    // 作らない(実際の作成はStripeがCheckout完了時に行い、stripeWebhook.tsが記録する)。
+    // 実処理は src/lib/billing/billingApi.ts の createCheckoutSessionForTenant
+    // (POST /v1/admin/my-tenant/billing/checkout-session と共有。冪等性チェックは
+    // その関数の中にあるため、ここでは絶対に自前実装しない)。billingCycle は常に
+    // monthly固定(年払いはStripeのinterval混在制約で出荷不可。別タスクGID 1217850260328394)。
+    // URL提示のみで完結するため、専用カードは新設しない(不要な追加をしない)。
+    case 'start_billing_checkout': {
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+      const confirmed = isConfirmed(args['confirmed']);
+      if (!confirmed) {
+        return truncate(
+          'お支払いカードの登録にはStripeの決済ページへの遷移が必要です。' +
+          'このままお支払いページのURLを発行してよいかユーザーに確認し、同意を得てから confirmed=true で再度実行してください'
+        );
+      }
+
+      try {
+        const result = await createCheckoutSessionForTenant(db, logger, tenantId, 'monthly');
+        if (result.status !== 200 || !result.body.url) {
+          const detail = typeof result.body.detail === 'string' ? result.body.detail : undefined;
+          return truncate(detail ?? 'お支払いページの発行に失敗しました');
+        }
+        const url = String(result.body.url);
+        if (result.body.alreadyOnboarded === true) {
+          return truncate(`既にお支払い方法が登録済みです。変更はこちらから行えます: ${url}`);
+        }
+        return truncate(`こちらのURLからお支払いカードを登録してください: ${url}`);
+      } catch (err) {
+        logger.warn('[actionExecutor] start_billing_checkout failed', err);
+        return truncate('お支払いページの発行に失敗しました');
       }
     }
 

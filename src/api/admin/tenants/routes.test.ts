@@ -1667,19 +1667,28 @@ describe("PUT /v1/admin/my-tenant/plan — 境界・異常系", () => {
 // 実Postgresでしか検証できない(A-2のcomputeExpectedBillingと同じ限界)。
 // ここでは最低限、静的な文字列レベルの退行だけは検出できるようにする。
 // --------------------------------------------------------------------------
+// CP-3(GID 1218086647623729、2026-09-02): PUT /v1/admin/my-tenant/plan の本体
+// (BEGIN〜COMMIT〜Stripe同期までのトランザクション)は src/lib/billing/changeTenantPlan.ts
+// へ移設した。change_my_plan ツール(agent/actionExecutor.ts)もこの共通関数を直接呼ぶ
+// ため、routes.ts 側のハンドラは認可(tenantAuth/requireAdminRole)・Zodパース・
+// free_ad/enterpriseの拒否のみを持ち、下記のトランザクション不変条件は移設先の
+// changeTenantPlan.ts で守られている。そのため検査対象を routes.ts から
+// changeTenantPlan.ts に差し替える(アサーション自体は無変更。守っている不変条件は
+// 移設前と同じ)。
 describe("PUT /v1/admin/my-tenant/plan — トランザクションのSQL文自体の不変条件", () => {
-  function readRoutesSource(): string {
+  function readChangeTenantPlanSource(): string {
     const fs = require("fs") as typeof import("fs");
     const path = require("path") as typeof import("path");
-    return fs.readFileSync(path.join(__dirname, "routes.ts"), "utf-8");
+    return fs.readFileSync(path.join(__dirname, "../../../lib/billing/changeTenantPlan.ts"), "utf-8");
   }
   function extractPutHandler(): string {
-    const src = readRoutesSource();
-    const start = src.indexOf('app.put("/v1/admin/my-tenant/plan"');
-    expect(start).toBeGreaterThan(-1);
-    const end = src.indexOf('app.post("/v1/admin/my-tenant/keys"', start);
-    expect(end).toBeGreaterThan(start);
-    return src.slice(start, end);
+    const src = readChangeTenantPlanSource();
+    // ファイル全体が changeTenantPlan() 関数(とその降格計算ヘルパ)専用であり、
+    // routes.ts のときのような他ルートとの混在が無いため、関数の開始位置以降
+    // (ファイル末尾まで)をそのまま対象にすれば足りる。
+    const start = src.indexOf("export async function changeTenantPlan(");
+    expect(start).toBeGreaterThan(-1); // 正規表現/パスが壊れて0件を誤って通過させていないか
+    return src.slice(start);
   }
 
   it("SELECT は FOR UPDATE で対象テナント行をロックする", () => {

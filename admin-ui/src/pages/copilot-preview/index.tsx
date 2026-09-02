@@ -30,7 +30,7 @@ import {
   AGENT_CHAT_HISTORY_MAX_ENTRIES,
   useAgentChatTransport,
 } from "../../lib/useAgentChatTransport";
-import type { AnsweredFrom, WeeklySummaryAgentActionCard, RuleEffectAgentActionCard, AnalyticsTrendAgentActionCard, AbTestResultsAgentActionCard, KnowledgeAttributionAgentActionCard, BillingSummaryAgentActionCard, FaqImportPreviewAgentActionCard } from "../../lib/useAgentChatTransport";
+import type { AnsweredFrom, WeeklySummaryAgentActionCard, RuleEffectAgentActionCard, AnalyticsTrendAgentActionCard, AbTestResultsAgentActionCard, KnowledgeAttributionAgentActionCard, BillingSummaryAgentActionCard, FaqImportPreviewAgentActionCard, PlanChangedAgentActionCard } from "../../lib/useAgentChatTransport";
 // アバター画像候補のプロンプト組み立ては旧UIウィザードと同じ関数を使う(再実装しない)。
 // チャットは選択肢を集めないため、固定の標準的な選択で呼ぶ。
 import { buildAvatarPrompt, type AvatarPromptInput } from "../../lib/buildAvatarPrompt";
@@ -272,7 +272,10 @@ type Card =
   | ({ kind: "knowledgeAttribution" } & Omit<KnowledgeAttributionAgentActionCard, "kind">)
   // W2-7: ご利用状況・お支払い(閲覧専用)。フィールド形状は
   // BillingSummaryAgentActionCard(useAgentChatTransport.ts)と同一に保つ(weeklySummaryと同じ作法)。
-  | ({ kind: "billingSummary" } & Omit<BillingSummaryAgentActionCard, "kind">);
+  | ({ kind: "billingSummary" } & Omit<BillingSummaryAgentActionCard, "kind">)
+  // CP-3(GID 1218086647623729): change_my_plan の実行後カード。フィールド形状は
+  // PlanChangedAgentActionCard(useAgentChatTransport.ts)と同一に保つ(weeklySummaryと同じ作法)。
+  | ({ kind: "planChanged" } & Omit<PlanChangedAgentActionCard, "kind">);
 
 // 優先度3段階(lib/tuningPriority.ts)の店主向け表示ラベル。rule / rulesList カードで共有する。
 const TIER_LABEL: Record<"low" | "normal" | "high", string> = { low: "低", normal: "普通", high: "高" };
@@ -345,6 +348,8 @@ const REAL_TOOL_LABEL: Record<string, string> = {
   get_ab_test_results: "A/Bテスト結果・改善提案の取得",
   get_knowledge_attribution: "ナレッジ別の成約貢献度の取得",
   get_billing_summary: "ご利用状況・お支払いの取得",
+  change_my_plan: "プランの変更",
+  start_billing_checkout: "お支払いカードの登録・変更",
   get_tuning_rule_effect: "ルール効果の取得",
   get_avatar_status: "アバター稼働状況の取得",
   request_sai_task: "Saiへの代行依頼",
@@ -357,11 +362,12 @@ const REAL_TOOL_LABEL: Record<string, string> = {
   publish_faq_drafts: "下書きFAQの公開",
 };
 
-// 実際にDBを書き換える(=「進捗」としてカウントしてよい)ツール名。
+// 「進捗」としてカウントしてよいツール名。
 // src/api/admin/agent/confirmPolicy.ts の WRITE_TOOL_RISK_TIERS(サーバ側の書き込み
-// ツール一覧)の部分集合であるべきで、confirmPolicy.test.ts が双方向の突き合わせを
-// 機械的に検証する(サーバに書き込みツールを追加してここへの追加を忘れると、その
-// テストが落ちる)。
+// リスク階層表)と完全一致すること — confirmPolicy.test.ts が双方向の突き合わせを
+// 機械的に検証する(サーバに書き込みツールを追加してここへの追加を忘れる/削除し忘れる、
+// どちらもそのテストが落ちる)。CP-3のstart_billing_checkoutのように自テナントのDBを
+// 直接は書き換えないツールも、WRITE_TOOL_RISK_TIERSに分類されている限りここに含める。
 const REAL_WRITE_TOOLS = new Set([
   "save_tuning_rule",
   "update_tuning_rule",
@@ -404,6 +410,13 @@ const REAL_WRITE_TOOLS = new Set([
   "request_sai_task",
   "record_session_outcome",
   "delete_chat_session",
+  // CP-3(GID 1218086647623729): tenants.plan を実際に書き換える。
+  "change_my_plan",
+  // CP-3: Stripe Checkoutの支払いページURLを返すだけで自テナントのDBは書き換えない
+  // (実際のCustomer/Subscription作成はStripe側のWebhook完了時)が、
+  // confirmPolicy.test.ts はこの一覧とWRITE_TOOL_RISK_TIERSの完全一致(双方向)を
+  // 検査するため、highに分類した以上ここにも含める(下記コメント参照)。
+  "start_billing_checkout",
 ]);
 
 // 確認待ち/連鎖ブロックの判定に使う部分一致マーカー。サーバ側の実体は
@@ -971,6 +984,14 @@ export default function CopilotPreviewPage() {
           id: nextId(),
           role: "ai",
           card: { kind: "billingSummary", period, plan, billingEstimateJpy, breakdown, invoicesAvailable, invoices, portalUrl, quota },
+        };
+      }
+      if (a.card?.kind === "plan_changed") {
+        const { previousPlan, previousPlanLabel, plan, planLabel, billingSyncNeedsAttention } = a.card;
+        return {
+          id: nextId(),
+          role: "ai",
+          card: { kind: "planChanged", previousPlan, previousPlanLabel, plan, planLabel, billingSyncNeedsAttention },
         };
       }
       // D6: 優先度を含め、正規表現では拾えなかった内容(複数行の対応方針)もそのまま運ぶ。
@@ -3008,6 +3029,8 @@ function CardView({
       return <KnowledgeAttributionCard card={card} />;
     case "billingSummary":
       return <BillingSummaryCard card={card} />;
+    case "planChanged":
+      return <PlanChangedCard card={card} />;
     case "knowledgeGapsList":
       return (
         <CardShell hd={<><span>📚</span>知識ギャップ一覧（{card.totalCount}件）</>}>
@@ -3634,6 +3657,26 @@ function BillingSummaryCard({ card }: { card: Extract<Card, { kind: "billingSumm
         >
           お支払い方法の確認・変更 ↗
         </a>
+      )}
+    </CardShell>
+  );
+}
+
+// CP-3(GID 1218086647623729): change_my_plan の実行後カード。billingSyncNeedsAttention
+// は握り潰さず必ず警告として出す(サーバ側 actionExecutor.ts の同名コメント参照。
+// ここで無視すると「変更しました」とだけ見えて、請求構成が追随していないことに
+// 誰も気づけない)。
+function PlanChangedCard({ card }: { card: Extract<Card, { kind: "planChanged" }> }) {
+  const { previousPlanLabel, planLabel, billingSyncNeedsAttention } = card;
+  return (
+    <CardShell hd={<><span>💳</span>プラン変更</>} tone={billingSyncNeedsAttention ? "bad" : "good"}>
+      <div style={{ fontSize: 15, fontWeight: 700, color: "var(--foreground)" }}>
+        {previousPlanLabel} → {planLabel}
+      </div>
+      {billingSyncNeedsAttention && (
+        <div style={{ fontSize: 12.5, color: "#f87171", fontWeight: 700 }}>
+          注意: 請求構成の更新に問題が発生しました。運営（R2Cサポート）までご連絡ください
+        </div>
       )}
     </CardShell>
   );

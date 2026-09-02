@@ -5,12 +5,17 @@
 // docs/COPILOT_UI_PARITY.md §12 の「反映状況台帳」を単一の情報源とし、
 // confirmPolicy.test.ts / cardPayloadSync.test.ts と同じ手法(readFileSync + 正規表現)で
 // toolDefinitions.ts と突き合わせる。台帳を別ファイル(TSモジュール等)に複製しないのは、
-// 台帳の実体が既に要件定義(COPILOT_UI_PARITY.md §3.1)の16件と1:1対応する表として
+// 台帳の実体が要件定義(COPILOT_UI_PARITY.md §3.1)の当初16件 + D2改訂(CP-3、
+// GID 1218086647623729、2026-09-02)で追加した#17の計17件と1:1対応する表として
 // ドキュメント側に存在しており、複製すると2箇所が独立に腐る(docs/LEGACY_UI_SUNSET.md が
 // 自ら「更新頻度に追いつけていない前提で読め」と書いた症状の再発)ため。
 //
+// ★別ブランチ feature/widget-page-exclusion(commit 515bc425)が独立に17件目(別機能)を
+// 追加している。マージ時は両方の行を残し(#17の重複をどちらか#18へ採番し直し)、
+// この行数検査を実際の行数(18)に合わせて更新すること。台帳(§12)側にも同じ注記あり。★
+//
 // 検査する不変条件:
-//   1. 台帳は16行ちょうどで、# が 1〜16 の重複なし連番であること
+//   1. 台帳は17行ちょうどで、# が 1〜17 の重複なし連番であること
 //   2. 「参照」列は `tool:<name>[,<name>...]` / `handoff:<key>` / `direct` / `pending` の
 //      いずれかであること(誤字や未知の形式を検出する)。`direct` はチャットツールを経由せず
 //      Copilot UI内で直接完結する実装(既存のavatarCandidates系フロントエンド直叩き
@@ -70,13 +75,13 @@ describe('legacyUiParity: 台帳(docs/COPILOT_UI_PARITY.md §12)の整合性', (
     expect(rows.length).toBeGreaterThan(0);
   });
 
-  it('台帳は16行ちょうどである(§3.1 の16件と1:1対応する)', () => {
-    expect(rows).toHaveLength(16);
+  it('台帳は17行ちょうどである(§3.1 の当初16件 + D2改訂の#17と1:1対応する)', () => {
+    expect(rows).toHaveLength(17);
   });
 
-  it('# が 1〜16 の重複なし連番である', () => {
+  it('# が 1〜17 の重複なし連番である', () => {
     const ids = rows.map((r) => r.id).sort((a, b) => a - b);
-    expect(ids).toEqual(Array.from({ length: 16 }, (_, i) => i + 1));
+    expect(ids).toEqual(Array.from({ length: 17 }, (_, i) => i + 1));
   });
 
   it('「参照」列がすべて既定の3形式(tool: / handoff: / pending)のいずれかである', () => {
