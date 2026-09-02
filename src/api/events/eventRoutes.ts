@@ -373,12 +373,15 @@ export async function bridgeConversionEvents(
 // ナレッジ配線是正P14: answer_feedback(👎) → knowledge_gaps ブリッジ
 // behavioral_events INSERT 後に best-effort で呼び出す。失敗しても202維持。
 //
-// widget の message_ref はクライアント側で生成される乱数ID
-// (generateMsgId、'msg-<timestamp>-<random>')で、サーバ側の chat_messages と
-// 直接ひも付く仕組みが無い。そのため「どの回答への評価か」を厳密に特定できず、
-// 近似としてそのセッションで直前にあった実ユーザーの発話を対象質問とする
-// (会話を遡って過去の回答に👎を付けるケースでは不正確になりうるが、
-// 唯一機能する消費者品質信号を起票に繋げることを優先する)。
+// 是正4-2(GID 1218086286324510): message_ref は本来 /api/chat が返す
+// chat_messages.id(実DBの主キー、route.ts参照)だが、public/widget.js は
+// ブラウザにキャッシュされるため、旧版のクライアントは当分の間
+// generateMsgId()製の乱数ID('msg-<timestamp>-<random>')を送ってくる。
+// message_ref が実IDとして解決できた場合はその回答に対応するuser発話を厳密に
+// 特定し、解決できない場合(旧クライアント/該当メッセージ無し)のみ、
+// そのセッションで直前にあった実ユーザーの発話を対象質問とする近似に
+// フォールバックする(会話を遡って過去の回答に👎を付けるケースでは
+// 不正確になりうるが、唯一機能する消費者品質信号を起票に繋げることを優先する)。
 // ---------------------------------------------------------------------------
 
 export async function bridgeAnswerFeedbackToGaps(
@@ -398,30 +401,86 @@ export async function bridgeAnswerFeedbackToGaps(
   });
   if (!sessionDbId) return;
 
-  try {
-    const lastUserMessage = await db.query<{ content: string }>(
-      `SELECT content FROM chat_messages
-       WHERE session_id = $1 AND role = 'user'
-       ORDER BY created_at DESC LIMIT 1`,
-      [sessionDbId],
-    );
-    const userMessage = lastUserMessage.rows[0]?.content?.trim();
-    if (!userMessage) return;
-
-    // 1回のイベントバッチに複数の👎が含まれても、同一セッション・同一質問の
-    // 起票は detectGap 内の7日以内ILIKE一致で1件に集約される(重複起票にならない)。
-    for (const _feedback of negativeFeedbacks) {
-      await detectGap({
-        tenantId,
-        sessionId: sessionDbId,
-        userMessage,
-        ragResultCount: 0, // user_negative は最優先で判定されるためこの値は使われない
-        userNegativeFeedback: true,
-      }).catch((err) => {
-        logger.warn({ msg: '[events→gap bridge] detectGap failed', error: (err as Error).message, tenantId });
-      });
+  // セッション内最新のuser発話(近似フォールバック)は、実IDで解決できない
+  // 👎 が複数あっても同じ値を使い回す(1バッチ内で何度もクエリしない)。
+  // 未取得(undefined) / 取得試行済みだが無し(null) / 取得済み(string) の3値で表す。
+  let cachedApprox: string | null | undefined;
+  const getApproxUserMessage = async (): Promise<string | undefined> => {
+    if (cachedApprox !== undefined) return cachedApprox ?? undefined;
+    try {
+      const approx = await db.query<{ content: string }>(
+        `SELECT content FROM chat_messages
+         WHERE session_id = $1 AND role = 'user'
+         ORDER BY created_at DESC LIMIT 1`,
+        [sessionDbId],
+      );
+      cachedApprox = approx.rows[0]?.content?.trim() || null;
+    } catch (err) {
+      logger.warn({ msg: '[events→gap bridge] message lookup failed', error: (err as Error).message, tenantId });
+      cachedApprox = null;
     }
-  } catch (err) {
-    logger.warn({ msg: '[events→gap bridge] message lookup failed', error: (err as Error).message, tenantId });
+    return cachedApprox ?? undefined;
+  };
+
+  // 1回のイベントバッチに複数の👎が含まれても、同一セッション・同一質問の
+  // 起票は detectGap 内の7日以内ILIKE一致で1件に集約される(重複起票にならない)。
+  for (const feedback of negativeFeedbacks) {
+    const messageRef = (feedback.event_data as Record<string, unknown>)?.['message_ref'];
+    const userMessage = await resolveFeedbackTargetMessage(
+      db,
+      tenantId,
+      sessionDbId,
+      typeof messageRef === 'string' ? messageRef : undefined,
+      getApproxUserMessage,
+    );
+    if (!userMessage) continue;
+
+    await detectGap({
+      tenantId,
+      sessionId: sessionDbId,
+      userMessage,
+      ragResultCount: 0, // user_negative は最優先で判定されるためこの値は使われない
+      userNegativeFeedback: true,
+    }).catch((err) => {
+      logger.warn({ msg: '[events→gap bridge] detectGap failed', error: (err as Error).message, tenantId });
+    });
   }
+}
+
+/**
+ * 是正4-2(GID 1218086286324510): 👎 の message_ref から対象の質問(user発話)を解決する。
+ * - messageRef が chat_messages.id(bigint、数字文字列)として当該セッションの
+ *   assistant メッセージに一致すれば、その回答の直前にある user 発話を厳密に返す。
+ * - 実IDで解決できない場合(旧クライアントが乱数IDを送ってきた/該当行が無い/
+ *   問い合わせ自体が失敗した)は、従来通りセッション内で直前にあった user 発話を
+ *   近似として返す(getApproxUserMessage、呼び出し元でキャッシュ共有)。
+ */
+async function resolveFeedbackTargetMessage(
+  db: Pool,
+  tenantId: string,
+  sessionDbId: string,
+  messageRef: string | undefined,
+  getApproxUserMessage: () => Promise<string | undefined>,
+): Promise<string | undefined> {
+  if (messageRef && /^\d+$/.test(messageRef)) {
+    try {
+      const exact = await db.query<{ content: string }>(
+        `SELECT um.content FROM chat_messages am
+         JOIN chat_messages um
+           ON um.session_id = am.session_id
+          AND um.role = 'user'
+          AND um.created_at <= am.created_at
+         WHERE am.id = $1 AND am.session_id = $2 AND am.role = 'assistant'
+         ORDER BY um.created_at DESC LIMIT 1`,
+        [messageRef, sessionDbId],
+      );
+      const content = exact.rows[0]?.content?.trim();
+      if (content) return content;
+    } catch (err) {
+      logger.warn({ msg: '[events→gap bridge] message lookup failed', error: (err as Error).message, tenantId });
+      // 実ID解決の失敗は近似へフォールバックする(下に続く)。
+    }
+  }
+
+  return getApproxUserMessage();
 }

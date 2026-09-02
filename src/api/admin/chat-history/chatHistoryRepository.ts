@@ -49,9 +49,14 @@ export interface SaveMessageParams {
 /**
  * ユーザー/アシスタントのメッセージをDBに永続化する。
  * chat_sessions を upsert し、chat_messages に INSERT する。
- * 呼び出し元は fire-and-forget (.catch のみ) で使うこと。
+ * 呼び出し元は基本 fire-and-forget (.catch のみ) で使ってよい。
+ *
+ * 是正4-2(GID 1218086286324510): 挿入した chat_messages.id を返す。
+ * /api/chat がこれを応答に含めることで、👎 の message_ref を実メッセージに
+ * 厳密に紐づけられるようにする(eventRoutes.ts の bridgeAnswerFeedbackToGaps 参照)。
+ * 戻り値を使わない既存呼び出し元(fire-and-forget)は影響を受けない。
  */
-export async function saveMessage(params: SaveMessageParams): Promise<void> {
+export async function saveMessage(params: SaveMessageParams): Promise<string | undefined> {
   const pool = getPool();
 
   // 1. chat_sessions を upsert（Phase46: variant情報も記録 / GID 1216970103691946: source記録）
@@ -81,16 +86,17 @@ export async function saveMessage(params: SaveMessageParams): Promise<void> {
     [params.tenantId, params.sessionId],
   );
   const dbSessionId = sessionResult.rows[0]?.id;
-  if (!dbSessionId) return;
+  if (!dbSessionId) return undefined;
 
   // 3. メッセージを保存 (Phase68: rag_sources を assistant メッセージのみ記録)
   const ragSourcesJson =
     params.ragSources && params.ragSources.length > 0
       ? JSON.stringify(params.ragSources)
       : null;
-  await pool.query(
+  const inserted = await pool.query<{ id: string }>(
     `INSERT INTO chat_messages (session_id, tenant_id, role, content, metadata, rag_sources)
-     VALUES ($1, $2, $3, $4, $5, $6)`,
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING id`,
     [
       dbSessionId,
       params.tenantId,
@@ -100,6 +106,7 @@ export async function saveMessage(params: SaveMessageParams): Promise<void> {
       ragSourcesJson,
     ],
   );
+  return inserted.rows[0]?.id;
 }
 
 // ---------------------------------------------------------------------------
