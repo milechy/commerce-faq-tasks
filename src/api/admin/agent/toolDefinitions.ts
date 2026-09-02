@@ -2,6 +2,10 @@
 // Phase B-Admin: AIエージェント用ツール定義（Groq function calling 形式）
 
 import { FAQ_CATEGORY_IDS } from '../../../lib/knowledge/faqCategories';
+// CP-3(GID 1218086647623729): change_my_plan が選ばせてよいプラン値の唯一の出どころ
+// (routes.ts の planValues から enterprise/free_ad を除いたもの)。ここに配列を
+// 書き写すと、値を足したときの追随漏れが起きる。
+import { SELF_SERVICE_PLAN_VALUES } from '../tenants/routes';
 
 export interface GroqTool {
   type: 'function';
@@ -1809,9 +1813,11 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
         '使うこと。これは閲覧専用であり、請求書の再送・金額調整・無料期間の設定・' +
         'サービスの一時停止/再開はこのツールでは一切行えない（それらはsuper_admin専用の別画面の' +
         '操作であり、テナント自身は実行できない）。一方でプラン変更とお支払いカードの登録は' +
-        'テナント自身（client_admin）が実行できる操作であり、この2つを尋ねられたら' +
-        'get_legacy_ui_link(feature="billing")で旧UIの請求画面へ案内すること。' +
-        'お支払い方法の確認・変更が必要な場合はこの結果に含まれるポータルURLを案内すること。',
+        'テナント自身（client_admin）がこのチャット上で直接実行できる操作であり、' +
+        'プラン変更を尋ねられたら change_my_plan（plan・confirmed引数、confirmed=falseでは' +
+        '実行せず変更内容を提示するだけ）、お支払いカードの登録・変更を尋ねられたら' +
+        'start_billing_checkout（Stripe Checkoutの支払いページURLを返す）を使うこと。' +
+        'お支払い方法の確認だけが目的なら、この結果に含まれるポータルURLを案内すること。',
       parameters: {
         type: 'object',
         properties: {
@@ -1819,6 +1825,60 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
             type: 'string',
             description: '集計期間（既定は30d）',
             enum: ['7d', '30d', '90d'],
+          },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'change_my_plan',
+      description:
+        'CP-3(GID 1218086647623729、2026-09-02のD2改訂): テナント自身の契約プランを変更する。' +
+        '「プランを変えたい」「Growthにアップグレードして」のように言われたときに使うこと。' +
+        'free_ad（消費者向け同意バナー実装まで新規発行できない）とenterprise（個別契約のため' +
+        '担当への問い合わせが必要）は選べない — 指定しても必ず拒否される。' +
+        '課金額が変わる操作のため、必ず先に現プラン→新プラン・月額・変わる機能をユーザーに' +
+        '提示して明確な同意を得たターンでのみ confirmed=true を指定して呼び出すこと。' +
+        'confirmed=false（または未指定）で呼ぶと何も変更せず、提示すべき内容を文字列で返す' +
+        '（この結果をそのままユーザーに見せてよい）。',
+      parameters: {
+        type: 'object',
+        properties: {
+          plan: {
+            type: 'string',
+            description: '変更先のプラン',
+            enum: [...SELF_SERVICE_PLAN_VALUES],
+          },
+          confirmed: {
+            type: 'boolean',
+            description: 'ユーザーの明確な同意を得た場合のみ true',
+          },
+        },
+        required: ['plan'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'start_billing_checkout',
+      description:
+        'CP-3(GID 1218086647623729、2026-09-02のD2改訂): お支払いカードの登録・変更のための' +
+        'Stripe Checkoutの支払いページURLを発行する。「カードを登録したい」「支払い方法を変えたい」' +
+        'のように言われたときに使うこと。このツール自体はCustomer/Subscriptionを作らず、' +
+        'URLを返すだけ（実際の登録はユーザーがそのURL上でカード情報を入力した後にStripe側で完了する）。' +
+        '既にお支払い方法が登録済みの場合は、新規登録の代わりに変更用のポータルURLが返る。' +
+        '外部サイト（Stripe）へ遷移することをユーザーに一言提示し、同意を得たターンでのみ' +
+        'confirmed=true を指定して呼び出すこと。年払いには対応していない(常に月払い)。',
+      parameters: {
+        type: 'object',
+        properties: {
+          confirmed: {
+            type: 'boolean',
+            description: 'ユーザーの明確な同意を得た場合のみ true',
           },
         },
         required: [],

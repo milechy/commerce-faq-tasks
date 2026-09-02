@@ -66,6 +66,11 @@ const MUTATION_PATTERNS: RegExp[] = [
   /\bcommitScrapeFaqs\(/,
   /\bapproveGapRecommendation\(/,
   /\baddKnowledgeFromGap\(/,
+  // CP-3(GID 1218086647623729): change_my_plan/start_billing_checkout はDB書き込み・
+  // 外部送出(Stripe Checkout)の実体を共通関数(lib/billing/changeTenantPlan.ts・
+  // billingApi.ts)側に持たせているため、生SQLではなくこれらの呼び出しが目印になる。
+  /\bchangeTenantPlan\(/,
+  /\bcreateCheckoutSessionForTenant\(/,
 ];
 
 /** executeToolCall の switch を case ごとに切り、書き込みを行っているツール名を返す。 */

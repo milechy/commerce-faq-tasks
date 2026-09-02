@@ -122,6 +122,12 @@ export const WRITE_TOOL_RISK_TIERS: Record<string, RiskTier> = {
   resolve_escalation: 'high',
   // 外部エージェント(Sai)へのタスク投入 + 従量課金が発生する。
   request_sai_task: 'high',
+  // CP-3(GID 1218086647623729): 課金額が変わる操作(高階層の定義「課金が発生する」に該当)。
+  // 降格時はfeaturesも失うため、request_sai_taskと同じhighに置く。
+  change_my_plan: 'high',
+  // CP-3: 直接課金は発生しないが、Stripe Checkoutという外部システムへユーザーを
+  // 送出しカード情報の入力に進ませる操作(highの定義「外部システムへ何かを送出する」に該当)。
+  start_billing_checkout: 'high',
 };
 
 // 書き込みを伴わないツール。DBへの書き込みも外部への副作用のある送出も行わない。

@@ -286,6 +286,17 @@ export type BillingSummaryAgentActionCard = {
   } | null;
 };
 
+// CP-3(GID 1218086647623729): change_my_plan の実行後カード。フィールド形状は
+// サーバ側 PlanChangedCardPayload(actionExecutor.ts)と一致させること。
+export type PlanChangedAgentActionCard = {
+  kind: "plan_changed";
+  previousPlan: string;
+  previousPlanLabel: string;
+  plan: string;
+  planLabel: string;
+  billingSyncNeedsAttention: boolean;
+};
+
 export type AgentActionCard =
   | LegacyLinkAgentActionCard
   | AvatarPresetAgentActionCard
@@ -302,7 +313,8 @@ export type AgentActionCard =
   | AnalyticsTrendAgentActionCard
   | AbTestResultsAgentActionCard
   | KnowledgeAttributionAgentActionCard
-  | BillingSummaryAgentActionCard;
+  | BillingSummaryAgentActionCard
+  | PlanChangedAgentActionCard;
 
 export type AgentAction = { tool: string; result: string; card?: AgentActionCard };
 

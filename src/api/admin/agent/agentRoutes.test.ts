@@ -215,11 +215,17 @@ const mockFetchBillingCostBreakdown = jest.fn();
 const mockFetchBillingInvoices = jest.fn();
 const mockComputeBillingEstimateJpy = jest.fn();
 const mockFetchBillingQuota = jest.fn();
+// CP-3(GID 1218086647623729): start_billing_checkout が使う依存をモック。
+// 冪等性チェック(既存Customer/Subscriptionの確認)はこの関数の中にしか無いため、
+// ツール側のテストではこのモックの戻り値を差し替えるだけで確認する
+// (agentRoutes.test.ts側でStripeを直接叩くのは billingApi.checkoutSession.test.ts の責務)。
+const mockCreateCheckoutSessionForTenant = jest.fn();
 jest.mock('../../../lib/billing/billingApi', () => ({
   fetchBillingCostBreakdown: (...args: any[]) => mockFetchBillingCostBreakdown(...args),
   fetchBillingInvoices: (...args: any[]) => mockFetchBillingInvoices(...args),
   computeBillingEstimateJpy: (...args: any[]) => mockComputeBillingEstimateJpy(...args),
   fetchBillingQuota: (...args: any[]) => mockFetchBillingQuota(...args),
+  createCheckoutSessionForTenant: (...args: any[]) => mockCreateCheckoutSessionForTenant(...args),
 }));
 
 // logger モック
@@ -229,8 +235,13 @@ jest.mock('../../../lib/logger', () => ({
 
 // usageTracker モック（GID 1215915182786983: admin_agent 課金計上のテスト用）
 const mockTrackUsage = jest.fn();
+// CP-3: change_my_plan(→changeTenantPlan.ts)がCOMMIT後に呼ぶ。呼ばれること自体は
+// 検証対象ではない(挙動不変の前提でPUT /v1/admin/my-tenant/plan側と共有)ため
+// no-opモックでよい。未定義のままだと「is not a function」で変更全体が失敗する。
+const mockInvalidateBillingPlanCache = jest.fn();
 jest.mock('../../../lib/billing/usageTracker', () => ({
   trackUsage: (...args: any[]) => mockTrackUsage(...args),
+  invalidateBillingPlanCache: (...args: any[]) => mockInvalidateBillingPlanCache(...args),
 }));
 
 // agentMetrics モック（挙動メトリクス。実DBへのINSERTを避けつつ発火内容を検証する）
@@ -10286,6 +10297,235 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(result).not.toContain('今月の込み枠');
       expect(res.body.actions[0].card.quota).toBeNull();
       expect(res.body.actions[0].card.billingEstimateJpy).toBe(3300);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // change_my_plan / start_billing_checkout
+  // CP-3(GID 1218086647623729、D2改訂 2026-09-02): テナント自身のプラン変更と
+  // お支払いカード登録をチャットから実行できるようにする。
+  // 実処理は src/lib/billing/changeTenantPlan.ts / billingApi.ts
+  // (PUT /v1/admin/my-tenant/plan・POST .../checkout-session と共有)にあるため、
+  // ここではツール層の確認ゲート・拒否・カード生成・共通関数への委譲のみを検査する。
+  // -------------------------------------------------------------------------
+  describe('change_my_plan（high・課金額が変わる）', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    /** PUT /v1/admin/my-tenant/plan のテスト(routes.test.ts の makePlanTxDb)と同じ
+     *  トランザクション対応モック。changeTenantPlan.ts が受け取る client 用。 */
+    function makeChangePlanClientQuery(opts: {
+      beforeRow: { plan: string; features?: unknown; is_active?: boolean } | null;
+      updateRow?: { id: string; name: string; plan: string; features: unknown };
+    }) {
+      return jest.fn(async (sql: string, params: unknown[] = []) => {
+        if (sql === 'BEGIN' || sql === "SET LOCAL lock_timeout = '3s'" || sql === 'COMMIT' || sql === 'ROLLBACK') {
+          return { rows: [] };
+        }
+        if (sql.includes('SELECT plan, features, is_active FROM tenants')) {
+          return opts.beforeRow === null
+            ? { rows: [], rowCount: 0 }
+            : {
+                rows: [{
+                  plan: opts.beforeRow.plan,
+                  features: opts.beforeRow.features ?? {},
+                  is_active: opts.beforeRow.is_active ?? true,
+                }],
+                rowCount: 1,
+              };
+        }
+        if (sql.includes('UPDATE tenants SET plan')) {
+          const nextPlan = params[0] as string;
+          const row = opts.updateRow ?? { id: 'tenant-abc', name: 'テストテナント', plan: nextPlan, features: {} };
+          return { rows: [row], rowCount: 1 };
+        }
+        throw new Error(`makeChangePlanClientQuery: unexpected client query: ${sql}`);
+      });
+    }
+
+    it('confirmed=false ではプラン変更が実行されない(確認ゲート)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-cp-1', 'change_my_plan', { plan: 'growth', confirmed: false }))
+        .mockResolvedValueOnce(makeGroqResponse('確認してから変更します。'));
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'starter' }] }); // queryTenantPlan(現プラン表示のため確認前でも呼ぶ)
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'growthにプラン変更して', sessionId: 'sess-cp-01' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('確認');
+      // ★確認ゲートを通らない限り、DBトランザクション(changeTenantPlan)は一切始まらない★
+      expect(mockConnect).not.toHaveBeenCalled();
+    });
+
+    it('enterpriseを指定すると拒否され、DBに触れない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-cp-2', 'change_my_plan', { plan: 'enterprise', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('個別契約のためご案内しました。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'Enterpriseにプラン変更して', sessionId: 'sess-cp-02' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('個別契約');
+      // enterprise/free_ad の拒否は routes.ts の純関数(isEnterpriseSelfUpgrade)による
+      // 判定であり、現プラン確認(queryTenantPlan)より前に弾かれるため db には一切触れない。
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(mockConnect).not.toHaveBeenCalled();
+    });
+
+    it('free_adを指定すると拒否され、DBに触れない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-cp-3', 'change_my_plan', { plan: 'free_ad', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('ご案内しました。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'Freeプランにして', sessionId: 'sess-cp-03' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('同意バナー');
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(mockConnect).not.toHaveBeenCalled();
+    });
+
+    // ★このテストが守っている事故★ Stripe側の同期(syncSubscriptionForTenant)が
+    // 失敗/未設定でも、プラン自体はCOMMIT済みなので成功として返る(routes.ts と
+    // 同じ設計)。billing_sync_needs_attention=true を握り潰すと「変更しました」
+    // とだけ見えて、請求構成が追随していないことに誰も気づけない。
+    it('billing_sync_needs_attention=true のとき、カードとテキストの両方に警告が載る(握り潰さない)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-cp-4', 'change_my_plan', { plan: 'growth', confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('変更しました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ plan: 'starter' }] }) // queryTenantPlan(現プラン)
+        .mockResolvedValueOnce({ rows: [], rowCount: 1 }); // tenant_settings_history 監査INSERT(fire-and-forget)
+
+      const clientQuery = makeChangePlanClientQuery({ beforeRow: { plan: 'starter' } });
+      mockConnect.mockResolvedValueOnce({ query: clientQuery, release: jest.fn() });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'growthにプラン変更して', sessionId: 'sess-cp-04' });
+
+      expect(res.status).toBe(200);
+      // テスト環境は STRIPE_SECRET_KEY 未設定のため、syncSubscriptionForTenant は
+      // 必ず stripe_not_configured(=要注意)を返す(routes.test.ts の
+      // 「billing_sync の可視化」と同じ前提)。
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('注意');
+      expect(res.body.actions[0].card).toEqual({
+        kind: 'plan_changed',
+        previousPlan: 'starter',
+        previousPlanLabel: 'Starter',
+        plan: 'growth',
+        planLabel: 'Growth',
+        billingSyncNeedsAttention: true,
+      });
+    });
+  });
+
+  describe('start_billing_checkout（high・外部システムへの送出）', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    it('confirmed=false では発行されない(確認ゲート)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-sbc-1', 'start_billing_checkout', { confirmed: false }))
+        .mockResolvedValueOnce(makeGroqResponse('確認してから発行します。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'カードを登録したい', sessionId: 'sess-sbc-01' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('確認');
+      expect(mockCreateCheckoutSessionForTenant).not.toHaveBeenCalled();
+    });
+
+    // ★このテストが守っている事故★ 冪等性チェック(既存Customer/Subscriptionの確認)は
+    // 共通関数 createCheckoutSessionForTenant(billingApi.ts、POST .../checkout-session と
+    // 共有)の中にしか無い。ツール側がそれを自前で再実装/迂回すると、チャット経由の
+    // 二重送信で二重請求になりうる。ここでは二重呼び出しをしても、ツール層は
+    // 共通関数への委譲(同じ引数での呼び出し)を繰り返すだけで、自前のDB/Stripe操作を
+    // 一切行わないことを固定する(実際の冪等性の中身は billingApi.checkoutSession.test.ts
+    // が別途検証する)。
+    it('二重呼び出しでも共通関数に委譲するだけで、ツール自身はCustomer/Subscriptionに関わる' +
+      'DB操作を一切行わない(冪等性チェックが共通関数側にあることの担保)', async () => {
+      mockCreateCheckoutSessionForTenant
+        .mockResolvedValueOnce({ status: 200, body: { ok: true, url: 'https://checkout.stripe.com/cs_test_1' } })
+        .mockResolvedValueOnce({
+          status: 200,
+          body: { ok: true, url: 'https://billing.stripe.com/session/bps_test_1', alreadyOnboarded: true },
+        });
+
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-sbc-2', 'start_billing_checkout', { confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('登録用のURLをお伝えします。'));
+      const res1 = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'カードを登録したい', sessionId: 'sess-sbc-02' });
+
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-sbc-3', 'start_billing_checkout', { confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('既に登録済みのようです。'));
+      const res2 = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'もう一度カードを登録したい', sessionId: 'sess-sbc-02' });
+
+      expect(res1.status).toBe(200);
+      expect(res2.status).toBe(200);
+      expect(mockCreateCheckoutSessionForTenant).toHaveBeenCalledTimes(2);
+      expect(mockCreateCheckoutSessionForTenant).toHaveBeenNthCalledWith(1, mockDb, expect.anything(), 'tenant-abc', 'monthly');
+      expect(mockCreateCheckoutSessionForTenant).toHaveBeenNthCalledWith(2, mockDb, expect.anything(), 'tenant-abc', 'monthly');
+      // ツール自身がDBに触れていない = 冪等性判断を自前で持っていないことの担保。
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(mockConnect).not.toHaveBeenCalled();
+      expect(res2.body.actions[0].result).toContain('既に');
+    });
+
+    it('共通関数がエラーを返したら、そのdetailをそのまま案内する', async () => {
+      mockCreateCheckoutSessionForTenant.mockResolvedValueOnce({
+        status: 400,
+        body: { error: 'plan_not_self_serve', detail: 'Free(広告表示)プランは請求が発生しないため、お支払い登録は不要です。' },
+      });
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-sbc-4', 'start_billing_checkout', { confirmed: true }))
+        .mockResolvedValueOnce(makeGroqResponse('ご案内しました。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'カードを登録したい', sessionId: 'sess-sbc-03' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('請求が発生しないため');
     });
   });
 

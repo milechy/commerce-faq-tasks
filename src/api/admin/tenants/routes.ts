@@ -15,6 +15,9 @@ import { logger } from '../../../lib/logger';
 import { planHasFeature, resolveShareForPlan, resolveShareForTenantPlan, invalidateTenantPlanCache, type TenantPlan } from "../../../lib/billing/planFeatures";
 import { invalidateBillingPlanCache } from "../../../lib/billing/usageTracker";
 import { syncSubscriptionForTenant, needsBillingAttention, type SubscriptionSyncResult } from "../../../lib/billing/subscriptionSync";
+// CP-3(GID 1218086647623729): PUT /v1/admin/my-tenant/plan の本体を切り出した共通関数。
+// change_my_plan ツール(agent/actionExecutor.ts)もこれを直接呼ぶ(ロジックを2箇所に書き写さない)。
+import { changeTenantPlan, computeFeatureRevocationOnDowngrade } from "../../../lib/billing/changeTenantPlan";
 import { deriveOnboardingStage, type OnboardingStageStatus } from "../agent/onboardingStage";
 import { isValidOriginPattern } from "../../middleware/originCheck";
 import { purgeTenantChatData } from "../chat-history/retentionRepository";
@@ -28,7 +31,20 @@ import { purgeTenantChatData } from "../chat-history/retentionRepository";
 // ★このZod enumがプラン段の「到達可能性」そのもの★
 // ここに無い値は POST/PATCH /v1/admin/tenants も PUT /v1/admin/my-tenant/plan も
 // 400 で弾くため、PLAN_RANK や CHECK 制約を直しても誰もそのプランになれない。
-const planValues = ["free_ad", "starter", "standard", "growth", "enterprise"] as const;
+// export: change_my_plan ツール(toolDefinitions.ts/actionExecutor.ts)が
+// JSONスキーマのenumと実行時バリデーションの両方でこの配列を直接参照するため
+// (5値をツール側に書き写すと、ここに値を足したときの追随漏れが起きる)。
+export const planValues = ["free_ad", "starter", "standard", "growth", "enterprise"] as const;
+
+// CP-3(GID 1218086647623729): change_my_plan ツールが選ばせてよい値。
+// テナント自己申告経路(このファイルのPUT /v1/admin/my-tenant/plan、および
+// change_my_plan)は free_ad/enterprise を常に拒否する
+// (blockFreeAdTransition/blockEnterpriseSelfUpgrade、下記)ため、ツールの
+// JSONスキーマ enum に含めても選べるだけ無駄になる。除外対象をここ1箇所にする
+// ことで、toolDefinitions.ts 側に別の配列を書き写す事故を防ぐ。
+export const SELF_SERVICE_PLAN_VALUES = planValues.filter(
+  (p) => p !== "enterprise" && p !== "free_ad"
+);
 
 // S5b(共有学習プールの参加モデル・D1決定案): free_adはshareが強制ONだが、消費者向け
 // 同意バナーの開示基盤が整うまでfree_adテナントを増やさない、という一時的なブロック。
@@ -42,53 +58,24 @@ const planValues = ["free_ad", "starter", "standard", "growth", "enterprise"] as
 // 撤去する際は、この関数の呼び出し元をすべて外すのではなく、この関数の中身だけを
 // 変えれば全経路に効く。撤去の前提だったバナー実装(S5a・PR #919)は完了済み。
 
-// tenants.features のフラグと、それを許可する最小プラン(planFeatures の GatedFeature)の対応。
-// プラン降格時にどのフラグを落とすかの唯一の出どころ。
-// 新しいプラン依存フラグを features に足すときは、ここにも足すこと
-// (足し忘れると、降格しても権能が残り原価だけ当社負担になる)。
-// voice_clone は features フラグとして持たず planHasFeature() で都度ライブ判定するため
-// (actionExecutor.ts 等)、ここには含めない。
-const FEATURE_FLAG_GATES: ReadonlyArray<[string, "avatar" | "deep_research" | "pre_dispatch"]> = [
-  ["avatar", "avatar"],
-  // voice は PATCH /my-tenant の既存ゲートと揃えて avatar と同じ段(growth)で判定する。
-  ["voice", "avatar"],
-  ["deep_research", "deep_research"],
-  ["pre_dispatch", "pre_dispatch"],
-];
+// computeFeatureRevocationOnDowngrade は src/lib/billing/changeTenantPlan.ts へ移設した
+// (CP-3, GID 1218086647623729)。PUT /v1/admin/my-tenant/plan の本体を丸ごとそちらへ
+// 切り出したのに合わせ、PATCH /v1/admin/tenants/:id(このファイル内、下記)からは
+// 移設先を re-import して使う。定義を2箇所に持たない。
 
-/**
- * プラン降格時に落とすべき features フラグを計算する。
- *
- * ★この関数を経由しない plan 更新経路を作らないこと★
- * アバターのランタイム認可は plan ではなく features.avatar だけを見ている
- * (anamRoutes.ts / livekitTokenRoutes.ts / api/widget/routes.ts)。plan だけ下げると
- * 最も原価の重い Anam/LiveKit が動いたまま倍率だけ下がる。
- *
- * 導入時(PR #933)は PUT /v1/admin/my-tenant/plan にしか実装しておらず、
- * super_admin 用の PATCH /v1/admin/tenants/:id は plan を更新するだけで
- * features を一切見ていなかった(#933 自身が繰り返し警告していた「経路ごとに
- * 書き写すと新しい経路が素通りする」パターンを、この関数自身がやっていた)。
- * PUT/PATCH 両方からこの純粋関数を呼ぶことで、3件目の経路が増えても
- * ここを直せば全経路に効く形にする。
- *
- * 落とすだけで、昇格時に勝手に有効化はしない(権能の自動付与をしない)。
- */
-function computeFeatureRevocationOnDowngrade(
-  beforeFeatures: Record<string, unknown> | null | undefined,
-  nextPlan: string
-): Record<string, false> {
-  const features = beforeFeatures ?? {};
-  const revoked: Record<string, false> = {};
-  for (const [flag, gate] of FEATURE_FLAG_GATES) {
-    if (features[flag] === true && !planHasFeature(nextPlan, gate)) {
-      revoked[flag] = false;
-    }
-  }
-  return revoked;
+// CP-3: blockFreeAdTransition/blockEnterpriseSelfUpgrade は res を直接書くため
+// change_my_plan ツール(agent/actionExecutor.ts)からは共有できない。判定部分だけを
+// 下の純関数(isFreeAdTransition/isEnterpriseSelfUpgrade)に割り、ツール側はこちらを
+// 呼んで拒否理由の文字列を独自に組み立てる。判定基準の値("free_ad"/"enterprise")は
+// この2つの純関数だけが持ち、他のどこにも書き写さないこと。
+
+/** nextPlan が free_ad への遷移かどうかの判定だけを行う純関数。 */
+export function isFreeAdTransition(plan: string | undefined): boolean {
+  return plan === "free_ad";
 }
 
 function blockFreeAdTransition(plan: string | undefined, res: Response): boolean {
-  if (plan !== "free_ad") return false;
+  if (!isFreeAdTransition(plan)) return false;
   res.status(403).json({
     error: "free_ad_plan_not_yet_available",
     message: "free_adプランは消費者向け同意バナー実装まで新規発行できません(D1決定案)。",
@@ -103,8 +90,14 @@ function blockFreeAdTransition(plan: string | undefined, res: Response): boolean
 // GID 1217860479559418)。syncSubscriptionItemsToPlan は enterprise を
 // manual_plan として返すだけで Stripe に触れないため、サーバ側で防がない限り
 // UI 側だけの制限になる(CLAUDE.md 禁止14)。
+
+/** nextPlan が enterprise への自己申告アップグレードかどうかの判定だけを行う純関数。 */
+export function isEnterpriseSelfUpgrade(plan: string | undefined): boolean {
+  return plan === "enterprise";
+}
+
 function blockEnterpriseSelfUpgrade(plan: string | undefined, res: Response): boolean {
-  if (plan !== "enterprise") return false;
+  if (!isEnterpriseSelfUpgrade(plan)) return false;
   res.status(403).json({
     error: "enterprise_requires_sales",
     message: "Enterprise は個別契約です。担当までお問い合わせください。",
@@ -500,148 +493,17 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
     // テナント自己申告のこの経路だけは常に拒否する(この関数は POST/PATCH からは呼ばない)。
     if (blockEnterpriseSelfUpgrade(nextPlan, res)) return;
 
-    // ★SELECT→計算→UPDATEをトランザクション化する★
-    // 同一テナントへの並行プラン変更(連打・複数タブ)で、両リクエストが同じ
-    // beforeFeatures を読んで別々のUPDATEを投げると、tenant_settings_history には
-    // 両方の遷移が記録されるのにDBの最終状態は後勝ちの1本だけ、という
-    // 監査ログとDB遷移の不整合が起きる。SELECT ... FOR UPDATE でテナント行を
-    // ロックし、2件目のリクエストは1件目のCOMMITを待ってから自分の
-    // previousPlan を読むようにする(結果、2件目が同一プランへの変更なら
-    // no-op分岐で安全に吸収される)。
-    //
-    // chat-history/deleteSessionRepository.ts・avatar/fishVoiceModel.ts と同じ
-    // 確立済みパターン(BEGIN → SET LOCAL lock_timeout → FOR UPDATE → ... → COMMIT、
-    // ロックタイムアウトは409)に揃える。
-    const client = await db.connect();
-    try {
-      await client.query("BEGIN");
-      await client.query("SET LOCAL lock_timeout = '3s'");
+    const appMeta = su?.app_metadata as Record<string, unknown> | undefined;
+    const changedBy: string = su?.email ?? (typeof appMeta?.email === "string" ? appMeta.email : "");
 
-      const beforeResult = await client.query<{ plan: TenantPlan | null; features: Record<string, unknown> | null; is_active: boolean | null }>(
-        `SELECT plan, features, is_active FROM tenants WHERE id = $1 FOR UPDATE`,
-        [tenantId]
-      );
-      if (beforeResult.rowCount === 0) {
-        await client.query("ROLLBACK");
-        return res.status(404).json({ error: "not_found", message: "テナントが見つかりません" });
-      }
-      const previousPlan = beforeResult.rows[0].plan;
-
-      // 停止中のテナントにプラン変更を許さない。POST /v1/admin/my-tenant/keys が
-      // 既に is_active を見ているのと同じ線(GID 1217808227373610)。停止中に昇格されると、
-      // 権能だけ開いて請求経路が動かない状態が作れる。
-      // ★null は停止扱いにしない★ 列が無い/未設定の環境で全テナントのプラン変更が
-      // 止まる方が損害が大きいため、明示的な false のときだけ弾く。
-      if (beforeResult.rows[0].is_active === false) {
-        await client.query("ROLLBACK");
-        return res.status(403).json({
-          error: "tenant_inactive",
-          message: "停止中のテナントではプランを変更できません。担当までお問い合わせください。",
-        });
-      }
-
-      // 同一プランへの変更は no-op（連打・再送を成功として返す。監査行も増やさない）。
-      // ロックを取った後でこの判定をすることで、並行リクエストの2件目は
-      // 1件目のCOMMIT後の状態を見て正しくno-opと判定できる。
-      if (previousPlan === nextPlan) {
-        await client.query("ROLLBACK"); // 書き込みは無いのでCOMMITと等価。ロック解放のみ。
-        return res.json({ plan: nextPlan, previous_plan: previousPlan, changed: false });
-      }
-
-      // ★降格時は新プランで許されない features を落とす★
-      // UI の「使えなくなる機能」表示と実挙動を一致させる。有効化は従来どおり
-      // テナントが明示的に PATCH /my-tenant で行う(ここでは自動付与しない)。
-      const revoked = computeFeatureRevocationOnDowngrade(beforeResult.rows[0].features, nextPlan);
-      const hasRevocation = Object.keys(revoked).length > 0;
-
-      const result = hasRevocation
-        ? await client.query(
-            `UPDATE tenants
-               SET plan = $1,
-                   features = COALESCE(features, '{}'::jsonb) || $3::jsonb,
-                   updated_at = NOW()
-             WHERE id = $2
-             RETURNING id, name, plan, features`,
-            [nextPlan, tenantId, JSON.stringify(revoked)]
-          )
-        : await client.query(
-            `UPDATE tenants SET plan = $1, updated_at = NOW() WHERE id = $2
-             RETURNING id, name, plan, features`,
-            [nextPlan, tenantId]
-          );
-      // SELECT ... FOR UPDATE で対象行のロックをCOMMITまで保持し続けているため、
-      // 同一トランザクション内のこのUPDATEが0行になることはない
-      // (他トランザクションはこの行をロック解放まで削除/変更できない)。
-
-      await client.query("COMMIT");
-
-      // プラン判定のキャッシュは2系統ある（機能ゲート用・請求焼き付け用）。両方消す。
-      // 片方だけだと、機能は開いたのに請求だけ旧倍率、といったズレが最大60秒残る。
-      // いずれもプロセスローカル。現構成は単一プロセス(instances 1/fork)なので
-      // 実質は即時だが、スケールアウト時は他ワーカーが最大TTL分だけ旧プランを見る。
-      invalidateTenantPlanCache(tenantId);
-      invalidateBillingPlanCache(tenantId);
-
-      // 監査記録。super_admin の PATCH /v1/admin/tenants/:id と同じテーブル・同じ形式で
-      // 残し、SettingsHistoryTab から一続きに追えるようにする（fire-and-forget）。
-      // ★意図的にトランザクションの外・元のプール経由(client ではなく db)で行う★
-      // トランザクション内に含めると、監査INSERTの成否がプラン変更のCOMMIT自体に
-      // 影響してしまい、「監査が落ちてもプラン変更は成功として返す」という
-      // 既存方針(下記テスト参照)と矛盾する。プラン変更は既にCOMMIT済みなので、
-      // 監査はその事実を後から記録するだけの副次的な処理として切り離す。
-      const appMeta = su?.app_metadata as Record<string, unknown> | undefined;
-      const changedBy: string = su?.email ?? (typeof appMeta?.email === "string" ? appMeta.email : "");
-      void db.query(
-        `INSERT INTO tenant_settings_history (tenant_id, changed_by, field_name, old_value, new_value)
-         VALUES ($1, $2, 'plan', $3::jsonb, $4::jsonb)`,
-        [tenantId, changedBy, JSON.stringify(previousPlan), JSON.stringify(nextPlan)]
-      ).catch((e: unknown) => logger.warn("[tenant_settings_history] insert failed", e));
-
-      logger.info(
-        { tenantId, previousPlan, nextPlan, changedBy },
-        "[PUT /v1/admin/my-tenant/plan] tenant changed its own plan"
-      );
-
-      // ★Stripe の item 構成をプランに追随させる★
-      // これが無いと、Standard/Growth の基本料 item が作られないまま権能だけ開き、
-      // 月額が永久に請求されない(#1015 で基本料+込み枠+超過にしたときの積み残し)。
-      // ★await する(fire-and-forget にしない)★
-      // 失敗を握り潰すと「変更しました」とだけ表示され、請求が動いていないことを
-      // 誰も知らないまま月が終わる。プラン自体は COMMIT 済みなので、同期の失敗で
-      // 500 にはせず、billing_sync としてレスポンスに載せて UI に出させる。
-      const billingSync = await syncSubscriptionForTenant(db, logger, tenantId, nextPlan);
-      if (needsBillingAttention(billingSync)) {
-        logger.warn(
-          { tenantId, nextPlan, billingSyncStatus: billingSync.status },
-          "[PUT /v1/admin/my-tenant/plan] プランは変更したが請求構成が追随していない"
-        );
-      }
-
-      return res.json({
-        ...result.rows[0],
-        previous_plan: previousPlan,
-        changed: true,
-        billing_sync: billingSync.status,
-        // ★2026-08-26 レビュー是正★ フロント(PlanSection.tsx)がstatus文字列の
-        // 集合を自前で再掲すると、こちらでstatusを1つ足したときにフロント側だけ
-        // 更新漏れするドリフトが起きる(禁止6と同種)。判定結果そのものを渡す。
-        billing_sync_needs_attention: needsBillingAttention(billingSync),
-      });
-    } catch (err) {
-      await client.query("ROLLBACK").catch(() => {});
-      // ロックタイムアウト = 同一テナントへの別のプラン変更が進行中。
-      // avatar/fishVoiceModel.ts と同じ判定・同じ409応答に揃える。
-      if (err instanceof Error && /lock timeout|canceling statement/i.test(err.message)) {
-        return res.status(409).json({
-          error: "conflict",
-          message: "他のプラン変更処理と競合しました。少し待ってからもう一度お試しください",
-        });
-      }
-      logger.warn("[PUT /v1/admin/my-tenant/plan]", err);
-      return res.status(500).json({ error: "更新に失敗しました" });
-    } finally {
-      client.release();
-    }
+    // ★実処理は src/lib/billing/changeTenantPlan.ts に切り出してある(CP-3)★
+    // BEGIN → SET LOCAL lock_timeout → SELECT...FOR UPDATE → no-op判定 →
+    // features降格計算 → UPDATE → COMMIT → キャッシュ無効化 → 監査INSERT
+    // (fire-and-forget) → Stripe同期(await) の手順はそちらを参照。
+    // change_my_plan ツール(agent/actionExecutor.ts)も同じ関数を直接呼ぶ
+    // (ロジックを2箇所に書き写さない。挙動は元実装と無変更)。
+    const result = await changeTenantPlan(db, logger, tenantId, nextPlan, changedBy);
+    return res.status(result.status).json(result.body);
   });
 
   // POST /v1/admin/my-tenant/keys — Client Admin専用: 自テナントのAPIキーを自力発行する。
