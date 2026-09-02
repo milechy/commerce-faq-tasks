@@ -121,7 +121,7 @@ export async function changeTenantPlan(
   // (結果、2件目が同一プランへの変更なら no-op分岐で安全に吸収される)。
   const client: PoolClient = await db.connect();
   try {
-    await client.query('BEGIN');
+    await client.query("BEGIN");
     await client.query("SET LOCAL lock_timeout = '3s'");
 
     const beforeResult = await client.query<{ plan: TenantPlan | null; features: Record<string, unknown> | null; is_active: boolean | null }>(
@@ -129,7 +129,7 @@ export async function changeTenantPlan(
       [tenantId]
     );
     if (beforeResult.rowCount === 0) {
-      await client.query('ROLLBACK');
+      await client.query("ROLLBACK");
       return { kind: 'error', status: 404, body: { error: 'not_found', message: 'テナントが見つかりません' } };
     }
     const previousPlan = beforeResult.rows[0].plan;
@@ -138,7 +138,7 @@ export async function changeTenantPlan(
     // 列が無い/未設定の環境で全テナントのプラン変更が止まる方が損害が大きいため、
     // 明示的な false のときだけ弾く。
     if (beforeResult.rows[0].is_active === false) {
-      await client.query('ROLLBACK');
+      await client.query("ROLLBACK");
       return {
         kind: 'error',
         status: 403,
@@ -151,7 +151,7 @@ export async function changeTenantPlan(
 
     // 同一プランへの変更は no-op（連打・再送を成功として返す。監査行も増やさない）。
     if (previousPlan === nextPlan) {
-      await client.query('ROLLBACK'); // 書き込みは無いのでCOMMITと等価。ロック解放のみ。
+      await client.query("ROLLBACK"); // 書き込みは無いのでCOMMITと等価。ロック解放のみ。
       return { kind: 'no_change', status: 200, body: { plan: nextPlan, previous_plan: previousPlan, changed: false } };
     }
 
@@ -177,7 +177,7 @@ export async function changeTenantPlan(
     // SELECT ... FOR UPDATE で対象行のロックをCOMMITまで保持し続けているため、
     // 同一トランザクション内のこのUPDATEが0行になることはない。
 
-    await client.query('COMMIT');
+    await client.query("COMMIT");
 
     // プラン判定のキャッシュは2系統ある（機能ゲート用・請求焼き付け用）。両方消す。
     invalidateTenantPlanCache(tenantId);
@@ -225,7 +225,7 @@ export async function changeTenantPlan(
       },
     };
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
+    await client.query("ROLLBACK").catch(() => {});
     // ロックタイムアウト = 同一テナントへの別のプラン変更が進行中。
     if (err instanceof Error && /lock timeout|canceling statement/i.test(err.message)) {
       return {
