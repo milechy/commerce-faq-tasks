@@ -98,6 +98,13 @@ export interface ChatOpenDropoff {
    */
   proactive: ChatOpenDropoffByTrigger;
   manual: ChatOpenDropoffByTrigger;
+  /**
+   * GID 1218086189953625: 分母(chat_open)から除外した「不明(source未記録)」の訪問者数。
+   * behavioral_events.source は 2026-08-29 の後付け列で過去データは NULL のまま
+   * (推定で埋めない、migration_behavioral_events_source.sql 参照)。黙って除外すると
+   * 「visitorsOpened が急に減った」という誤解を生むため、除外した件数を必ず併記する。
+   */
+  unknownSourceVisitorCount: number;
 }
 
 export interface ChatOpenDropoffByTrigger {
@@ -219,6 +226,7 @@ export async function fetchMeasurementHealth(
     opened: string; conversed: string;
     opened_proactive: string; conversed_proactive: string;
     opened_manual: string; conversed_manual: string;
+    opened_unknown_source: string;
   }>(
     `WITH tracking AS (
        SELECT MIN(s2.started_at) AS since FROM chat_sessions s2
@@ -228,16 +236,29 @@ export async function fetchMeasurementHealth(
      -- 「proactive発火を1回でも含むか」「能動クリックを1回でも含むか」を bool_or で持つ。
      -- 両方に該当する訪問者は両方の集計に入る(片方だけに絞る設計ではない。
      -- ChatOpenDropoffのコメント参照)。
+     -- GID 1218086189953625: 分子(chat_sessions)は source='user' で浄化済みなのに
+     -- 分母(chat_open)がノーフィルタだと比率が意味を持たない。behavioral_events.source
+     -- で同じ基準を適用する(source IS NULL = 判定不能な過去データは別途unknown_visitorsで数える)。
      opened_visitors AS (
        SELECT b.visitor_id,
               bool_or(b.event_data->>'trigger' = 'proactive') AS has_proactive,
               bool_or(b.event_data->>'trigger' IS DISTINCT FROM 'proactive') AS has_manual
          FROM behavioral_events b, tracking t
         WHERE b.event_type = 'chat_open'
+          AND b.source = 'user'
           AND t.since IS NOT NULL
           AND b.created_at >= GREATEST(t.since, NOW() - $1::interval)
           ${beTenantClause}
         GROUP BY b.visitor_id
+     ),
+     unknown_source_visitors AS (
+       SELECT DISTINCT b.visitor_id
+         FROM behavioral_events b, tracking t
+        WHERE b.event_type = 'chat_open'
+          AND b.source IS NULL
+          AND t.since IS NOT NULL
+          AND b.created_at >= GREATEST(t.since, NOW() - $1::interval)
+          ${beTenantClause}
      ),
      conversed_visitors AS (
        SELECT DISTINCT s.visitor_id
@@ -257,7 +278,8 @@ export async function fetchMeasurementHealth(
           ON cv.visitor_id = ov.visitor_id WHERE ov.has_proactive) AS conversed_proactive,
        (SELECT COUNT(*) FROM opened_visitors WHERE has_manual) AS opened_manual,
        (SELECT COUNT(*) FROM opened_visitors ov JOIN conversed_visitors cv
-          ON cv.visitor_id = ov.visitor_id WHERE ov.has_manual) AS conversed_manual`,
+          ON cv.visitor_id = ov.visitor_id WHERE ov.has_manual) AS conversed_manual,
+       (SELECT COUNT(*) FROM unknown_source_visitors) AS opened_unknown_source`,
     params,
   );
   const dropoffRow = dropoffResult.rows[0];
@@ -287,6 +309,7 @@ export async function fetchMeasurementHealth(
       parseInt(dropoffRow?.opened_manual ?? "0", 10),
       parseInt(dropoffRow?.conversed_manual ?? "0", 10),
     ),
+    unknownSourceVisitorCount: parseInt(dropoffRow?.opened_unknown_source ?? "0", 10),
   };
 
   const knowledgeIndexDrift = tenantId
