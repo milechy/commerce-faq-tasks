@@ -5,6 +5,7 @@
 import { pool } from '../../lib/db';
 import { createNotification, notificationExists } from '../../lib/notifications';
 import { userSourceExistsForTable } from '../admin/analytics/summaryQueries';
+import { logger } from '../../lib/logger';
 
 export interface AutoTuningCandidate {
   type: 'judge_repeated' | 'ab_winner' | 'effectiveness_top';
@@ -133,7 +134,7 @@ export async function detectTopPrinciples(
  * 全候補を集約して重複しないIn-App通知を送信する。
  * fire-and-forget で呼ぶことを想定。
  */
-async function runAutoTuningCheck(tenantId: string): Promise<void> {
+export async function runAutoTuningCheck(tenantId: string): Promise<void> {
   if (!pool) return;
 
   const [judgeResults, abResults, principleResults] = await Promise.all([
@@ -169,3 +170,76 @@ async function runAutoTuningCheck(tenantId: string): Promise<void> {
     });
   }
 }
+
+/**
+ * 稼働中の全テナットを巡回して runAutoTuningCheck を呼ぶ。
+ * billingSyncReconciliation.ts の listTenantsToSync と同じ「起動プロセスへの
+ * 定期実行配線」パターン: 1テナントの失敗が他テナントの処理を止めないよう、
+ * テナント単位で隔離する。
+ */
+async function listActiveTenantIds(): Promise<string[]> {
+  if (!pool) return [];
+  const result = await pool.query(`SELECT id FROM tenants WHERE is_active = true`);
+  return (result.rows as Array<{ id: string }>).map((r) => r.id);
+}
+
+export async function runAutoTuningSweep(): Promise<void> {
+  if (!pool) return;
+
+  let tenantIds: string[];
+  try {
+    tenantIds = await listActiveTenantIds();
+  } catch (err) {
+    logger.error({ err }, '[autoTuning] failed to list active tenants');
+    return;
+  }
+
+  for (const tenantId of tenantIds) {
+    try {
+      await runAutoTuningCheck(tenantId);
+    } catch (err) {
+      logger.warn({ err, tenantId }, '[autoTuning] runAutoTuningCheck failed for tenant (non-blocking)');
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 定期実行ラッパー。billingSyncReconciliationMonitor(billingSyncReconciliation.ts)
+// と同じ形(二重起動防止・起動直後の初回tick・stop())を踏襲する。
+// ---------------------------------------------------------------------------
+
+const AUTO_TUNING_SWEEP_INTERVAL_MS = 60 * 60 * 1000; // 1時間ごと(billingHealthMonitorと同じ周期)
+
+class AutoTuningMonitor {
+  private timer: ReturnType<typeof setInterval> | null = null;
+  private isRunning = false;
+
+  start(intervalMs: number = AUTO_TUNING_SWEEP_INTERVAL_MS): void {
+    if (this.timer) return; // 二重起動防止(CLAUDE.md 禁止30)
+    const tick = () => {
+      if (this.isRunning) {
+        logger.warn('[autoTuning] previous sweep still running, skipping this tick');
+        return;
+      }
+      this.isRunning = true;
+      runAutoTuningSweep()
+        .catch((err) => logger.error({ err }, '[autoTuning] scheduled sweep failed'))
+        .finally(() => {
+          this.isRunning = false;
+        });
+    };
+    this.timer = setInterval(tick, intervalMs);
+    this.timer.unref?.();
+    // 起動直後に1回実行する(次の周期を待たない)。
+    tick();
+  }
+
+  stop(): void {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+  }
+}
+
+export const autoTuningMonitor = new AutoTuningMonitor();
