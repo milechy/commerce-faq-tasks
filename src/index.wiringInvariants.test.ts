@@ -105,8 +105,12 @@ describe("src/index.ts 配線の不変条件（ソース構造検査）", () => 
 
     it("/dialog/turn が runDialogTurn に tenantId を含めて渡している", () => {
       const idx = firstIndexOf(/app\.post\(\s*["']\/dialog\/turn["']/);
-      const block = source.slice(idx, idx + 2000);
-      expect(block).toMatch(/runDialogTurn\(\s*\{\s*\.\.\.parsed\.data\s*,\s*tenantId\s*\}\s*\)/);
+      const block = source.slice(idx, idx + 3000);
+      // Phase69-2 [外1]: excluded_ids のマージ結果を options に上書きするため
+      // ...parsed.data, tenantId の直後に options: {...} が続く形に変わった。
+      expect(block).toMatch(
+        /runDialogTurn\(\s*\{\s*\.\.\.parsed\.data\s*,\s*tenantId\s*,\s*options:\s*\{/
+      );
     });
 
     it("/search・/search.v1・/dialog/turn は3箇所とも (req as AuthedRequest).tenantId から取得している（body/queryからの取得を禁止 — CLAUDE.md不変条件1）", () => {
@@ -195,7 +199,10 @@ describe("src/index.ts 配線の不変条件（ソース構造検査）", () => 
   describe("課金計上ギャップの配線 [P0]", () => {
     it("/dialog/turn ハンドラが trackUsage を featureUsed:'chat' で呼んでいる", () => {
       const idx = firstIndexOf(/app\.post\(\s*["']\/dialog\/turn["']/);
-      const block = source.slice(idx, idx + 2500);
+      // Phase69-2 [外1] で excluded_ids スキーマ + default_excluded_ids の
+      // fetch/merge がルート冒頭に増えた分、trackUsage 呼び出しまでの距離が
+      // 伸びたためウィンドウを拡張した。
+      const block = source.slice(idx, idx + 3500);
       expect(block).toMatch(/trackUsage\(/);
       expect(block).toMatch(/featureUsed:\s*["']chat["']/);
       expect(block).toMatch(/buildChatUsageTracking\(\s*turn\.meta\s*\)/);
@@ -203,7 +210,7 @@ describe("src/index.ts 配線の不変条件（ソース構造検査）", () => 
 
     it("/dialog/turn は認証コンテキスト由来の tenantId でのみ計上する（body/ヘッダ非信用）", () => {
       const idx = firstIndexOf(/app\.post\(\s*["']\/dialog\/turn["']/);
-      const block = source.slice(idx, idx + 2500);
+      const block = source.slice(idx, idx + 3500);
       // trackUsage は tenantId ガードの内側にある
       expect(block).toMatch(/if\s*\(\s*tenantId\s*\)\s*\{[\s\S]*trackUsage\(/);
     });
@@ -251,6 +258,42 @@ describe("src/index.ts 配線の不変条件（ソース構造検査）", () => 
     it("options に無関係な検証エラー（message欠落等）は従来どおり invalid_request のまま", () => {
       const block = dialogTurnRouteBlock();
       expect(block).toMatch(/error:\s*["']invalid_request["']/);
+    });
+
+    // レビュー指摘(2026-09-02): 当初 default_excluded_ids の fetch/merge を
+    // runDialogTurn(dialogAgent.ts) の内部に置いたところ、runDialogTurn は
+    // /api/chat からも呼ばれる共有関数のため、/api/chat の全トラフィックにも
+    // 無条件のDB往復が増えるという副作用が出た。agentSearchRoute.ts:93-95 の
+    // 前例どおり、fetch/merge は HTTP 直エンドポイントである /dialog/turn の
+    // ルートハンドラ側だけで行う形に差し戻した。この配置を固定する。
+    it("default_excluded_ids の fetch/merge はルートハンドラ側（runDialogTurn呼び出し前）で行う", () => {
+      const block = dialogTurnRouteBlock();
+      const fetchIdx = block.search(/fetchDefaultExcludedIds\(/);
+      const mergeIdx = block.search(/mergeExcludedIds\(/);
+      const runDialogTurnIdx = block.search(/runDialogTurn\(/);
+
+      expect(fetchIdx).toBeGreaterThanOrEqual(0);
+      expect(mergeIdx).toBeGreaterThanOrEqual(0);
+      expect(runDialogTurnIdx).toBeGreaterThanOrEqual(0);
+      // fetch → merge → runDialogTurn の順で、fetch/merge の結果が
+      // runDialogTurn に渡る前に確定していることを固定する。
+      expect(fetchIdx).toBeLessThan(mergeIdx);
+      expect(mergeIdx).toBeLessThan(runDialogTurnIdx);
+    });
+
+    it("index.ts が fetchDefaultExcludedIds / mergeExcludedIds を lib/defaultExcludedIds から import している", () => {
+      expect(source).toMatch(
+        /import\s*\{[^}]*fetchDefaultExcludedIds[^}]*mergeExcludedIds[^}]*\}\s*from\s*["']\.\/lib\/defaultExcludedIds["']/
+      );
+    });
+
+    it("runDialogTurn(dialogAgent.ts) は default_excluded_ids 用のDBフェッチを行わない（/api/chat への副作用防止）", () => {
+      const dialogAgentSource = readFileSync(
+        join(__dirname, "agent", "dialog", "dialogAgent.ts"),
+        "utf-8"
+      );
+      expect(dialogAgentSource).not.toMatch(/fetchDefaultExcludedIds/);
+      expect(dialogAgentSource).not.toMatch(/mergeExcludedIds/);
     });
   });
 });

@@ -28,6 +28,7 @@ import { businessHealthHandler } from "./lib/healthBusiness";
 import { runDialogTurn } from "./agent/dialog/dialogAgent";
 import { initAuthMiddleware } from "./agent/http/authMiddleware";
 import { createAgentSearchHandler } from "./agent/http/agentSearchRoute";
+import { fetchDefaultExcludedIds, mergeExcludedIds } from "./lib/defaultExcludedIds";
 import { createCorsMiddleware } from "./lib/cors";
 import { securityHeadersMiddleware } from "./lib/headers";
 import { createRateLimitMiddleware } from "./lib/rate-limit";
@@ -447,7 +448,26 @@ app.post("/dialog/turn", ...apiStack, async (req, res) => {
 
   try {
     const tenantId = (req as AuthedRequest).tenantId;
-    const turn = await runDialogTurn({ ...parsed.data, tenantId });
+
+    // Phase69-2 [外1] GID 1218086284362759: agentSearchRoute.ts:93-95 と同じ形で
+    // ルートハンドラ側だけでテナントの default_excluded_ids をリクエスト側の
+    // excluded_ids とマージする。runDialogTurn（共有関数、/api/chat からも呼ばれる）
+    // の内部に置くと /api/chat 経由の全トラフィックにも無条件のDB往復が発生して
+    // しまうため、HTTP 直エンドポイントである /dialog/turn 側だけで行う。
+    const dbDefaultExcludedIds = await fetchDefaultExcludedIds(tenantId ?? "");
+    const mergedExcludedIds = mergeExcludedIds(
+      parsed.data.options?.excluded_ids,
+      dbDefaultExcludedIds
+    );
+
+    const turn = await runDialogTurn({
+      ...parsed.data,
+      tenantId,
+      options: {
+        ...parsed.data.options,
+        excluded_ids: mergedExcludedIds,
+      },
+    });
 
     // 課金計上（収益監査ギャップ [P0]）: /dialog/turn は runDialogTurn で LLM 合成・
     // planner・OpenAI 埋め込みを実行するのに、これまで trackUsage を通っておらず
