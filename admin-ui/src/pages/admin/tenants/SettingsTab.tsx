@@ -4,6 +4,7 @@ import { BillingSection } from "./BillingSection";
 import type { TenantDetail } from "./types";
 import { CARD_STYLE, INPUT_STYLE, LABEL_STYLE } from "./types";
 import { buildOriginWarning } from "../../../lib/tenantOriginWarning";
+import { HermesConsentToggle } from "../../../components/HermesConsentToggle";
 
 // ─── タブ: 設定 ───────────────────────────────────────────────────────────────
 
@@ -229,6 +230,26 @@ export function SettingsTab({
       {/* 課金管理セクション — Super Admin専用 */}
       {isSuperAdmin && (
         <BillingSection tenant={tenant} onUpdate={onBillingUpdate} updateBilling={updateBilling} />
+      )}
+
+      {/* [A2A-0h] データ共有(Hermes)同意 — Super Admin専用の直接操作面。
+          従来は「クライアントビューで見る」プレビュー(previewMode)経由でしか同意を
+          操作できず、isSuperAdmin=trueだと /admin/tuning ではトグル自体が非表示だった
+          (tuning/index.tsx の `!isSuperAdmin && tenantId` ガード参照)。
+          このページは SuperAdminRoute 限定なので、ここに直接操作面を置く。
+          HermesConsentToggle は overrideTenantId 指定時に PATCH /v1/admin/tenants/:id を
+          叩くため、プレビュー経由と同じAPI・同じ強制判定(free_ad)をそのまま再利用できる
+          (新規エンドポイント不要)。同意の判定ロジック自体は変更していない。 */}
+      {isSuperAdmin && (
+        <div style={{ marginTop: 24 }}>
+          <h3 style={{ fontSize: 15, fontWeight: 700, margin: "0 0 4px", color: "var(--foreground)" }}>
+            {t("hermes_consent.super_admin_section_title")}
+          </h3>
+          <p style={{ fontSize: 13, color: "var(--muted-foreground)", margin: "0 0 12px", maxWidth: 480 }}>
+            {t("hermes_consent.super_admin_section_desc")}
+          </p>
+          <HermesConsentToggle overrideTenantId={tenant.id} />
+        </div>
       )}
     </form>
   );

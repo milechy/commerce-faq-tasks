@@ -621,6 +621,26 @@ const en: Record<TranslationKey, string> = {
   "conversion.ab_status_running": "Running",
   "conversion.ab_status_completed": "Completed",
   "conversion.ab_status_cancelled": "Cancelled",
+
+  // Hermes consent (A2A-0h): shared learning pool participation toggle
+  "hermes_consent.title": "🧠 Join the Shared Learning Pool",
+  "hermes_consent.description_main": "This setting is give-to-get — sharing and receiving come as a pair. When ON, your conversation logs (Q&A AI and avatar exchanges, including sessions where the chat was opened but nothing was said), the page-view history and referral source leading up to them (the URL path only — search terms and member IDs in the query string are excluded), and the details of any conversion (amount, conversion type, and the conversation stage at conversion) become subject to analysis on an external analytics platform. In return, improvements learned from other tenants' conversations are fed back into your AI's responses as \"Global rules\" (shown on this page with a 🌐 Global badge). While OFF, nothing is shared, but your AI also won't receive the Global rules learned from other tenants.",
+  "hermes_consent.description_internal": "R2C's internal learning (FAQ improvement, automatic response tuning) always runs regardless of this setting. This toggle only controls sharing outside R2C and, in return, receiving Global rules. Turning it OFF stops any new data from being shared and stops using Global rules going forward, but data already shared cannot be un-shared.",
+  "hermes_consent.forced_notice": "⚠️ On your current plan (Ad plan), participation is required as the price of the free service. To opt out, switch to a paid plan.",
+  "hermes_consent.aria_forced": "Participation is required on the Ad plan (cannot be changed)",
+  "hermes_consent.aria_revoke": "Leave the shared learning pool",
+  "hermes_consent.aria_join": "Join the shared learning pool",
+  "hermes_consent.btn_saving": "Saving...",
+  "hermes_consent.btn_forced": "🔒 Required (Ad plan)",
+  "hermes_consent.btn_active": "✅ Participating",
+  "hermes_consent.btn_inactive": "⏸️ Not participating",
+  "hermes_consent.toast_joined": "✅ Joined the shared learning pool",
+  "hermes_consent.toast_left": "✅ Left the shared learning pool",
+  "hermes_consent.toast_error_default": "Failed to save. Please try again.",
+  // Super Admin only: direct control surface from /admin/tenants/:id (distinct from H-8;
+  // this heading is only for the direct-control section, not the client-view preview path)
+  "hermes_consent.super_admin_section_title": "Data-sharing consent (Super Admin control)",
+  "hermes_consent.super_admin_section_desc": "Directly changes this tenant's shared learning pool participation on their behalf. It uses the same API as the tenant's own control, so the same terms apply as the regular consent screen.",
 };
 
 export default en;

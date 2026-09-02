@@ -631,6 +631,26 @@ const ja = {
   "conversion.ab_status_running": "実施中",
   "conversion.ab_status_completed": "完了",
   "conversion.ab_status_cancelled": "中止",
+
+  // Hermes consent (A2A-0h): 共有学習プールへの参加同意トグル
+  "hermes_consent.title": "🧠 共有学習プールへの参加",
+  "hermes_consent.description_main": "この設定は「提供」と「受け取り」がセットのgive-to-getです。ONにすると、貴社の会話ログ（QA AI・アバターとのやり取り。チャットを開いたが発話が無かったセッションを含む）、そこに至るまでのページ閲覧履歴・流入元（URLのパス部分。検索語や会員IDなどのクエリ文字列は除く）、成約時の詳細（金額・成約の種類・成約時点の会話ステージを含む）が、社外の分析基盤での分析対象になります。その見返りとして、他社の会話から学んだ改善が「グローバルルール」（このページに🌐グローバルとして表示されるルール）として貴社のAI応答にも使われるようになります。OFFのままだと、提供は発生しませんが、その代わりグローバルルールも貴社では使われません。",
+  "hermes_consent.description_internal": "R2C社内での学習（FAQ改善・回答の自動学習）は、この設定に関わらず常に行われます。ここで操作するのは社外への提供と、その見返りとしてのグローバルルール受け取りのみです。OFFにすると以降の新規データ提供とグローバルルールの利用が停止しますが、それまでに提供済みのデータへの反映は取り消せません。",
+  "hermes_consent.forced_notice": "⚠️ 現在のプラン(広告プラン)では、無料でのご提供の対価として参加が必須です。停止するには有料プランへの変更が必要です。",
+  "hermes_consent.aria_forced": "広告プランのため参加は必須です(変更不可)",
+  "hermes_consent.aria_revoke": "共有学習プールへの参加を取り消す",
+  "hermes_consent.aria_join": "共有学習プールに参加する",
+  "hermes_consent.btn_saving": "保存中...",
+  "hermes_consent.btn_forced": "🔒 必須(広告プラン)",
+  "hermes_consent.btn_active": "✅ 参加中",
+  "hermes_consent.btn_inactive": "⏸️ 未参加",
+  "hermes_consent.toast_joined": "✅ 共有学習プールに参加しました",
+  "hermes_consent.toast_left": "✅ 参加を取り消しました",
+  "hermes_consent.toast_error_default": "保存に失敗しました。もう一度お試しください。",
+  // Super Admin専用: /admin/tenants/:id からテナントの同意を直接操作する面（H-8とは別問題。
+  // このセクション自体はプレビュー経由ではなく直接操作のための見出し）
+  "hermes_consent.super_admin_section_title": "データ共有の同意（Super Admin操作）",
+  "hermes_consent.super_admin_section_desc": "このテナントに代わって共有学習プールへの参加設定を直接変更します。テナント自身の操作と同じAPIを使うため、通常の同意画面と同じ内容が適用されます。",
 } as const;
 
 export type TranslationKey = keyof typeof ja;
