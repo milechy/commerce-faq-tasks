@@ -49,8 +49,8 @@ describe('POST /api/events — behavioral_events.source', () => {
     const insertCall = mockQuery.mock.calls.find(([sql]) => sql.includes('INSERT INTO behavioral_events'));
     expect(insertCall).toBeDefined();
     const [sql, params] = insertCall!;
-    expect(sql).toMatch(/\(tenant_id, session_id, visitor_id, event_type, event_data, page_url, referrer, source\)/);
-    // 列順: tenant_id, session_id, visitor_id, event_type, event_data, page_url, referrer, source
+    expect(sql).toMatch(/\(tenant_id, session_id, visitor_id, event_type, event_data, page_url, referrer, source, chat_session_id\)/);
+    // 列順: tenant_id, session_id, visitor_id, event_type, event_data, page_url, referrer, source, chat_session_id
     expect(params[7]).toBe('e2e');
   });
 

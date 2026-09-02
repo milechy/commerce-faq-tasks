@@ -29,6 +29,10 @@ const VALID_EVENT_TYPES = [
   // 唯一機能する品質シグナルになる(要件 Rj / 決定 D1)。
   // **新テーブルを作らない**(CLAUDE.md 禁止32)。既存 behavioral_events に載せる。
   'answer_feedback',
+  // 是正0-3(GID 1218086067477270): 自動オープン後にユーザーが再度パネルを開いた
+  // (=開き直した)ケース。chat_open(離脱率計算の分母)と別名にして、
+  // 分母を歪めずに開き直しの回数を計測できるようにする(widget.js参照)。
+  'chat_reopen',
 ] as const;
 
 /** answer_feedback の event_data。どの回答への評価かを識別できる必要がある。 */
@@ -118,7 +122,7 @@ export function registerEventRoutes(
 
       for (const e of events) {
         valuePlaceholders.push(
-          `($${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++})`
+          `($${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++})`
         );
         values.push(
           tenantId,
@@ -129,46 +133,82 @@ export function registerEventRoutes(
           e.page_url ?? null,
           e.referrer ?? null,
           trafficSource,
+          // 是正0-4(GID 1218086067416577): behavioral_events(r2c_sid)とchat_sessions
+          // (conversationId)を結合できるキー。任意項目のため無ければNULL。
+          chat_session_id ?? null,
         );
       }
 
       // ★migration未適用でもイベント受信を止めないこと★
       // ここが42703以外の理由で例外を投げると全イベントが記録されず、コード側だけ先に
       // デプロイされた時間帯にトラフィック計測が丸ごと止まる。stripeSync.tsの
-      // _insertUsageReportRowと同じパターンで、source列が無いときだけ1回だけ
-      // 旧カラム構成にフォールバックする。
+      // _insertUsageReportRowと同じパターンで、未適用の列だけフォールバックする。
+      // 列リストは source が chat_session_id より左にあるため、両方未適用でも
+      // Postgresは先に source を42703として報告する(=下のelse分岐に落ちる)。
+      // そのため「chat_session_idだけが無い」ケースをエラーメッセージで見分けられる。
       try {
         await db.query(
           `INSERT INTO behavioral_events
-             (tenant_id, session_id, visitor_id, event_type, event_data, page_url, referrer, source)
+             (tenant_id, session_id, visitor_id, event_type, event_data, page_url, referrer, source, chat_session_id)
            VALUES ${valuePlaceholders.join(', ')}`,
           values,
         );
       } catch (err) {
         if ((err as { code?: string })?.code !== '42703') throw err;
-        logger.error(
-          { tenantId },
-          '[events] behavioral_events に source 列が無い — migration_behavioral_events_source.sql が未適用。' +
-          '旧カラムで継続するが、この期間のイベントはtraffic source(e2e/demo等)を除外できない。至急 migration を適用すること',
-        );
-        const legacyPlaceholders: string[] = [];
-        const legacyValues: unknown[] = [];
-        let legacyIdx = 1;
-        for (const e of events) {
-          legacyPlaceholders.push(
-            `($${legacyIdx++}, $${legacyIdx++}, $${legacyIdx++}, $${legacyIdx++}, $${legacyIdx++}, $${legacyIdx++}, $${legacyIdx++})`
+
+        if (/chat_session_id/.test((err as Error).message ?? '')) {
+          // 是正0-4: chat_session_id 列のみ未適用。source 列は使えるので保持したまま再試行する。
+          logger.error(
+            { tenantId },
+            '[events] behavioral_events に chat_session_id 列が無い — ' +
+            'migration_behavioral_events_chat_session_id.sql が未適用。source列のみで継続するが、' +
+            'この期間のイベントはchat_sessionsと結合できない。至急 migration を適用すること',
           );
-          legacyValues.push(
-            tenantId, session_id, visitor_id, e.event_type,
-            JSON.stringify(e.event_data ?? {}), e.page_url ?? null, e.referrer ?? null,
+          const sourceOnlyPlaceholders: string[] = [];
+          const sourceOnlyValues: unknown[] = [];
+          let sourceOnlyIdx = 1;
+          for (const e of events) {
+            sourceOnlyPlaceholders.push(
+              `($${sourceOnlyIdx++}, $${sourceOnlyIdx++}, $${sourceOnlyIdx++}, $${sourceOnlyIdx++}, $${sourceOnlyIdx++}, $${sourceOnlyIdx++}, $${sourceOnlyIdx++}, $${sourceOnlyIdx++})`
+            );
+            sourceOnlyValues.push(
+              tenantId, session_id, visitor_id, e.event_type,
+              JSON.stringify(e.event_data ?? {}), e.page_url ?? null, e.referrer ?? null,
+              trafficSource,
+            );
+          }
+          await db.query(
+            `INSERT INTO behavioral_events
+               (tenant_id, session_id, visitor_id, event_type, event_data, page_url, referrer, source)
+             VALUES ${sourceOnlyPlaceholders.join(', ')}`,
+            sourceOnlyValues,
+          );
+        } else {
+          // source(と、場合によってはchat_session_idも)が未適用。旧カラム構成にフォールバックする。
+          logger.error(
+            { tenantId },
+            '[events] behavioral_events に source 列が無い — migration_behavioral_events_source.sql が未適用。' +
+            '旧カラムで継続するが、この期間のイベントはtraffic source(e2e/demo等)を除外できない。至急 migration を適用すること',
+          );
+          const legacyPlaceholders: string[] = [];
+          const legacyValues: unknown[] = [];
+          let legacyIdx = 1;
+          for (const e of events) {
+            legacyPlaceholders.push(
+              `($${legacyIdx++}, $${legacyIdx++}, $${legacyIdx++}, $${legacyIdx++}, $${legacyIdx++}, $${legacyIdx++}, $${legacyIdx++})`
+            );
+            legacyValues.push(
+              tenantId, session_id, visitor_id, e.event_type,
+              JSON.stringify(e.event_data ?? {}), e.page_url ?? null, e.referrer ?? null,
+            );
+          }
+          await db.query(
+            `INSERT INTO behavioral_events
+               (tenant_id, session_id, visitor_id, event_type, event_data, page_url, referrer)
+             VALUES ${legacyPlaceholders.join(', ')}`,
+            legacyValues,
           );
         }
-        await db.query(
-          `INSERT INTO behavioral_events
-             (tenant_id, session_id, visitor_id, event_type, event_data, page_url, referrer)
-           VALUES ${legacyPlaceholders.join(', ')}`,
-          legacyValues,
-        );
       }
 
       // Phase65: chat_conversion イベントを conversion_attributions にブリッジ (best-effort)
