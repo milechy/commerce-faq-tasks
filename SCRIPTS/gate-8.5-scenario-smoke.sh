@@ -98,25 +98,18 @@ else
 fi
 
 # ─── シナリオ 4: /health/business ─────────────────────────────────────────
+# [P0] #1072 で internal-only ガード(loopback限定 + X-Internal-Request)を追加済み。
+# この smoke は GitHub Actions ランナーから叩くため、常に非 loopback = 常に 403 が
+# 正しい応答。200 が返ってきたらガードが外れた退行なので FAIL 扱いにする
+# (以前は 200 を pass 扱いにしていたため、この保護が効いている間ずっと
+#  smoke 側が誤って FAIL を報告し続けていた)。
 echo "── シナリオ 4: /health/business ビジネスロジック健全性"
 biz_body=$(curl -s --max-time 15 "${API_URL}/health/business" 2>/dev/null || echo '{}')
 biz_http=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 "${API_URL}/health/business" 2>/dev/null || echo "000")
-if [[ "${biz_http}" == "200" ]]; then
-  warnings=$(echo "${biz_body}" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('warnings',[])))" 2>/dev/null || echo "0")
-  if [[ "${warnings}" -eq 0 ]]; then
-    pass "/health/business → 200, warnings=0"
-  else
-    warn_list=$(echo "${biz_body}" | python3 -c "import sys,json; d=json.load(sys.stdin); print('; '.join(d.get('warnings',[])[:3]))" 2>/dev/null || echo "")
-    messages_24h=$(echo "${biz_body}" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('chat_messages_24h',0))" 2>/dev/null || echo "0")
-    real_warnings=$(echo "${biz_body}" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len([w for w in d.get('warnings',[]) if 'last_chat_message_at' not in w]))" 2>/dev/null || echo "${warnings}")
-    if [[ "${messages_24h}" -eq 0 ]]; then
-      skip "/health/business → warnings=${warnings} ただし chat_messages_24h=0 (非稼働期間 SKIP): ${warn_list}"
-    elif [[ "${real_warnings}" -eq 0 ]]; then
-      skip "/health/business → warnings=${warnings} (last_chat_message_at のみ・off-hours SKIP): ${warn_list}"
-    else
-      fail "/health/business → warnings=${warnings}: ${warn_list}"
-    fi
-  fi
+if [[ "${biz_http}" == "403" ]]; then
+  pass "/health/business → 403 (internal-only ガード OK)"
+elif [[ "${biz_http}" == "200" ]]; then
+  fail "/health/business → HTTP 200 (internal-only ガードが外れている可能性 [P0] #1072 の退行): ${biz_body:0:200}"
 elif [[ "${biz_http}" == "404" ]]; then
   skip "/health/business → 404 (未実装)"
 else
