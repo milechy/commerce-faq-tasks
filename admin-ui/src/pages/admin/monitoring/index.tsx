@@ -6,6 +6,7 @@ import TenantSlaTable, {
 } from "../../../components/admin/TenantSlaTable";
 import { API_BASE, authFetch } from "../../../lib/api";
 import { supabase } from "../../../lib/supabaseClient";
+import { QuotaBar } from "../billing/QuotaSection";
 
 interface RateMetric {
   numerator: number;
@@ -27,6 +28,16 @@ interface MeasurementHealth {
     visitorsConversed: number;
     dropoffRate: number | null;
     sessionCoverage: RateMetric;
+    /** GID 1218086189953625: 分母から除外した「不明(source未記録)」の訪問者数。
+     *  黙って除外すると数字が合わない問い合わせを生むため、除外件数を画面に出す。 */
+    unknownSourceVisitorCount?: number;
+  };
+  /** ナレッジ配線是正P14で既に集計はあった(👍👎)。Judgeが4通未満を評価しないため
+   *  当面唯一機能する品質信号。event_tracking(行動計測)とは独立に既定ONなので、
+   *  行動計測が無効なテナントでも数値が出る。 */
+  answerFeedback?: {
+    upCount: number;
+    downCount: number;
   };
   /** super_admin のときだけ返る。コードが要求する列が実行中のDBに存在するか。 */
   schemaHealth?: {
@@ -63,6 +74,23 @@ interface MeasurementHealth {
     pendingCount: number;
     asOf: string;
   };
+  /** super_admin のときだけ返る。A2A-0i: LemonSlice($100/月)とLiveKit($50/月)の
+   *  固定費に対する当月消費率。上げ方向(80%到達)/下げ方向(3ヶ月連続50%未満)の
+   *  判断材料。quota:null はこのクォータの込み枠が未確定でありenv設定待ちを意味する。 */
+  fixedCostQuota?: {
+    lemonslice: FixedCostQuotaLine;
+    livekit: FixedCostQuotaLine;
+    asOf: string;
+  };
+}
+
+interface FixedCostQuotaLine {
+  used: number;
+  quota: number | null;
+  ratio: number | null;
+  upSignal: boolean;
+  downSignal: boolean;
+  historyMonths: number;
 }
 
 interface MonitoringKpis {
@@ -172,6 +200,84 @@ function RateDisplay({ metric }: { metric: RateMetric }) {
       <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>
         ({metric.numerator.toLocaleString("ja-JP")} / {metric.denominator.toLocaleString("ja-JP")}件)
       </span>
+    </div>
+  );
+}
+
+// ナレッジ配線是正P14: 👍👎の集計は既にあったが誰も表示していなかった。
+// MIN_VISITORS_FOR_RATE(=30, サーバ側 measurementHealth.ts)と同じ考え方で、
+// 母数が小さいときは比率(誤った自信を生む)を出さず実数のみ出す。
+const MIN_FEEDBACK_FOR_RATE = 30;
+
+function FeedbackDisplay({ feedback }: { feedback: { upCount: number; downCount: number } }) {
+  const total = feedback.upCount + feedback.downCount;
+  if (total < MIN_FEEDBACK_FOR_RATE) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+        <span style={{ fontSize: 20, fontWeight: 700, color: "var(--foreground)" }}>
+          👍 {feedback.upCount.toLocaleString("ja-JP")} / 👎 {feedback.downCount.toLocaleString("ja-JP")}
+        </span>
+        <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>
+          件数が少ないため割合は出しません（{total.toLocaleString("ja-JP")}件 / 必要 {MIN_FEEDBACK_FOR_RATE}件）
+        </span>
+      </div>
+    );
+  }
+  const upRate = Math.round((feedback.upCount / total) * 1000) / 10;
+  return (
+    <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+      <span style={{ fontSize: 28, fontWeight: 700, color: "var(--foreground)", fontVariantNumeric: "tabular-nums" }}>
+        👍 {upRate}%
+      </span>
+      <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>
+        (👍 {feedback.upCount.toLocaleString("ja-JP")} / 👎 {feedback.downCount.toLocaleString("ja-JP")})
+      </span>
+    </div>
+  );
+}
+
+// A2A-0i: 固定費(LemonSlice/LiveKit)クォータの1行分。QuotaSection.tsxのQuotaBar
+// (アバター利用枠等と同じ「用済み/込み枠」バー)をそのまま再利用する。
+function FixedCostQuotaRow({
+  label, unit, line,
+}: {
+  label: string;
+  unit: string;
+  line: FixedCostQuotaLine;
+}) {
+  if (line.quota === null) {
+    return (
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
+        <span style={{ fontSize: 13, fontWeight: 600, color: "var(--foreground)" }}>{label}</span>
+        <span style={{ fontSize: 13, color: "var(--muted-foreground)" }}>
+          今月 {line.used.toLocaleString("ja-JP")}{unit}(込み枠未設定)
+        </span>
+      </div>
+    );
+  }
+  return (
+    <div>
+      {/* overageは常に0を渡す — QuotaBarの超過文言は「テナント従量課金」前提の文面
+          (元々billing/QuotaSection.tsx用)で、ここ(社内のベンダー固定費監視)には
+          そのまま流用できない。超過の有無はバーの色(100%以上=赤)とupSignalの
+          テキストで十分伝わる。 */}
+      <QuotaBar
+        label={label}
+        used={line.used}
+        included={line.quota}
+        unit={unit}
+        overage={0}
+        overageUnit={unit}
+      />
+      {line.upSignal ? (
+        <p style={{ margin: "-8px 0 12px", fontSize: 13, color: "#fbbf24", fontWeight: 600 }}>
+          込み枠の80%以上を消費しています。引き上げを検討してください。
+        </p>
+      ) : line.downSignal ? (
+        <p style={{ margin: "-8px 0 12px", fontSize: 13, color: "#4ade80" }}>
+          直近{line.historyMonths}ヶ月連続で込み枠の50%未満です。引き下げを検討できます。
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -595,6 +701,11 @@ export default function MonitoringPage() {
                       <br />
                       {new Date(health.chatOpenDropoff.trackingSince).toLocaleDateString("ja-JP")} 以降の記録のみを数えています。
                       それ以前の会話には訪問者IDが無く、結合できません。
+                      {/* GID 1218086189953625: 分母には source='user' のみを数え、source未記録(不明)は
+                          黙って除外せず件数を出す。behavioral_events.source は2026-08-29の後付け列で
+                          過去データはNULLのまま(推定で埋めない)。 */}
+                      <br />
+                      不明 {(health.chatOpenDropoff.unknownSourceVisitorCount ?? 0).toLocaleString("ja-JP")} 件を除外しています（source未記録のため計測に含められません）。
                     </div>
                   ) : (
                     <>
@@ -605,8 +716,23 @@ export default function MonitoringPage() {
                         訪問者IDが付いた会話: {health.chatOpenDropoff.sessionCoverage.numerator}／
                         {health.chatOpenDropoff.sessionCoverage.denominator} 件
                         （この割合が低いほど上の数字は当てになりません）
+                        <br />
+                        不明 {(health.chatOpenDropoff.unknownSourceVisitorCount ?? 0).toLocaleString("ja-JP")} 件を除外しています（source未記録のため計測に含められません）。
                       </div>
                     </>
+                  )}
+                </MeasurementHealthCard>
+
+                {/* ナレッジ配線是正P14: 👍👎の集計は既にあったが誰も表示していなかった。
+                    Judgeが4通未満を評価しないため、当面唯一機能する品質信号。 */}
+                <MeasurementHealthCard
+                  title="回答への👍👎"
+                  description="answer_feedbackはevent_tracking(行動計測)と独立に既定ONのため、行動計測が無効なテナントでも数値が出ます"
+                >
+                  {health?.answerFeedback ? (
+                    <FeedbackDisplay feedback={health.answerFeedback} />
+                  ) : (
+                    <MetricPlaceholder />
                   )}
                 </MeasurementHealthCard>
 
@@ -715,6 +841,29 @@ export default function MonitoringPage() {
                       <br />
                       集計時点: {new Date(health.hermesAcceptanceRate.asOf).toLocaleString("ja-JP")}
                     </div>
+                  </MeasurementHealthCard>
+                )}
+
+                {/* A2A-0i: LemonSlice($100/月・込み15,000クレジット)とLiveKit($50/月)の
+                    固定費消費率(R2C運用のみ)。上げ方向(80%到達)は敏感に、下げ方向
+                    (3ヶ月連続50%未満)は慎重に判定する。上げ方向はbillingHealthMonitor
+                    経由でSlackにも通知される(このカードはWARNING未満の平常時も含め常時表示)。 */}
+                {health?.fixedCostQuota && (
+                  <MeasurementHealthCard
+                    title="固定費クォータ消費率(LemonSlice/LiveKit)"
+                    description="込み枠に対する当月消費。上げ方向は80%到達で警告、下げ方向は3ヶ月連続50%未満のときだけ示唆する"
+                  >
+                    <FixedCostQuotaRow label="LemonSlice" unit="クレジット" line={health.fixedCostQuota.lemonslice} />
+                    <p style={{ margin: "2px 0 12px", fontSize: 11.5, color: "var(--muted-foreground)", lineHeight: 1.6 }}>
+                      ※avatar-agentのセッション終了時1回きりの送信(リトライなし)を元にした値です。
+                      クラッシュ等で計上漏れがあると、実際の消費率はこれより高い可能性があります。
+                    </p>
+                    <FixedCostQuotaRow label="LiveKit" unit="room" line={health.fixedCostQuota.livekit} />
+                    {health.fixedCostQuota.livekit.quota === null && (
+                      <p style={{ margin: "2px 0 0", fontSize: 11.5, color: "var(--muted-foreground)", lineHeight: 1.6 }}>
+                        ※込み枠(LIVEKIT_MONTHLY_ROOM_QUOTA)が未設定のため、上げ下げの判定は保留中です。
+                      </p>
+                    )}
                   </MeasurementHealthCard>
                 )}
               </div>

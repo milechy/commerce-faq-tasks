@@ -5,6 +5,23 @@ import { z } from "zod";
 import { encryptText, decryptText, isEncrypted } from "../../../lib/crypto/textEncrypt";
 import { logger } from "../../../lib/logger";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
+import { queryTenantPlan, planHasFeature } from "../../../lib/billing/planFeatures";
+
+// GID [A2A-0d]: 外部アナリティクス連携はGrowthプラン以上(ga4Routes.ts と揃える)。
+// PostHogは現状「接続の登録」のみで実際のイベント送信経路が未配線だが、連携設定の
+// 入口自体はGA4と同じ商品性(外部アナリティクス連携)なので同じゲートを掛ける。
+const EXTERNAL_ANALYTICS_DENIAL = {
+  error: "plan_upgrade_required",
+  message: "外部アナリティクス連携（PostHog）はGrowthプラン以上でご利用いただけます",
+} as const;
+
+async function denyIfPlanLacksExternalAnalytics(
+  db: Pool,
+  tenantId: string,
+): Promise<typeof EXTERNAL_ANALYTICS_DENIAL | null> {
+  const plan = await queryTenantPlan(db, tenantId);
+  return planHasFeature(plan, "external_analytics") ? null : EXTERNAL_ANALYTICS_DENIAL;
+}
 
 const connectSchema = z.object({
   project_api_key: z.string().min(1).max(200),
@@ -35,6 +52,10 @@ export function registerPostHogTenantRoutes(app: Express, db: Pool): void {
       const parsed = connectSchema.safeParse(req.body ?? {});
       if (!parsed.success) {
         return res.status(400).json({ error: "invalid_request", details: parsed.error.issues });
+      }
+      const denial = await denyIfPlanLacksExternalAnalytics(db, req.params.id);
+      if (denial) {
+        return res.status(403).json(denial);
       }
       try {
         const encrypted = encryptText(parsed.data.project_api_key);
@@ -91,6 +112,10 @@ export function registerPostHogTenantRoutes(app: Express, db: Pool): void {
     (req: Request, res: Response, next: NextFunction) =>
       canAccessTenant(req, res, req.params.id, next),
     async (req: Request, res: Response) => {
+      const denial = await denyIfPlanLacksExternalAnalytics(db, req.params.id);
+      if (denial) {
+        return res.status(403).json(denial);
+      }
       try {
         const result = await db.query<{ posthog_project_api_key_encrypted: string | null }>(
           `SELECT posthog_project_api_key_encrypted FROM tenants WHERE id = $1`,

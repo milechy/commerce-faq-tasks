@@ -63,7 +63,9 @@ export type GatedFeature =
   | "premium_avatar"
   | "sai_task"
   | "pre_dispatch"
-  | "hide_branding";
+  | "hide_branding"
+  | "external_analytics"
+  | "agent_search";
 
 const FEATURE_MIN_PLAN: Record<GatedFeature, TenantPlan> = {
   // アバター「そのもの」を使えるか。Standard は R2C 既定アバターのみ利用できる。
@@ -93,6 +95,14 @@ const FEATURE_MIN_PLAN: Record<GatedFeature, TenantPlan> = {
   pre_dispatch: "enterprise",
   // ウィジェットの「Powered by R2C」バッジ非表示権。Growth以上の特典として料金表に明記する。
   hide_branding: "growth",
+  // GID [A2A-0d]: LP(public/lp/index.html「既存の分析ツールと繋がりますか？」FAQ)が
+  // 明記する「外部アナリティクス連携はGrowthプラン以上」。GA4(引き込み)・PostHog(書き出し)
+  // 双方の連携設定・同期をこのゲートで揃える(ga4Routes.ts / ga4SyncRoutes.ts / posthogRoutes.ts)。
+  external_analytics: "growth",
+  // GID [A2A-1a]: /agent.search・/agent/search(外部エージェント連携API)の商品化。
+  // 既にテナントAPIキー認証・レート制限・trackUsage計上済みで技術的には全プラン到達可能
+  // だったため、LP未掲載のままプランゲート無しで動いていた抜け穴を塞ぐ。Growth以上限定とする。
+  agent_search: "growth",
 };
 
 // (a) fail-safe 3箇所のうち1つ目: 未知/null/undefinedは最も制限の強い free_ad 扱い。

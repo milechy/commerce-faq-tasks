@@ -9,6 +9,7 @@ import TuningRuleModal, {
   type TuningRule,
   type SourceConversation,
 } from "../../../components/tuning/TuningRuleModal";
+import type { TuningEvidence } from "../../../types/tuning";
 import { priorityToTier } from "../../../lib/tuningPriority";
 
 // ─── Tenant options (static — used for scope badge display) ───────────────────
@@ -49,6 +50,86 @@ async function toggleActive(id: number, is_active: boolean): Promise<void> {
     body: JSON.stringify({ is_active }),
   });
   if (!res.ok) throw new Error("save_error");
+}
+
+// ─── Evidence display ─────────────────────────────────────────────────────────
+// evidence は書き込み側(src/api/hermes-mcp/routes.ts)の実態に合わせて2形式ある:
+//   manual/judge 由来 = 文字列 / hermes 由来 = JSONB { pattern, rationale, session_ids }
+// JSON.stringify で丸投げすると承認者が根拠を読めなくなるため、構造のまま出す。
+// 型を直しても将来のドリフトは起きうるので、未知の形は落とさず何も描画しない。
+function isEvidenceObject(value: unknown): value is TuningEvidence {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function EvidenceDisplay({
+  evidence,
+}: {
+  evidence: string | TuningEvidence | null | undefined;
+}) {
+  const navigate = useNavigate();
+  const { t } = useLang();
+
+  if (!evidence) return null;
+
+  if (typeof evidence === "string") {
+    return (
+      <div style={{ marginTop: 4, color: "var(--muted-foreground)" }}>
+        {evidence}
+      </div>
+    );
+  }
+
+  if (!isEvidenceObject(evidence)) return null;
+
+  const { pattern, rationale, session_ids } = evidence;
+  const sessionIds = Array.isArray(session_ids) ? session_ids : [];
+  if (!pattern && !rationale && sessionIds.length === 0) return null;
+
+  return (
+    <div
+      style={{
+        marginTop: 4,
+        display: "flex",
+        flexDirection: "column",
+        gap: 4,
+        color: "var(--muted-foreground)",
+      }}
+    >
+      {typeof pattern === "string" && pattern && (
+        <div>
+          <strong>{t("tuning.evidence_pattern")}</strong> {pattern}
+        </div>
+      )}
+      {typeof rationale === "string" && rationale && (
+        <div>
+          <strong>{t("tuning.evidence_rationale")}</strong> {rationale}
+        </div>
+      )}
+      {sessionIds.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+          <strong>{t("tuning.evidence_sessions")}</strong>
+          {sessionIds.map((sessionId) => (
+            <button
+              key={String(sessionId)}
+              onClick={() => navigate(`/admin/chat-history/${sessionId}`)}
+              style={{
+                background: "none",
+                border: "none",
+                color: "#60a5fa",
+                fontSize: 12,
+                cursor: "pointer",
+                padding: 0,
+                fontFamily: "monospace",
+                textDecoration: "underline",
+              }}
+            >
+              {String(sessionId)}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ─── Scope badge ──────────────────────────────────────────────────────────────
@@ -626,9 +707,7 @@ export default function TuningRulesPage() {
                   <span style={{ color: "var(--muted-foreground)", marginLeft: 8 }}>
                     {t("tuning.pending_hint")}
                   </span>
-                  {rule.evidence && (
-                    <div style={{ marginTop: 4, color: "var(--muted-foreground)" }}>{rule.evidence}</div>
-                  )}
+                  <EvidenceDisplay evidence={rule.evidence} />
                 </div>
               )}
 

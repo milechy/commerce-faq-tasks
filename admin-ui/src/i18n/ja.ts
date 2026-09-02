@@ -286,6 +286,14 @@ const ja = {
   "tenant_detail.allowed_origins_desc": "入力例: https://shop.example.com　ワイルドカード可: https://*.example.com　空欄の場合は全ドメイン許可（開発用途のみ）",
   "tenant_detail.allowed_origins_placeholder": "https://shop.example.com\nhttps://www.example.com\nhttps://*.example.com",
   "tenant_detail.embed_no_origins_warning": "⚠️ 許可ドメインが設定されていません。セキュリティのため、Widgetを設置するドメインを「設定」タブで登録してください。",
+  // A2A-0j: 保存直前の警告。強度は3段階(空/致命的/軽度混在)。判定は
+  // admin-ui/src/lib/tenantOriginWarning.ts (buildOriginWarningLevel) を参照。
+  "tenant_detail.origin_warning_empty": "⚠️ 許可ドメインが空です。このままだと、どのサイトに設置してもチャットが動いてしまいます。テナント様の実際のサイトのURLを入力することをおすすめします。",
+  "tenant_detail.origin_warning_r2c_own_only": "❌ 許可ドメインに管理画面のURLしか入っていません。このままだと、テナント様の実際のサイトにウィジェットを設置してもチャットが表示されません。サイトに訪れた方のブラウザから送られる情報はテナント様の実際のサイトのアドレスだけなので、管理画面のURLでは一致しません。実際のサイトのURLを追加してください。",
+  "tenant_detail.origin_warning_r2c_own_mixed": "⚠️ 許可ドメインに管理画面のURLが含まれています。ウィジェットは追加済みの実際のサイトのURLで動作しますが、サイトに訪れた方のブラウザから送られる情報と管理画面のURLが一致する場面は無いため、この行は不要です。削除することをおすすめします。",
+  // GID [A2A-0d]: 外部アナリティクス連携(GA4/PostHog)はGrowthプラン以上。
+  // Ga4IntegrationTab.tsx / PostHogIntegrationTab.tsx で {product} に "GA4"/"PostHog" を渡す。
+  "tenant_detail.external_analytics_locked": "🔒 外部アナリティクス連携（{product}）はGrowthプラン以上でご利用いただけます",
 
   // Billing page
   "billing.title": "💰 請求・使用量",
@@ -501,6 +509,9 @@ const ja = {
   "tuning.source_judge": "AIからの提案（会話の評価より）",
   "tuning.source_hermes": "AIからの提案（外部の分析より）",
   "tuning.pending_hint": "まだ回答には使われていません。内容を確認してから承認してください。",
+  "tuning.evidence_pattern": "検出パターン:",
+  "tuning.evidence_rationale": "根拠:",
+  "tuning.evidence_sessions": "対象セッション:",
   "tuning.no_rules_sub": "「新しいルールを追加する」から最初のルールを作成してください",
   "tuning.is_active": "有効",
   "tuning.is_inactive": "無効",
@@ -628,6 +639,26 @@ const ja = {
   "conversion.ab_status_running": "実施中",
   "conversion.ab_status_completed": "完了",
   "conversion.ab_status_cancelled": "中止",
+
+  // Hermes consent (A2A-0h): 共有学習プールへの参加同意トグル
+  "hermes_consent.title": "🧠 共有学習プールへの参加",
+  "hermes_consent.description_main": "この設定は「提供」と「受け取り」がセットのgive-to-getです。ONにすると、貴社の会話ログ（QA AI・アバターとのやり取り。チャットを開いたが発話が無かったセッションを含む）、そこに至るまでのページ閲覧履歴・流入元（URLのパス部分。検索語や会員IDなどのクエリ文字列は除く）、成約時の詳細（金額・成約の種類・成約時点の会話ステージを含む）が、社外の分析基盤での分析対象になります。その見返りとして、他社の会話から学んだ改善が「グローバルルール」（このページに🌐グローバルとして表示されるルール）として貴社のAI応答にも使われるようになります。OFFのままだと、提供は発生しませんが、その代わりグローバルルールも貴社では使われません。",
+  "hermes_consent.description_internal": "R2C社内での学習（FAQ改善・回答の自動学習）は、この設定に関わらず常に行われます。ここで操作するのは社外への提供と、その見返りとしてのグローバルルール受け取りのみです。OFFにすると以降の新規データ提供とグローバルルールの利用が停止しますが、それまでに提供済みのデータへの反映は取り消せません。",
+  "hermes_consent.forced_notice": "⚠️ 現在のプラン(広告プラン)では、無料でのご提供の対価として参加が必須です。停止するには有料プランへの変更が必要です。",
+  "hermes_consent.aria_forced": "広告プランのため参加は必須です(変更不可)",
+  "hermes_consent.aria_revoke": "共有学習プールへの参加を取り消す",
+  "hermes_consent.aria_join": "共有学習プールに参加する",
+  "hermes_consent.btn_saving": "保存中...",
+  "hermes_consent.btn_forced": "🔒 必須(広告プラン)",
+  "hermes_consent.btn_active": "✅ 参加中",
+  "hermes_consent.btn_inactive": "⏸️ 未参加",
+  "hermes_consent.toast_joined": "✅ 共有学習プールに参加しました",
+  "hermes_consent.toast_left": "✅ 参加を取り消しました",
+  "hermes_consent.toast_error_default": "保存に失敗しました。もう一度お試しください。",
+  // Super Admin専用: /admin/tenants/:id からテナントの同意を直接操作する面（H-8とは別問題。
+  // このセクション自体はプレビュー経由ではなく直接操作のための見出し）
+  "hermes_consent.super_admin_section_title": "データ共有の同意（Super Admin操作）",
+  "hermes_consent.super_admin_section_desc": "このテナントに代わって共有学習プールへの参加設定を直接変更します。テナント自身の操作と同じAPIを使うため、通常の同意画面と同じ内容が適用されます。",
 } as const;
 
 export type TranslationKey = keyof typeof ja;

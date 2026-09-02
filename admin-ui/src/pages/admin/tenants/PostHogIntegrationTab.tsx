@@ -1,12 +1,18 @@
 import { useState, useEffect } from "react";
 import { authFetch, API_BASE } from "../../../lib/api";
+import { useLang } from "../../../i18n/LangContext";
+import { planHasFeature } from "../../../lib/planFeatures";
+import type { TenantPlan } from "../../../auth/useAuth";
 
 interface PostHogStatus {
   configured: boolean;
   key_hint: string | null;
 }
 
-export default function PostHogIntegrationTab({ tenantId }: { tenantId: string }) {
+export default function PostHogIntegrationTab({ tenantId, plan }: { tenantId: string; plan: TenantPlan | null }) {
+  const { t } = useLang();
+  // GID [A2A-0d]: 外部アナリティクス連携はGrowthプラン以上(Ga4IntegrationTab.tsx と揃える)。
+  const planAllowsExternalAnalytics = planHasFeature(plan, "external_analytics");
   const [status, setStatus] = useState<PostHogStatus | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [saving, setSaving] = useState(false);
@@ -113,6 +119,15 @@ export default function PostHogIntegrationTab({ tenantId }: { tenantId: string }
           <br />
           LLM Analytics ($ai_generation) も自動収集されます。
         </div>
+        {!planAllowsExternalAnalytics && (
+          <div style={{
+            marginTop: 12, padding: "10px 14px", borderRadius: 6,
+            background: "rgba(234,179,8,0.08)", border: "1px solid rgba(234,179,8,0.3)",
+            color: "#fbbf24", fontSize: 13, lineHeight: 1.6,
+          }}>
+            {t("tenant_detail.external_analytics_locked", { product: "PostHog" })}
+          </div>
+        )}
         {status && (
           <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 8 }}>
             <span style={{
@@ -150,9 +165,10 @@ export default function PostHogIntegrationTab({ tenantId }: { tenantId: string }
           AES-256-GCM で暗号化してDBに保存されます。平文は保存されません。
         </div>
         <button
-          style={{ ...btnStyle("#2563eb"), marginTop: 12, opacity: (!apiKey.trim() || saving) ? 0.5 : 1 }}
+          style={{ ...btnStyle("#2563eb"), marginTop: 12, opacity: (!apiKey.trim() || saving || !planAllowsExternalAnalytics) ? 0.5 : 1 }}
           onClick={handleSave}
-          disabled={!apiKey.trim() || saving}
+          disabled={!apiKey.trim() || saving || !planAllowsExternalAnalytics}
+          title={planAllowsExternalAnalytics ? undefined : t("tenant_detail.external_analytics_locked", { product: "PostHog" })}
         >
           {saving ? "保存中..." : "保存"}
         </button>
@@ -164,7 +180,12 @@ export default function PostHogIntegrationTab({ tenantId }: { tenantId: string }
           <div style={{ color: "#e2e8f0", fontSize: 14, fontWeight: 600, marginBottom: 12 }}>
             接続確認
           </div>
-          <button style={btnStyle("#0891b2")} onClick={handleVerify} disabled={verifying}>
+          <button
+            style={{ ...btnStyle("#0891b2"), opacity: verifying || !planAllowsExternalAnalytics ? 0.5 : 1 }}
+            onClick={handleVerify}
+            disabled={verifying || !planAllowsExternalAnalytics}
+            title={planAllowsExternalAnalytics ? undefined : t("tenant_detail.external_analytics_locked", { product: "PostHog" })}
+          >
             {verifying ? "テスト中..." : "接続テスト実行"}
           </button>
           {verifyResult && (

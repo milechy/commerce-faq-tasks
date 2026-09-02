@@ -5,6 +5,24 @@ import { z } from "zod";
 import { runGa4HealthCheck } from "../../../lib/ga4/ga4HealthCheck";
 import { logger } from "../../../lib/logger";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
+import { queryTenantPlan, planHasFeature } from "../../../lib/billing/planFeatures";
+
+// GID [A2A-0d]: LP(「既存の分析ツールと繋がりますか？」FAQ)が明記する
+// 「外部アナリティクス連携はGrowthプラン以上」。connect(新規設定)と test(GA4 API呼び出し
+// を伴う接続テスト)の手前で弾く。status/disconnect/service-account-info はプラン制限しない
+// (状態確認・解除は常に許可し、隠すのではなくロック表示で案内する方針に揃える)。
+const EXTERNAL_ANALYTICS_DENIAL = {
+  error: "plan_upgrade_required",
+  message: "外部アナリティクス連携（GA4）はGrowthプラン以上でご利用いただけます",
+} as const;
+
+async function denyIfPlanLacksExternalAnalytics(
+  db: Pool,
+  tenantId: string,
+): Promise<typeof EXTERNAL_ANALYTICS_DENIAL | null> {
+  const plan = await queryTenantPlan(db, tenantId);
+  return planHasFeature(plan, "external_analytics") ? null : EXTERNAL_ANALYTICS_DENIAL;
+}
 
 const connectSchema = z.object({
   property_id: z
@@ -51,6 +69,10 @@ export function registerGa4TenantRoutes(app: Express, db: Pool): void {
         return res.status(400).json({ error: "invalid_request", details: parsed.error.issues });
       }
       const { property_id, contact_email } = parsed.data;
+      const denial = await denyIfPlanLacksExternalAnalytics(db, req.params.id);
+      if (denial) {
+        return res.status(403).json(denial);
+      }
       try {
         const updates = [
           "ga4_property_id = $1",
@@ -102,6 +124,10 @@ export function registerGa4TenantRoutes(app: Express, db: Pool): void {
       canAccessTenant(req, res, req.params.id, next),
     async (req: Request, res: Response) => {
       const tenantId = req.params.id;
+      const denial = await denyIfPlanLacksExternalAnalytics(db, tenantId);
+      if (denial) {
+        return res.status(403).json(denial);
+      }
       try {
         const row = await db.query(
           `SELECT ga4_property_id FROM tenants WHERE id = $1`,

@@ -365,11 +365,21 @@ describe('public/widget.js バッジ描画条件 — 抽出ロジックとの契
     });
 
     it('AI回答テキストと構造的に分離したDOMに描画している(bubbleのtextContentに混ぜない)', () => {
-      // buildFeedbackRow は bubble とは別要素として inner に append される
-      const idx = WIDGET_SRC.indexOf('buildFeedbackRow(msg.id)');
+      // buildFeedbackRow は bubble とは別要素として inner に append される。
+      // 呼び出しの引数(msg.id / msg.messageId || msg.id 等)は実装都合で変わりうるため、
+      // ここでは引数を固定せず「inner.appendChild(buildFeedbackRow(」という
+      // 呼び出し構造そのものを検出する(是正4-2で msg.messageId || msg.id に変更されている)。
+      const callMatch = WIDGET_SRC.match(/inner\.appendChild\(buildFeedbackRow\(/);
+      expect(callMatch).not.toBeNull();
+      const idx = callMatch ? (callMatch.index as number) : -1;
       expect(idx).toBeGreaterThan(-1);
+      // 本体: bubble.textContent = msg.content; がこの呼び出しより前に存在すること
+      // (= bubble のテキストは先に確定済みで、buildFeedbackRow の結果はそこに混ぜ込まれていない)
       const before = WIDGET_SRC.slice(Math.max(0, idx - 1400), idx);
       expect(before).toMatch(/bubble\.textContent = msg\.content;/);
+      // 混入禁止: buildFeedbackRow の戻り値が bubble 自体に append/挿入されていないこと
+      expect(WIDGET_SRC).not.toMatch(/bubble\.appendChild\(buildFeedbackRow\(/);
+      expect(WIDGET_SRC).not.toMatch(/bubble\.textContent\s*[+]?=\s*buildFeedbackRow\(/);
     });
 
     it('system: true が付いた assistant メッセージ(通知・声がけ)には出さない', () => {

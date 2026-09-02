@@ -150,6 +150,8 @@ const FEATURE_BULLETS: ReadonlyArray<{ feature: string; lpText: string }> = [
   { feature: "hide_branding", lpText: "「Powered by R2C」バッジの非表示" },
   { feature: "deep_research", lpText: "ディープリサーチ" },
   { feature: "sai_task", lpText: "R2Cエージェントによる設定代行" },
+  // GID [A2A-0d]: Growthカードの箇条書き「外部アナリティクス連携」(GA4/PostHog連携)。
+  { feature: "external_analytics", lpText: "外部アナリティクス連携" },
 ];
 
 // FEATURE_BULLETSに載せない(=LPの箇条書きと突合しない)GatedFeatureの明示allowlist。
@@ -168,6 +170,13 @@ const EXCLUDED_FROM_LP_BULLETS: ReadonlyArray<{ feature: string; reason: string 
     reason:
       "事前ディスパッチ(アバター高速表示)はLPの箇条書きとして独立掲載されておらず、" +
       "FAQ等の文脈依存の説明のみ。誤対応を避けるため対象外。",
+  },
+  {
+    feature: "agent_search",
+    reason:
+      "外部エージェント連携API(/agent.search)は現時点でLPの料金表に掲載されていない。" +
+      "LPへの掲載可否は商品判断のため本PRの対象外とし、掲載する場合は別途対応する。" +
+      "GID A2A-1a: https://app.asana.com/1/817733952351708/project/1213607637045514/task/1218086539659578",
   },
 ];
 

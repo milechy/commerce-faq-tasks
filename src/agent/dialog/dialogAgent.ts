@@ -201,6 +201,11 @@ export async function runDialogTurn(
       topK: options?.topK,
       debug: options?.debug,
       visitorId: options?.visitorId,
+      // Phase69-2 [外1] GID 1218086284362759: default_excluded_ids とのマージは
+      // /dialog/turn ルートハンドラ側(src/index.ts)で完了済みの値を受け取って
+      // そのまま橋渡しする（/api/chat 等の共有呼び出し元に無条件のDB往復を
+      // 増やさないため、runDialogTurn 自身は fetch/merge を行わない）。
+      excludedIds: options?.excluded_ids,
     },
   });
 

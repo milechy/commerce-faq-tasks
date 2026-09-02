@@ -276,6 +276,12 @@ const en: Record<TranslationKey, string> = {
   "tenant_detail.allowed_origins_desc": "Example: https://shop.example.com  Wildcard supported: https://*.example.com  Leave empty to allow all domains (development only)",
   "tenant_detail.allowed_origins_placeholder": "https://shop.example.com\nhttps://www.example.com\nhttps://*.example.com",
   "tenant_detail.embed_no_origins_warning": "⚠️ No allowed domains are configured. For security, please register the domains where the Widget is installed in the Settings tab.",
+  // A2A-0j: pre-save warning. Three severity levels (empty / fatal / mixed).
+  // See admin-ui/src/lib/tenantOriginWarning.ts (buildOriginWarningLevel) for the logic.
+  "tenant_detail.origin_warning_empty": "⚠️ The allowed domains list is empty. As-is, the chat will work when embedded on any site. We recommend entering your website's actual URL.",
+  "tenant_detail.origin_warning_r2c_own_only": "❌ The allowed domains contain only admin console URLs. As-is, the chat widget won't display on your actual website. The information sent by a visitor's browser only matches your website's own address, never the admin console URL. Please add your website's actual URL.",
+  "tenant_detail.origin_warning_r2c_own_mixed": "⚠️ The allowed domains include an admin console URL. The widget already works using the actual website URL(s) you've added, but the admin console URL will never match what a visitor's browser sends, so this entry is unnecessary. We recommend removing it.",
+  "tenant_detail.external_analytics_locked": "🔒 External analytics integration ({product}) is available on the Growth plan or above",
 
   // Billing page
   "billing.title": "💰 Billing & Usage",
@@ -491,6 +497,9 @@ const en: Record<TranslationKey, string> = {
   "tuning.source_judge": "Suggested by AI (from conversation review)",
   "tuning.source_hermes": "Suggested by AI (from external analysis)",
   "tuning.pending_hint": "Not used in replies yet. Please review before approving.",
+  "tuning.evidence_pattern": "Detected pattern:",
+  "tuning.evidence_rationale": "Rationale:",
+  "tuning.evidence_sessions": "Source sessions:",
   "tuning.no_rules_sub": "Click \"Add New Rule\" to create your first rule",
   "tuning.is_active": "Active",
   "tuning.is_inactive": "Inactive",
@@ -618,6 +627,26 @@ const en: Record<TranslationKey, string> = {
   "conversion.ab_status_running": "Running",
   "conversion.ab_status_completed": "Completed",
   "conversion.ab_status_cancelled": "Cancelled",
+
+  // Hermes consent (A2A-0h): shared learning pool participation toggle
+  "hermes_consent.title": "🧠 Join the Shared Learning Pool",
+  "hermes_consent.description_main": "This setting is give-to-get — sharing and receiving come as a pair. When ON, your conversation logs (Q&A AI and avatar exchanges, including sessions where the chat was opened but nothing was said), the page-view history and referral source leading up to them (the URL path only — search terms and member IDs in the query string are excluded), and the details of any conversion (amount, conversion type, and the conversation stage at conversion) become subject to analysis on an external analytics platform. In return, improvements learned from other tenants' conversations are fed back into your AI's responses as \"Global rules\" (shown on this page with a 🌐 Global badge). While OFF, nothing is shared, but your AI also won't receive the Global rules learned from other tenants.",
+  "hermes_consent.description_internal": "R2C's internal learning (FAQ improvement, automatic response tuning) always runs regardless of this setting. This toggle only controls sharing outside R2C and, in return, receiving Global rules. Turning it OFF stops any new data from being shared and stops using Global rules going forward, but data already shared cannot be un-shared.",
+  "hermes_consent.forced_notice": "⚠️ On your current plan (Ad plan), participation is required as the price of the free service. To opt out, switch to a paid plan.",
+  "hermes_consent.aria_forced": "Participation is required on the Ad plan (cannot be changed)",
+  "hermes_consent.aria_revoke": "Leave the shared learning pool",
+  "hermes_consent.aria_join": "Join the shared learning pool",
+  "hermes_consent.btn_saving": "Saving...",
+  "hermes_consent.btn_forced": "🔒 Required (Ad plan)",
+  "hermes_consent.btn_active": "✅ Participating",
+  "hermes_consent.btn_inactive": "⏸️ Not participating",
+  "hermes_consent.toast_joined": "✅ Joined the shared learning pool",
+  "hermes_consent.toast_left": "✅ Left the shared learning pool",
+  "hermes_consent.toast_error_default": "Failed to save. Please try again.",
+  // Super Admin only: direct control surface from /admin/tenants/:id (distinct from H-8;
+  // this heading is only for the direct-control section, not the client-view preview path)
+  "hermes_consent.super_admin_section_title": "Data-sharing consent (Super Admin control)",
+  "hermes_consent.super_admin_section_desc": "Directly changes this tenant's shared learning pool participation on their behalf. It uses the same API as the tenant's own control, so the same terms apply as the regular consent screen.",
 };
 
 export default en;

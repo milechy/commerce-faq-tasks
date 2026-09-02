@@ -45,6 +45,7 @@ export const LEGACY_UI_FEATURES = [
   'avatar_feature_toggle',
   'avatar_profile',
   'avatar_premium',
+  'account_password',
 ] as const;
 
 export const ADMIN_AGENT_TOOLS: GroqTool[] = [
@@ -1665,7 +1666,10 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
         'feature="avatar_premium" は、その画面自体を旧UIで見たいとユーザーが明示した場合にのみ使うこと。' +
         'アバターの新規作成は suggest_avatar_preset（見本から選ぶ）または create_avatar_config' +
         '（ゼロから作る）でチャット内に完結できるため、まずそちらを使うこと。' +
-        'feature="avatar_wizard" は、その画面自体を旧UIで見たいとユーザーが明示した場合にのみ使うこと。',
+        'feature="avatar_wizard" は、その画面自体を旧UIで見たいとユーザーが明示した場合にのみ使うこと。' +
+        '他のfeatureとは逆に、feature="account_password"には対応するチャット内直接実行ツールが' +
+        '存在しない（資格情報の変更をチャットのツールにする計画も無い）。パスワードを変更したいと' +
+        '言われたら、代替を試さずこのツールをそのまま呼び出して旧UIの画面へ案内すること。',
       parameters: {
         type: 'object',
         properties: {

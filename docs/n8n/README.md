@@ -1,5 +1,12 @@
 # n8n 連携ガイド (Phase6)
 
+⚠️ **[A2A-1a] 訂正 (2026-09-02)**: 本ガイドが前提とする `agent.search.completed` /
+`agent.search.error` イベント送信（`WebhookNotifier`）は、`src/agent/http/agentSearchRoute.ts`
+から実配線されていない死コードだったため削除した（`webhookNotifier?: WebhookNotifier`
+は型としてのみ import され、`index.ts` 含めどこからもインスタンス化されていなかった）。
+現状 `N8N_WEBHOOK_URL` を設定しても `/agent.search` からは何も送信されない。
+本ワークフローを再度使う場合は、送信元の再実装が別途必要。
+
 ## 1. 前提
 
 - `commerce-faq-tasks` が起動している

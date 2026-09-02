@@ -591,9 +591,14 @@ export async function computeExpectedBilling(
        + (SELECT COALESCE(SUM(multiplier), 0) FROM conversation_units) )::numeric AS billed_units_weighted,
        (SELECT COUNT(*) FILTER (WHERE plan_multiplier IS NULL) FROM billable_rows)::integer AS unstamped_rows,
        -- 込み枠(planQuota.ts)を差し引くための「生の」次元別数量。倍率は掛けない。
-       -- テキスト = 会話数 + session_id を持たない chat 行(1行=1単位のフォールバック)。
+       -- テキスト = 会話数 + session_id を持たない chat 行(1行=1単位のフォールバック)
+       --          + agent_search 行([A2A-1a] 外部エージェント連携API。session_idを
+       --            持たないため常にここに落ちる。'chat'と別のfeature_usedへ分離した際、
+       --            ここに追加し忘れると Growth/Standard の込み枠超過計算(text_units)から
+       --            丸ごと抜け落ち、Stripeへの請求数量が0になる — 詳細は
+       --            usageTracker.ts の FeatureUsed コメント参照)。
        ( (SELECT COUNT(*) FROM conversation_units)
-       + (SELECT COALESCE(SUM(units), 0) FROM row_units WHERE feature_used = 'chat') )::integer AS text_units,
+       + (SELECT COALESCE(SUM(units), 0) FROM row_units WHERE feature_used IN ('chat', 'agent_search')) )::integer AS text_units,
        -- アバター = 分。avatar(ミリ秒) と anam_session(秒) は同じ「時間」の次元なので合算する。
        (SELECT COALESCE(SUM(units), 0) FROM row_units
          WHERE feature_used IN ('avatar', 'anam_session'))::integer AS avatar_minutes`,

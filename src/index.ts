@@ -11,6 +11,7 @@ import { fetchSchemaHealth } from "./api/admin/analytics/schemaHealth";
 import { SalesLogWriter, setGlobalSalesLogWriter } from "./agent/orchestrator/sales/salesLogWriter";
 import { createSalesLogNotionSink } from "./integrations/notion/salesLogNotionSink";
 import { judgeSweepRunner } from "./agent/judge/judgeSweepRunner";
+import { autoTuningMonitor } from "./api/conversion/autoTuning";
 import express from "express";
 import multer from "multer";
 import path from "node:path";
@@ -28,6 +29,7 @@ import { businessHealthHandler } from "./lib/healthBusiness";
 import { runDialogTurn } from "./agent/dialog/dialogAgent";
 import { initAuthMiddleware } from "./agent/http/authMiddleware";
 import { createAgentSearchHandler } from "./agent/http/agentSearchRoute";
+import { fetchDefaultExcludedIds, mergeExcludedIds } from "./lib/defaultExcludedIds";
 import { createCorsMiddleware } from "./lib/cors";
 import { securityHeadersMiddleware } from "./lib/headers";
 import { createRateLimitMiddleware } from "./lib/rate-limit";
@@ -41,7 +43,6 @@ import {
   seedTenantsFromDB,
 } from "./lib/tenant-context";
 import { registerKnowledgeAdminRoutes } from "./api/admin/knowledge/routes";
-import { registerFeedbackRoutes } from "./api/admin/feedback/feedbackRoutes";
 import { registerAdminFeedbackManagementRoutes } from "./api/admin/feedback/routes";
 import { registerAdminAiAssistRoutes } from "./api/admin/ai-assist/routes";
 import { registerFaqAdminRoutes } from "./admin/http/faqAdminRoutes";
@@ -415,12 +416,30 @@ app.post("/dialog/turn", ...apiStack, async (req, res) => {
         useLlmPlanner: z.boolean().optional(),
         personaTags: z.array(z.string()).optional(),
         debug: z.boolean().optional(),
+        // Phase69-2 [外1] GID 1218086284362759: agentSearchRoute.ts の
+        // AgentSearchSchema.excluded_ids と制約を完全に揃える（最大500件）。
+        excluded_ids: z.array(z.string()).max(500).optional(),
       })
+      // 根本対策: 未知キーは黙って strip せず 400 で明示的に拒否する
+      // (excluded_ids が長らく無言で捨てられていた事故の再発防止)。
+      .strict()
       .optional(),
   });
 
   const parsed = schemaIn.safeParse(req.body ?? {});
   if (!parsed.success) {
+    // options 配下の検証エラー（excluded_ids の制約違反・未知キー混入を含む）は
+    // docs/PHASE69_2_API_SPEC.md §2.3 の仕様どおり invalid_excluded_ids で返す。
+    // それ以外（message 欠落など）は従来どおり invalid_request のまま。
+    const touchesOptions = parsed.error.issues.some(
+      (issue) => issue.path[0] === "options"
+    );
+    if (touchesOptions) {
+      return res.status(400).json({
+        error: "invalid_excluded_ids",
+        details: parsed.error.flatten(),
+      });
+    }
     return res.status(400).json({
       error: "invalid_request",
       details: parsed.error.issues,
@@ -429,7 +448,26 @@ app.post("/dialog/turn", ...apiStack, async (req, res) => {
 
   try {
     const tenantId = (req as AuthedRequest).tenantId;
-    const turn = await runDialogTurn({ ...parsed.data, tenantId });
+
+    // Phase69-2 [外1] GID 1218086284362759: agentSearchRoute.ts:93-95 と同じ形で
+    // ルートハンドラ側だけでテナントの default_excluded_ids をリクエスト側の
+    // excluded_ids とマージする。runDialogTurn（共有関数、/api/chat からも呼ばれる）
+    // の内部に置くと /api/chat 経由の全トラフィックにも無条件のDB往復が発生して
+    // しまうため、HTTP 直エンドポイントである /dialog/turn 側だけで行う。
+    const dbDefaultExcludedIds = await fetchDefaultExcludedIds(tenantId ?? "");
+    const mergedExcludedIds = mergeExcludedIds(
+      parsed.data.options?.excluded_ids,
+      dbDefaultExcludedIds
+    );
+
+    const turn = await runDialogTurn({
+      ...parsed.data,
+      tenantId,
+      options: {
+        ...parsed.data.options,
+        excluded_ids: mergedExcludedIds,
+      },
+    });
 
     // 課金計上（収益監査ギャップ [P0]）: /dialog/turn は runDialogTurn で LLM 合成・
     // planner・OpenAI 埋め込みを実行するのに、これまで trackUsage を通っておらず
@@ -641,7 +679,7 @@ registerTestResponseRoutes(app);
 // 2026-08-25(P10): 2系統に分かれていたAPIをPhase46に一本化(旧
 // registerKnowledgeGapRoutes は削除。admin-ui/copilot-preview も新パスへ移行済み)。
 registerKnowledgeGapPhase46Routes(app);
-// Phase43: admin_feedback チケット管理 API（feedbackRoutes.ts より前に登録）
+// Phase43: admin_feedback チケット管理 API
 registerAdminFeedbackManagementRoutes(app);
 registerAdminAiAssistRoutes(app);
 
@@ -657,8 +695,6 @@ registerEventAnalyticsRoutes(app);
 registerNotificationRoutes(app);
 // Phase61: オプションサービス発注 API
 registerOptionRoutes(app);
-// フィードバックチャット API
-registerFeedbackRoutes(app);
 
 // Avatar: Widget → LiveKit Room トークン発行 API
 registerLiveKitTokenRoutes(app, apiStack);
@@ -936,6 +972,16 @@ async function startServer() {
     const JUDGE_SWEEP_INTERVAL_MS = 15 * 60 * 1000; // 15分
     judgeSweepRunner.start(JUDGE_SWEEP_INTERVAL_MS);
     logger.info("[startup] judgeSweepRunner started (15min interval)");
+  }
+
+  // A2A-0g: Auto-tuningフライホイール(autoTuning.ts の runAutoTuningCheck)が
+  // export されておらず呼び出し元が無かったため、auto_tuning_suggestion 通知
+  // (ab_winner の🏆バッジを含む)が一度も生成されていなかった。conversion/index.tsx
+  // は既にポーリングしているため、通知を作る側をここに配線する(1h周期。
+  // billingHealthMonitorと同じ周期)。
+  if (db) {
+    autoTuningMonitor.start();
+    logger.info("[startup] autoTuningMonitor started (1h interval)");
   }
 }
 

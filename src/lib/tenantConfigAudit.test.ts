@@ -6,6 +6,7 @@ import {
   findUnmatchableOrigins,
   hasEmptyOrigins,
   isR2cOwnDomainOnly,
+  isR2cOwnDomainMixed,
   hasInvalidOriginPattern,
   hasEmptySystemPrompt,
   auditTenantConfig,
@@ -39,6 +40,31 @@ describe("isR2cOwnDomainOnly", () => {
 
   it("空配列 → 検出されない(原因が異なるため hasEmptyOrigins 側の責務)", () => {
     expect(isR2cOwnDomainOnly([])).toBe(false);
+  });
+});
+
+describe("isR2cOwnDomainMixed", () => {
+  it("Accept相当(実ドメインにR2C自身のドメインが混在) → 検出される", () => {
+    expect(
+      isR2cOwnDomainMixed([
+        "https://www.accept-eigyou.com",
+        "https://accept-eigyou.com",
+        "https://admin.r2c.biz",
+        "https://api.r2c.biz",
+      ])
+    ).toBe(true);
+  });
+
+  it("全件がR2C自身のドメインのみ → 検出されない(致命的ケースは isR2cOwnDomainOnly の責務)", () => {
+    expect(isR2cOwnDomainMixed(["https://admin.r2c.biz", "https://api.r2c.biz"])).toBe(false);
+  });
+
+  it("R2C自身のドメインが1件も無い → 検出されない", () => {
+    expect(isR2cOwnDomainMixed(["https://shop.example.com"])).toBe(false);
+  });
+
+  it("空配列 → 検出されない", () => {
+    expect(isR2cOwnDomainMixed([])).toBe(false);
   });
 });
 
@@ -91,10 +117,26 @@ describe("auditTenantConfig / hasAnyIssue", () => {
     expect(issues).toEqual({
       emptyOrigins: false,
       r2cOwnDomainOnly: true,
+      r2cOwnDomainMixed: false,
       invalidOriginPattern: false,
       unmatchableOrigins: [],
       emptySystemPrompt: true,
     });
+    expect(hasAnyIssue(issues)).toBe(true);
+  });
+
+  it("Accept相当(実ドメイン+R2C自身のドメインが混在) → r2cOwnDomainMixed のみ検出される", () => {
+    const issues = auditTenantConfig({
+      allowedOrigins: [
+        "https://www.accept-eigyou.com",
+        "https://accept-eigyou.com",
+        "https://admin.r2c.biz",
+        "https://api.r2c.biz",
+      ],
+      systemPrompt: "接客ルール",
+    });
+    expect(issues.r2cOwnDomainOnly).toBe(false);
+    expect(issues.r2cOwnDomainMixed).toBe(true);
     expect(hasAnyIssue(issues)).toBe(true);
   });
 

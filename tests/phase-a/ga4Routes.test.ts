@@ -43,6 +43,7 @@ describe("POST /v1/admin/tenants/:id/ga4/connect", () => {
 
   it("saves property ID and returns pending status", async () => {
     const { app } = makeApp([
+      { rows: [{ plan: "growth" }], rowCount: 1 }, // denyIfPlanLacksExternalAnalytics: queryTenantPlan
       { rows: [{ id: "tenant-a", ga4_property_id: "111", ga4_status: "pending", ga4_invited_at: new Date() }], rowCount: 1 },
       { rows: [], rowCount: 1 }, // log insert
     ]);
@@ -53,6 +54,20 @@ describe("POST /v1/admin/tenants/:id/ga4/connect", () => {
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(res.body.tenant.ga4_status).toBe("pending");
+  });
+
+  // GID [A2A-0d]: 外部アナリティクス連携(GA4)はGrowth以上限定。Growth未満のテナントは
+  // connect自体をゲートで弾く(ga4Routes.ts denyIfPlanLacksExternalAnalytics)。
+  it("returns 403 for tenant below Growth plan", async () => {
+    const { app } = makeApp([
+      { rows: [{ plan: "standard" }], rowCount: 1 }, // denyIfPlanLacksExternalAnalytics: queryTenantPlan
+    ]);
+    const res = await request(app)
+      .post("/v1/admin/tenants/tenant-a/ga4/connect")
+      .set("Authorization", `Bearer ${makeToken("super_admin", "tenant-a")}`)
+      .send({ property_id: "111" });
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("plan_upgrade_required");
   });
 
   it("rejects invalid property_id (non-numeric)", async () => {
@@ -84,6 +99,7 @@ describe("POST /v1/admin/tenants/:id/ga4/test", () => {
   it("returns ok:true when health check passes", async () => {
     mockHealthCheck.mockResolvedValue({ status: "connected", connectedAt: new Date() });
     const { app } = makeApp([
+      { rows: [{ plan: "growth" }], rowCount: 1 }, // denyIfPlanLacksExternalAnalytics: queryTenantPlan
       { rows: [{ ga4_property_id: "111" }], rowCount: 1 },
     ]);
     const res = await request(app)
@@ -97,6 +113,7 @@ describe("POST /v1/admin/tenants/:id/ga4/test", () => {
   it("returns ok:false when health check fails", async () => {
     mockHealthCheck.mockResolvedValue({ status: "error", errorMessage: "permission_denied" });
     const { app } = makeApp([
+      { rows: [{ plan: "growth" }], rowCount: 1 }, // denyIfPlanLacksExternalAnalytics: queryTenantPlan
       { rows: [{ ga4_property_id: "111" }], rowCount: 1 },
     ]);
     const res = await request(app)
@@ -108,12 +125,27 @@ describe("POST /v1/admin/tenants/:id/ga4/test", () => {
 
   it("returns 400 when no property_id is set", async () => {
     const { app } = makeApp([
+      { rows: [{ plan: "growth" }], rowCount: 1 }, // denyIfPlanLacksExternalAnalytics: queryTenantPlan
       { rows: [{ ga4_property_id: null }], rowCount: 1 },
     ]);
     const res = await request(app)
       .post("/v1/admin/tenants/tenant-a/ga4/test")
       .set("Authorization", `Bearer ${makeToken("super_admin", "tenant-a")}`);
     expect(res.status).toBe(400);
+  });
+
+  // GID [A2A-0d]: 外部アナリティクス連携(GA4)はGrowth以上限定。Growth未満のテナントは
+  // 接続テスト自体をゲートで弾く(ga4Routes.ts denyIfPlanLacksExternalAnalytics)。
+  it("returns 403 for tenant below Growth plan", async () => {
+    const { app } = makeApp([
+      { rows: [{ plan: "standard" }], rowCount: 1 }, // denyIfPlanLacksExternalAnalytics: queryTenantPlan
+    ]);
+    const res = await request(app)
+      .post("/v1/admin/tenants/tenant-a/ga4/test")
+      .set("Authorization", `Bearer ${makeToken("super_admin", "tenant-a")}`);
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("plan_upgrade_required");
+    expect(mockHealthCheck).not.toHaveBeenCalled();
   });
 });
 

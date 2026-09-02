@@ -40,6 +40,7 @@ echo "── シナリオ 1: チャット正常応答（RAG 疎通確認）"
 chat_response=$(curl -s --max-time 30 -X POST "${API_URL}/api/chat" \
   -H "Content-Type: application/json" \
   -H "x-api-key: ${TEST_API_KEY}" \
+  -H "x-r2c-traffic-source: e2e" \
   -d '{"message": "よくある質問を教えてください", "sessionId": "gate-8.5-smoke-test"}' \
   2>/dev/null || echo '{}')
 
@@ -64,6 +65,7 @@ echo "── シナリオ 2: テナント分離確認"
 isolation_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 -X POST "${API_URL}/api/chat" \
   -H "Content-Type: application/json" \
   -H "x-api-key: invalid-key-tenant-isolation-check-$(date +%s)" \
+  -H "x-r2c-traffic-source: e2e" \
   -d '{"message": "test", "sessionId": "isolation-check"}' \
   2>/dev/null || echo "000")
 
@@ -80,6 +82,7 @@ for i in $(seq 1 10); do
   code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 -X POST "${API_URL}/api/chat" \
     -H "Content-Type: application/json" \
     -H "x-api-key: ${TEST_API_KEY}" \
+    -H "x-r2c-traffic-source: e2e" \
     -d '{"message": "rate limit test", "sessionId": "rate-limit-probe-'${i}'"}' \
     2>/dev/null || echo "000")
   if [[ "${code}" == "429" ]]; then

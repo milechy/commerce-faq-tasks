@@ -49,8 +49,12 @@ export const MARGIN_MULTIPLIER = Number(process.env.MARGIN_RATE ?? '5') || 5;
 /**
  * エンドユーザーが直接使う機能（マージン × MARGIN_RATE を適用）。
  * それ以外の管理者・運用向け機能は原価のみ（× 1）。
+ *
+ * agent_search([A2A-1a] 外部エージェント連携API)は、テナントが従量課金で
+ * 契約する対外向けAPIであり運用ツールではないため、chat/avatar/voiceと同格。
+ * 'chat' から分離した経緯は usageTracker.ts の FeatureUsed コメント参照。
  */
-export const END_USER_FEATURES: ReadonlySet<string> = new Set(['chat', 'avatar', 'voice']);
+export const END_USER_FEATURES: ReadonlySet<string> = new Set(['chat', 'avatar', 'voice', 'agent_search']);
 
 /**
  * GID 1216944003337186: usage_logs の行として記録はする（cost_total_centsで原価は可視化する）が、
@@ -174,6 +178,16 @@ export const FLUX_PRO_COST_PER_IMAGE_USD = Number(process.env.FLUX_PRO_COST_PER_
  */
 export const LEMONSLICE_AVATAR_REGISTRATION_COST_USD =
   Number(process.env.LEMONSLICE_AVATAR_REGISTRATION_COST_USD ?? '0') || 0;
+
+/**
+ * A2A-0i: LiveKit room-token発行イベントの計上に使う model のセンチネル値。
+ * livekitTokenRoutes.ts（書き込み）と billingHealthCheck.ts の固定費クォータ監視
+ * （読み取り）の唯一の出どころ。usage_logs.model は本来LLMモデル名の列だが、
+ * このイベントはLLM呼び出しを伴わない（inputTokens/outputTokens=0固定・billable=false）ため
+ * 新しい列を増やさずに既存列を識別子として流用する。normalizeModelKey は未知の
+ * モデル名を0コストとして安全に扱う（LLM_COSTSに存在しないため）。
+ */
+export const LIVEKIT_ROOM_TOKEN_MODEL = 'livekit-room-token';
 
 export interface UsageRecord {
   model: string;

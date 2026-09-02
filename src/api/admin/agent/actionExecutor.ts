@@ -4417,6 +4417,16 @@ export async function executeToolCall(
           path: '/admin/avatar/wizard',
           description: '高品質な画像の生成はこちらの画面です',
         },
+        // 他のキーとは案内の向きが逆: 他は「まず専用ツールで直接実行し、対応できない場合だけ
+        // ここへ」だが、パスワード変更はSupabase資格情報を変更する操作であり、H-10のPrompt
+        // Firewallの前提を崩さないためチャットのツールとして実行可能にしない方針(意図的、恒久)。
+        // そのためこのキーは「唯一の案内先」であり、代替ツールへの誘導文は無い
+        // (toolDefinitionsのget_legacy_ui_link descriptionにも同旨を明記)。
+        account_password: {
+          label: 'アカウント設定',
+          path: '/admin/account',
+          description: 'ログイン中のご自身のパスワード変更はこちらの画面で行えます',
+        },
       };
 
       // GID: LP料金表(Standard〜: 会話分析 / Growth〜: 成果分析(CV計測)、AIアバター、

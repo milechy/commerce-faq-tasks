@@ -29,6 +29,10 @@ const VALID_EVENT_TYPES = [
   // 唯一機能する品質シグナルになる(要件 Rj / 決定 D1)。
   // **新テーブルを作らない**(CLAUDE.md 禁止32)。既存 behavioral_events に載せる。
   'answer_feedback',
+  // 是正0-3(GID 1218086067477270): 自動オープン後にユーザーが再度パネルを開いた
+  // (=開き直した)ケース。chat_open(離脱率計算の分母)と別名にして、
+  // 分母を歪めずに開き直しの回数を計測できるようにする(widget.js参照)。
+  'chat_reopen',
 ] as const;
 
 /** answer_feedback の event_data。どの回答への評価かを識別できる必要がある。 */
@@ -118,7 +122,7 @@ export function registerEventRoutes(
 
       for (const e of events) {
         valuePlaceholders.push(
-          `($${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++})`
+          `($${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++})`
         );
         values.push(
           tenantId,
@@ -129,46 +133,82 @@ export function registerEventRoutes(
           e.page_url ?? null,
           e.referrer ?? null,
           trafficSource,
+          // 是正0-4(GID 1218086067416577): behavioral_events(r2c_sid)とchat_sessions
+          // (conversationId)を結合できるキー。任意項目のため無ければNULL。
+          chat_session_id ?? null,
         );
       }
 
       // ★migration未適用でもイベント受信を止めないこと★
       // ここが42703以外の理由で例外を投げると全イベントが記録されず、コード側だけ先に
       // デプロイされた時間帯にトラフィック計測が丸ごと止まる。stripeSync.tsの
-      // _insertUsageReportRowと同じパターンで、source列が無いときだけ1回だけ
-      // 旧カラム構成にフォールバックする。
+      // _insertUsageReportRowと同じパターンで、未適用の列だけフォールバックする。
+      // 列リストは source が chat_session_id より左にあるため、両方未適用でも
+      // Postgresは先に source を42703として報告する(=下のelse分岐に落ちる)。
+      // そのため「chat_session_idだけが無い」ケースをエラーメッセージで見分けられる。
       try {
         await db.query(
           `INSERT INTO behavioral_events
-             (tenant_id, session_id, visitor_id, event_type, event_data, page_url, referrer, source)
+             (tenant_id, session_id, visitor_id, event_type, event_data, page_url, referrer, source, chat_session_id)
            VALUES ${valuePlaceholders.join(', ')}`,
           values,
         );
       } catch (err) {
         if ((err as { code?: string })?.code !== '42703') throw err;
-        logger.error(
-          { tenantId },
-          '[events] behavioral_events に source 列が無い — migration_behavioral_events_source.sql が未適用。' +
-          '旧カラムで継続するが、この期間のイベントはtraffic source(e2e/demo等)を除外できない。至急 migration を適用すること',
-        );
-        const legacyPlaceholders: string[] = [];
-        const legacyValues: unknown[] = [];
-        let legacyIdx = 1;
-        for (const e of events) {
-          legacyPlaceholders.push(
-            `($${legacyIdx++}, $${legacyIdx++}, $${legacyIdx++}, $${legacyIdx++}, $${legacyIdx++}, $${legacyIdx++}, $${legacyIdx++})`
+
+        if (/chat_session_id/.test((err as Error).message ?? '')) {
+          // 是正0-4: chat_session_id 列のみ未適用。source 列は使えるので保持したまま再試行する。
+          logger.error(
+            { tenantId },
+            '[events] behavioral_events に chat_session_id 列が無い — ' +
+            'migration_behavioral_events_chat_session_id.sql が未適用。source列のみで継続するが、' +
+            'この期間のイベントはchat_sessionsと結合できない。至急 migration を適用すること',
           );
-          legacyValues.push(
-            tenantId, session_id, visitor_id, e.event_type,
-            JSON.stringify(e.event_data ?? {}), e.page_url ?? null, e.referrer ?? null,
+          const sourceOnlyPlaceholders: string[] = [];
+          const sourceOnlyValues: unknown[] = [];
+          let sourceOnlyIdx = 1;
+          for (const e of events) {
+            sourceOnlyPlaceholders.push(
+              `($${sourceOnlyIdx++}, $${sourceOnlyIdx++}, $${sourceOnlyIdx++}, $${sourceOnlyIdx++}, $${sourceOnlyIdx++}, $${sourceOnlyIdx++}, $${sourceOnlyIdx++}, $${sourceOnlyIdx++})`
+            );
+            sourceOnlyValues.push(
+              tenantId, session_id, visitor_id, e.event_type,
+              JSON.stringify(e.event_data ?? {}), e.page_url ?? null, e.referrer ?? null,
+              trafficSource,
+            );
+          }
+          await db.query(
+            `INSERT INTO behavioral_events
+               (tenant_id, session_id, visitor_id, event_type, event_data, page_url, referrer, source)
+             VALUES ${sourceOnlyPlaceholders.join(', ')}`,
+            sourceOnlyValues,
+          );
+        } else {
+          // source(と、場合によってはchat_session_idも)が未適用。旧カラム構成にフォールバックする。
+          logger.error(
+            { tenantId },
+            '[events] behavioral_events に source 列が無い — migration_behavioral_events_source.sql が未適用。' +
+            '旧カラムで継続するが、この期間のイベントはtraffic source(e2e/demo等)を除外できない。至急 migration を適用すること',
+          );
+          const legacyPlaceholders: string[] = [];
+          const legacyValues: unknown[] = [];
+          let legacyIdx = 1;
+          for (const e of events) {
+            legacyPlaceholders.push(
+              `($${legacyIdx++}, $${legacyIdx++}, $${legacyIdx++}, $${legacyIdx++}, $${legacyIdx++}, $${legacyIdx++}, $${legacyIdx++})`
+            );
+            legacyValues.push(
+              tenantId, session_id, visitor_id, e.event_type,
+              JSON.stringify(e.event_data ?? {}), e.page_url ?? null, e.referrer ?? null,
+            );
+          }
+          await db.query(
+            `INSERT INTO behavioral_events
+               (tenant_id, session_id, visitor_id, event_type, event_data, page_url, referrer)
+             VALUES ${legacyPlaceholders.join(', ')}`,
+            legacyValues,
           );
         }
-        await db.query(
-          `INSERT INTO behavioral_events
-             (tenant_id, session_id, visitor_id, event_type, event_data, page_url, referrer)
-           VALUES ${legacyPlaceholders.join(', ')}`,
-          legacyValues,
-        );
       }
 
       // Phase65: chat_conversion イベントを conversion_attributions にブリッジ (best-effort)
@@ -333,12 +373,15 @@ export async function bridgeConversionEvents(
 // ナレッジ配線是正P14: answer_feedback(👎) → knowledge_gaps ブリッジ
 // behavioral_events INSERT 後に best-effort で呼び出す。失敗しても202維持。
 //
-// widget の message_ref はクライアント側で生成される乱数ID
-// (generateMsgId、'msg-<timestamp>-<random>')で、サーバ側の chat_messages と
-// 直接ひも付く仕組みが無い。そのため「どの回答への評価か」を厳密に特定できず、
-// 近似としてそのセッションで直前にあった実ユーザーの発話を対象質問とする
-// (会話を遡って過去の回答に👎を付けるケースでは不正確になりうるが、
-// 唯一機能する消費者品質信号を起票に繋げることを優先する)。
+// 是正4-2(GID 1218086286324510): message_ref は本来 /api/chat が返す
+// chat_messages.id(実DBの主キー、route.ts参照)だが、public/widget.js は
+// ブラウザにキャッシュされるため、旧版のクライアントは当分の間
+// generateMsgId()製の乱数ID('msg-<timestamp>-<random>')を送ってくる。
+// message_ref が実IDとして解決できた場合はその回答に対応するuser発話を厳密に
+// 特定し、解決できない場合(旧クライアント/該当メッセージ無し)のみ、
+// そのセッションで直前にあった実ユーザーの発話を対象質問とする近似に
+// フォールバックする(会話を遡って過去の回答に👎を付けるケースでは
+// 不正確になりうるが、唯一機能する消費者品質信号を起票に繋げることを優先する)。
 // ---------------------------------------------------------------------------
 
 export async function bridgeAnswerFeedbackToGaps(
@@ -358,30 +401,86 @@ export async function bridgeAnswerFeedbackToGaps(
   });
   if (!sessionDbId) return;
 
-  try {
-    const lastUserMessage = await db.query<{ content: string }>(
-      `SELECT content FROM chat_messages
-       WHERE session_id = $1 AND role = 'user'
-       ORDER BY created_at DESC LIMIT 1`,
-      [sessionDbId],
-    );
-    const userMessage = lastUserMessage.rows[0]?.content?.trim();
-    if (!userMessage) return;
-
-    // 1回のイベントバッチに複数の👎が含まれても、同一セッション・同一質問の
-    // 起票は detectGap 内の7日以内ILIKE一致で1件に集約される(重複起票にならない)。
-    for (const _feedback of negativeFeedbacks) {
-      await detectGap({
-        tenantId,
-        sessionId: sessionDbId,
-        userMessage,
-        ragResultCount: 0, // user_negative は最優先で判定されるためこの値は使われない
-        userNegativeFeedback: true,
-      }).catch((err) => {
-        logger.warn({ msg: '[events→gap bridge] detectGap failed', error: (err as Error).message, tenantId });
-      });
+  // セッション内最新のuser発話(近似フォールバック)は、実IDで解決できない
+  // 👎 が複数あっても同じ値を使い回す(1バッチ内で何度もクエリしない)。
+  // 未取得(undefined) / 取得試行済みだが無し(null) / 取得済み(string) の3値で表す。
+  let cachedApprox: string | null | undefined;
+  const getApproxUserMessage = async (): Promise<string | undefined> => {
+    if (cachedApprox !== undefined) return cachedApprox ?? undefined;
+    try {
+      const approx = await db.query<{ content: string }>(
+        `SELECT content FROM chat_messages
+         WHERE session_id = $1 AND role = 'user'
+         ORDER BY created_at DESC LIMIT 1`,
+        [sessionDbId],
+      );
+      cachedApprox = approx.rows[0]?.content?.trim() || null;
+    } catch (err) {
+      logger.warn({ msg: '[events→gap bridge] message lookup failed', error: (err as Error).message, tenantId });
+      cachedApprox = null;
     }
-  } catch (err) {
-    logger.warn({ msg: '[events→gap bridge] message lookup failed', error: (err as Error).message, tenantId });
+    return cachedApprox ?? undefined;
+  };
+
+  // 1回のイベントバッチに複数の👎が含まれても、同一セッション・同一質問の
+  // 起票は detectGap 内の7日以内ILIKE一致で1件に集約される(重複起票にならない)。
+  for (const feedback of negativeFeedbacks) {
+    const messageRef = (feedback.event_data as Record<string, unknown>)?.['message_ref'];
+    const userMessage = await resolveFeedbackTargetMessage(
+      db,
+      tenantId,
+      sessionDbId,
+      typeof messageRef === 'string' ? messageRef : undefined,
+      getApproxUserMessage,
+    );
+    if (!userMessage) continue;
+
+    await detectGap({
+      tenantId,
+      sessionId: sessionDbId,
+      userMessage,
+      ragResultCount: 0, // user_negative は最優先で判定されるためこの値は使われない
+      userNegativeFeedback: true,
+    }).catch((err) => {
+      logger.warn({ msg: '[events→gap bridge] detectGap failed', error: (err as Error).message, tenantId });
+    });
   }
+}
+
+/**
+ * 是正4-2(GID 1218086286324510): 👎 の message_ref から対象の質問(user発話)を解決する。
+ * - messageRef が chat_messages.id(bigint、数字文字列)として当該セッションの
+ *   assistant メッセージに一致すれば、その回答の直前にある user 発話を厳密に返す。
+ * - 実IDで解決できない場合(旧クライアントが乱数IDを送ってきた/該当行が無い/
+ *   問い合わせ自体が失敗した)は、従来通りセッション内で直前にあった user 発話を
+ *   近似として返す(getApproxUserMessage、呼び出し元でキャッシュ共有)。
+ */
+async function resolveFeedbackTargetMessage(
+  db: Pool,
+  tenantId: string,
+  sessionDbId: string,
+  messageRef: string | undefined,
+  getApproxUserMessage: () => Promise<string | undefined>,
+): Promise<string | undefined> {
+  if (messageRef && /^\d+$/.test(messageRef)) {
+    try {
+      const exact = await db.query<{ content: string }>(
+        `SELECT um.content FROM chat_messages am
+         JOIN chat_messages um
+           ON um.session_id = am.session_id
+          AND um.role = 'user'
+          AND um.created_at <= am.created_at
+         WHERE am.id = $1 AND am.session_id = $2 AND am.role = 'assistant'
+         ORDER BY um.created_at DESC LIMIT 1`,
+        [messageRef, sessionDbId],
+      );
+      const content = exact.rows[0]?.content?.trim();
+      if (content) return content;
+    } catch (err) {
+      logger.warn({ msg: '[events→gap bridge] message lookup failed', error: (err as Error).message, tenantId });
+      // 実ID解決の失敗は近似へフォールバックする(下に続く)。
+    }
+  }
+
+  return getApproxUserMessage();
 }

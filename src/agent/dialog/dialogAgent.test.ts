@@ -90,6 +90,11 @@ beforeEach(() => {
   // 商品メタクエリを検証する場合は、このデフォルトの後に自分の
   // mockResolvedValueOnce を積む(呼び出し順: フラグ読み取り→商品メタ)。
   mockPool.query.mockResolvedValue({ rows: [{ enabled: null }] });
+  mockSalesFlow.mockResolvedValue({
+    nextStage: undefined,
+    prompt: undefined,
+    meta: {} as any,
+  });
 });
 
 describe("runDialogTurn — Phase73 productCard", () => {
@@ -434,5 +439,67 @@ describe("runDialogTurn — tenantId の contextStore への伝播", () => {
 
     expect(mockGetHistory).toHaveBeenNthCalledWith(1, "tenant-y", "shared-session-id");
     expect(mockGetHistory).toHaveBeenNthCalledWith(2, "tenant-z", "shared-session-id");
+  });
+});
+
+// Phase69-2 [外1] GID 1218086284362759: /dialog/turn の options.excluded_ids が
+// 黙って捨てられていた事故の再発防止。
+//
+// tenants.default_excluded_ids の fetch/merge はルートハンドラ側(src/index.ts)に
+// 置くことにした（runDialogTurn は /api/chat からも呼ばれる共有関数のため、
+// ここに fetch を置くと /api/chat の全トラフィックに無条件のDB往復が
+// 増えてしまう — レビュー指摘により dialogAgent.ts から撤去済み）。
+// そのためここで検証するのは「runDialogTurn は受け取った options.excluded_ids
+// をそのまま options.excludedIds として orchestrator に橋渡しするだけ」という
+// 純粋な配管であることと、その過程で DB 呼び出しを一切増やさないこと。
+// マージ計算自体（重複除去・優先順位）は src/lib/defaultExcludedIds.test.ts、
+// ルートハンドラでの fetch+merge 配線は src/index.dialogTurnExcludedIds.test.ts /
+// src/index.wiringInvariants.test.ts が検証する。
+describe("runDialogTurn — Phase69-2 [外1] excluded_ids 配線（純粋な橋渡し）", () => {
+  it("options.excluded_ids を runDialogOrchestrator の options.excludedIds としてそのまま渡す", async () => {
+    await runDialogTurn({
+      sessionId: "test-session-excluded-1",
+      tenantId: "tenant-a",
+      message: "返品ポリシーを教えて",
+      options: { excluded_ids: ["id-1", "id-2"] },
+    });
+
+    expect(mockOrchestrator).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.objectContaining({
+          excludedIds: ["id-1", "id-2"],
+        }),
+      })
+    );
+  });
+
+  it("options.excluded_ids が未指定の場合、excludedIds は undefined のまま渡る（既定除外の付与はルート側の責務）", async () => {
+    await runDialogTurn({
+      sessionId: "test-session-excluded-2",
+      tenantId: "tenant-a",
+      message: "こんにちは",
+    });
+
+    const callArgs = mockOrchestrator.mock.calls[0]![0];
+    expect(callArgs.options?.excludedIds).toBeUndefined();
+  });
+
+  // レビュー指摘の再発防止(本命): runDialogTurn 自身は default_excluded_ids の
+  // ための DB クエリを発行しない。/api/chat 経由の全トラフィックへ無条件の
+  // SELECT を増やさないことを直接固定する。
+  it("excluded_ids の処理のために pool.query を追加で呼ばない（/api/chat への副作用防止）", async () => {
+    mockPool.query.mockClear();
+
+    await runDialogTurn({
+      sessionId: "test-session-excluded-3",
+      tenantId: "tenant-a",
+      message: "こんにちは",
+      options: { excluded_ids: ["id-1"] },
+    });
+
+    // このテストで発生する pool.query は PR-11 の features フラグ読み取り
+    // (isSalesStageContinuityEnabled)の1回のみ。default_excluded_ids 用の
+    // クエリが増えていないことを件数で固定する。
+    expect(mockPool.query).toHaveBeenCalledTimes(1);
   });
 });

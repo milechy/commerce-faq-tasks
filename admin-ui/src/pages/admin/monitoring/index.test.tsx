@@ -121,6 +121,160 @@ describe("MonitoringPage — 計測ヘルス", () => {
   });
 });
 
+// GID 1218086068468866(4-1): 👍👎の集計は既にあったが誰も表示していなかった。
+// 画面に描画されること・母数が少ないときは実数のみ出すこと・undefinedでも落ちないことを検証する。
+describe("MonitoringPage — 回答への👍👎", () => {
+  const BASE_HEALTH = {
+    sourceBreakdown: [{ source: "user", count: 13 }],
+    emptySessionCount: 0,
+    cvSessionLinkRate: { numerator: 0, denominator: 0, rate: null },
+    outcomeRecordRate: { numerator: 0, denominator: 0, rate: null, autoRecorded: 0 },
+    validUserSessionCount: 13,
+  };
+
+  it("answerFeedbackが無い(古いAPI応答)ときでも落ちずプレースホルダを表示する", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
+      if (url.includes("/measurement-health")) return mockOk(BASE_HEALTH);
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("回答への👍👎")).toBeTruthy();
+    });
+    expect(screen.getAllByText("取得中...").length).toBeGreaterThan(0);
+  });
+
+  it("母数(up+down)が30件未満のとき、割合ではなく実数を表示する", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
+      if (url.includes("/measurement-health")) {
+        return mockOk({ ...BASE_HEALTH, answerFeedback: { upCount: 7, downCount: 3 } });
+      }
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("回答への👍👎")).toBeTruthy();
+    });
+    expect(screen.getByText(/👍 7 \/ 👎 3/)).toBeTruthy();
+    expect(screen.getByText(/件数が少ないため割合は出しません/)).toBeTruthy();
+  });
+
+  it("母数が30件以上のとき、👍の割合と実数を表示する", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
+      if (url.includes("/measurement-health")) {
+        return mockOk({ ...BASE_HEALTH, answerFeedback: { upCount: 24, downCount: 6 } });
+      }
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("👍 80%")).toBeTruthy();
+    });
+    expect(screen.getByText(/👍 24 \/ 👎 6/)).toBeTruthy();
+  });
+});
+
+// GID 1218086189953625(0-5): 離脱率の分母(chat_open)に混ざっていたsource未フィルタを
+// 修正した。NULL(不明)は除外するのではなく件数を出す(黙って除外しない)。
+describe("MonitoringPage — 開いたのに話さなかった割合(不明の除外表示)", () => {
+  const BASE_HEALTH = {
+    sourceBreakdown: [{ source: "user", count: 13 }],
+    emptySessionCount: 0,
+    cvSessionLinkRate: { numerator: 0, denominator: 0, rate: null },
+    outcomeRecordRate: { numerator: 0, denominator: 0, rate: null, autoRecorded: 0 },
+    validUserSessionCount: 13,
+  };
+
+  it("母数が十分なとき、不明N件を除外している旨を表示する", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
+      if (url.includes("/measurement-health")) {
+        return mockOk({
+          ...BASE_HEALTH,
+          chatOpenDropoff: {
+            trackingSince: "2026-08-01T00:00:00Z",
+            visitorsOpened: 100,
+            visitorsConversed: 25,
+            dropoffRate: 75,
+            sessionCoverage: { numerator: 100, denominator: 100, rate: 100 },
+            unknownSourceVisitorCount: 42,
+          },
+        });
+      }
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("75%")).toBeTruthy();
+    });
+    expect(screen.getByText(/不明 42 件を除外しています/)).toBeTruthy();
+  });
+
+  it("母数不足のときも不明N件を除外している旨を表示する", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
+      if (url.includes("/measurement-health")) {
+        return mockOk({
+          ...BASE_HEALTH,
+          chatOpenDropoff: {
+            trackingSince: "2026-08-24T01:13:30Z",
+            visitorsOpened: 10,
+            visitorsConversed: 0,
+            dropoffRate: null,
+            sessionCoverage: { numerator: 25, denominator: 39, rate: 64.1 },
+            unknownSourceVisitorCount: 5,
+          },
+        });
+      }
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText(/判定に足りません/)).toBeTruthy();
+    });
+    expect(screen.getByText(/不明 5 件を除外しています/)).toBeTruthy();
+  });
+
+  it("unknownSourceVisitorCountが無い(古いAPI応答)ときでも落ちず0件と表示する", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
+      if (url.includes("/measurement-health")) {
+        return mockOk({
+          ...BASE_HEALTH,
+          chatOpenDropoff: {
+            trackingSince: "2026-08-01T00:00:00Z",
+            visitorsOpened: 100,
+            visitorsConversed: 25,
+            dropoffRate: 75,
+            sessionCoverage: { numerator: 100, denominator: 100, rate: 100 },
+          },
+        });
+      }
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("75%")).toBeTruthy();
+    });
+    expect(screen.getByText(/不明 0 件を除外しています/)).toBeTruthy();
+  });
+});
+
 // H-7(GID 1217972930945091): Hermes提案の採択率カード。super_adminのときだけ
 // hermesAcceptanceRateがAPIレスポンスに含まれる(サーバ側の合成条件は
 // schemaHealthRoute.test.tsで検証済み)。ここではフィールドの有無でカードの
@@ -335,5 +489,107 @@ describe("MonitoringPage — 学習機能の点火状態(自動昇格のPrompt F
     });
     expect(screen.queryByText("学習機能の点火状態")).toBeNull();
     expect(screen.queryByText(/見送られ/)).toBeNull();
+  });
+});
+
+// A2A-0i: 固定費(LemonSlice/LiveKit)クォータ消費率カード。判定ロジック自体
+// (80%/50%閾値・3ヶ月連続判定)はbillingHealthCheck.test.tsで検証済みなので、
+// ここではAPIレスポンスのフィールドに応じた表示の出し分けだけを検証する。
+describe("MonitoringPage — 固定費クォータ消費率(LemonSlice/LiveKit)", () => {
+  const BASE_HEALTH = {
+    sourceBreakdown: [{ source: "user", count: 13 }],
+    emptySessionCount: 0,
+    cvSessionLinkRate: { numerator: 0, denominator: 0, rate: null },
+    outcomeRecordRate: { numerator: 0, denominator: 0, rate: null, autoRecorded: 0 },
+    validUserSessionCount: 13,
+  };
+
+  it("上げ方向シグナル(80%以上)のとき引き上げの示唆を表示する", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
+      if (url.includes("/measurement-health")) {
+        return mockOk({
+          ...BASE_HEALTH,
+          fixedCostQuota: {
+            lemonslice: { used: 13500, quota: 15000, ratio: 0.9, upSignal: true, downSignal: false, historyMonths: 3 },
+            livekit: { used: 0, quota: null, ratio: null, upSignal: false, downSignal: false, historyMonths: 0 },
+            asOf: "2026-08-30T00:00:00.000Z",
+          },
+        });
+      }
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("固定費クォータ消費率(LemonSlice/LiveKit)")).toBeTruthy();
+    });
+    expect(screen.getByText("込み枠の80%以上を消費しています。引き上げを検討してください。")).toBeTruthy();
+    // LiveKitは込み枠未設定なので判定保留の注記を出す
+    expect(screen.getByText(/込み枠\(LIVEKIT_MONTHLY_ROOM_QUOTA\)が未設定/)).toBeTruthy();
+  });
+
+  it("下げ方向シグナル(3ヶ月連続50%未満)のとき引き下げの示唆を表示する", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
+      if (url.includes("/measurement-health")) {
+        return mockOk({
+          ...BASE_HEALTH,
+          fixedCostQuota: {
+            lemonslice: { used: 1000, quota: 15000, ratio: 0.067, upSignal: false, downSignal: true, historyMonths: 3 },
+            livekit: { used: 10, quota: 100, ratio: 0.1, upSignal: false, downSignal: true, historyMonths: 3 },
+            asOf: "2026-08-30T00:00:00.000Z",
+          },
+        });
+      }
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getAllByText("直近3ヶ月連続で込み枠の50%未満です。引き下げを検討できます。").length).toBe(2);
+    });
+  });
+
+  it("平常時(80%未満・下げシグナルなし)は示唆メッセージを出さない", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
+      if (url.includes("/measurement-health")) {
+        return mockOk({
+          ...BASE_HEALTH,
+          fixedCostQuota: {
+            lemonslice: { used: 6000, quota: 15000, ratio: 0.4, upSignal: false, downSignal: false, historyMonths: 1 },
+            livekit: { used: 0, quota: null, ratio: null, upSignal: false, downSignal: false, historyMonths: 0 },
+            asOf: "2026-08-30T00:00:00.000Z",
+          },
+        });
+      }
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("固定費クォータ消費率(LemonSlice/LiveKit)")).toBeTruthy();
+    });
+    expect(screen.queryByText(/引き上げを検討/)).toBeNull();
+    expect(screen.queryByText(/引き下げを検討/)).toBeNull();
+  });
+
+  it("client_admin(APIがfixedCostQuotaを返さない)のときカード自体を出さない", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
+      if (url.includes("/measurement-health")) return mockOk(BASE_HEALTH);
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("会話完了率")).toBeTruthy();
+    });
+    expect(screen.queryByText("固定費クォータ消費率(LemonSlice/LiveKit)")).toBeNull();
   });
 });

@@ -54,6 +54,14 @@ export interface ChatMessage {
    * assistant ロールのメッセージにのみ載せる(userメッセージには不要)。
    */
   data_shared_externally?: boolean;
+  /**
+   * 是正4-2(GID 1218086286324510): この回答の chat_messages.id(実DBの主キー)。
+   * answer_feedback の message_ref にこの値をそのまま使うことで、👎 が対応する
+   * 回答に厳密に紐づく(従来は requestId ベースの近似で、無関係の質問がギャップに
+   * 起票されることがあった)。保存に失敗した場合は省略される(追加フィールドのみ、
+   * 既存クライアントへの破壊的変更なし)。assistant ロールのみに載る。
+   */
+  message_id?: string;
 }
 
 export interface ChatAction {
