@@ -30,8 +30,16 @@ jest.mock("livekit-server-sdk", () => ({
   JobRestartPolicy: { JRP_ON_FAILURE: 0, JRP_NEVER: 1 },
 }));
 
+// A2A-0i: LiveKit固定費クォータ計測用のtrackUsage呼び出し（shouldDispatch=trueの
+// 経路にのみ追加）。既存テストのDB呼び出し検証に影響しないようモック化する。
+jest.mock("../../lib/billing/usageTracker", () => ({
+  trackUsage: jest.fn(),
+}));
+
 import { pool } from "../../lib/db";
+import { trackUsage } from "../../lib/billing/usageTracker";
 const mockQuery = pool!.query as jest.Mock;
+const mockTrackUsage = trackUsage as jest.Mock;
 
 // ── ヘルパー ──────────────────────────────────────────────────────────────────
 
@@ -70,6 +78,7 @@ describe("POST /api/avatar/room-token", () => {
     mockQuery.mockReset();
     mockCreateRoom.mockReset().mockResolvedValue({});
     mockCreateDispatch.mockReset().mockResolvedValue({ id: "dispatch-1", room: "room-1" });
+    mockTrackUsage.mockClear();
   });
 
   afterEach(() => {
@@ -356,6 +365,18 @@ describe("POST /api/avatar/room-token", () => {
       // restartPolicy: JRP_ON_FAILURE(=0) が明示指定されていること
       const dispatchCallArgs = mockCreateDispatch.mock.calls[0];
       expect(dispatchCallArgs[2]).toEqual({ restartPolicy: 0 });
+
+      // A2A-0i: 実際にdispatchされた(=LiveKit側の課金対象イベントが発生した)場合のみ
+      // 固定費クォータ計測用のtrackUsageが呼ばれる
+      expect(mockTrackUsage).toHaveBeenCalledTimes(1);
+      expect(mockTrackUsage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tenantId: "tenant-a",
+          featureUsed: "avatar",
+          billable: false,
+          model: "livekit-room-token",
+        }),
+      );
     });
 
     it("pre_dispatch=false かつ connect=false → dispatch 呼ばれず preDispatchEnabled=false（プラン確認自体スキップ）", async () => {
@@ -379,6 +400,8 @@ describe("POST /api/avatar/room-token", () => {
       expect(mockCreateDispatch).toHaveBeenCalledTimes(0);
       // フラグが既にfalseならプラン確認クエリ(3回目のquery)自体が発生しない
       expect(mockQuery).toHaveBeenCalledTimes(2);
+      // A2A-0i: dispatchされていない(=LiveKit側の課金対象イベントが発生していない)ので計上しない
+      expect(mockTrackUsage).not.toHaveBeenCalled();
     });
 
     it("features に pre_dispatch キー無し → dispatch スキップ、preDispatchEnabled=false（コスト発生なし）", async () => {
@@ -634,6 +657,8 @@ describe("POST /api/avatar/room-token", () => {
 
       expect(res.body.enabled).toBe(true);
       expect(res.body.reason).toBeUndefined();
+      // pre_dispatch=false かつ connect未指定(false) → dispatchされないので計上もされない
+      expect(mockTrackUsage).not.toHaveBeenCalled();
     });
   });
 });

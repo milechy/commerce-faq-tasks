@@ -2,7 +2,7 @@ jest.mock('../alerts/slackNotifier', () => ({
   sendSlackAlert: jest.fn().mockResolvedValue(undefined),
 }));
 
-import { checkBillingHealth, billingHealthMonitor } from './billingHealthCheck';
+import { checkBillingHealth, billingHealthMonitor, fetchFixedCostQuotaStatus } from './billingHealthCheck';
 import { sendSlackAlert } from '../alerts/slackNotifier';
 import { REQUIRED_COLUMNS } from '../../api/admin/analytics/schemaHealth';
 
@@ -24,6 +24,14 @@ describe('checkBillingHealth', () => {
     const merged = {
       'information_schema.columns': SCHEMA_ALL_PRESENT_ROWS,
       "billing_status = 'reported'": () => ({ rows: [{ cnt: 0, oldest: null }] }),
+      // A2A-0i チェック5: デフォルトは消費0(健全・沈黙)。
+      // LemonSliceはデフォルトenvが効くため current/history とも常に呼ばれる。
+      // LiveKitはenv未設定ならquota=nullでhistoryクエリ自体発行されないが、
+      // currentは常に呼ばれるため両方に既定ハンドラを用意しておく。
+      'fixed_cost_quota:lemonslice:current': () => ({ rows: [{ used: 0 }] }),
+      'fixed_cost_quota:lemonslice:history': () => ({ rows: [] }),
+      'fixed_cost_quota:livekit:current': () => ({ rows: [{ used: 0 }] }),
+      'fixed_cost_quota:livekit:history': () => ({ rows: [] }),
       ...overrides,
     };
     return {
@@ -269,6 +277,158 @@ describe('checkBillingHealth', () => {
         'billing_stuck_pending_rows',
       ]);
     });
+  });
+
+  // A2A-0i: 固定費(LemonSlice/LiveKit)クォータ監視。downSignal(下げられるか)は
+  // ここでは違反にしない(表示カード専用)ため、upSignal(上げるべきか)のみ検証する。
+  describe('チェック5: 固定費クォータの消費率', () => {
+    afterEach(() => {
+      delete process.env.LEMONSLICE_MONTHLY_CREDIT_QUOTA;
+      delete process.env.LIVEKIT_MONTHLY_ROOM_QUOTA;
+    });
+
+    it('LemonSliceの消費がデフォルト込み枠(15000)の80%を超えるとWARNING', async () => {
+      const db = makeDb({
+        "billing_status = 'pending'": CLEAN_STUCK,
+        'plan_multiplier IS NULL': CLEAN_UNSTAMPED,
+        'fixed_cost_quota:lemonslice:current': () => ({ rows: [{ used: 13500 }] }), // 90%
+      });
+      const violations = await checkBillingHealth(db as any, mockLogger);
+      expect(violations).toHaveLength(1);
+      expect(violations[0]).toMatchObject({ id: 'fixed_cost_quota_lemonslice_high', level: 'WARNING' });
+      expect(violations[0].message).toContain('90.0%');
+      // ★計測の信頼性★ agent.pyのfire-and-forget送信であることの注記を必ず含む
+      expect(violations[0].message).toContain('計上漏れ');
+    });
+
+    it('LemonSliceの消費が80%未満なら違反を出さない', async () => {
+      const db = makeDb({
+        "billing_status = 'pending'": CLEAN_STUCK,
+        'plan_multiplier IS NULL': CLEAN_UNSTAMPED,
+        'fixed_cost_quota:lemonslice:current': () => ({ rows: [{ used: 11999 }] }), // 79.99%
+      });
+      const violations = await checkBillingHealth(db as any, mockLogger);
+      expect(violations).toEqual([]);
+    });
+
+    it('LIVEKIT_MONTHLY_ROOM_QUOTA未設定ならLiveKitの消費量が多くても沈黙する(込み枠が未確定なため)', async () => {
+      const db = makeDb({
+        "billing_status = 'pending'": CLEAN_STUCK,
+        'plan_multiplier IS NULL': CLEAN_UNSTAMPED,
+        'fixed_cost_quota:livekit:current': () => ({ rows: [{ used: 999999 }] }),
+      });
+      const violations = await checkBillingHealth(db as any, mockLogger);
+      expect(violations).toEqual([]);
+    });
+
+    it('LIVEKIT_MONTHLY_ROOM_QUOTA設定時、80%以上でWARNING', async () => {
+      process.env.LIVEKIT_MONTHLY_ROOM_QUOTA = '100';
+      const db = makeDb({
+        "billing_status = 'pending'": CLEAN_STUCK,
+        'plan_multiplier IS NULL': CLEAN_UNSTAMPED,
+        'fixed_cost_quota:livekit:current': () => ({ rows: [{ used: 85 }] }),
+      });
+      const violations = await checkBillingHealth(db as any, mockLogger);
+      expect(violations).toHaveLength(1);
+      expect(violations[0]).toMatchObject({ id: 'fixed_cost_quota_livekit_high', level: 'WARNING' });
+    });
+
+    it('env値が不正(負値)ならデフォルトにフォールバックしwarnログを出す(fail-safe)', async () => {
+      process.env.LEMONSLICE_MONTHLY_CREDIT_QUOTA = '-1';
+      const db = makeDb({
+        "billing_status = 'pending'": CLEAN_STUCK,
+        'plan_multiplier IS NULL': CLEAN_UNSTAMPED,
+        'fixed_cost_quota:lemonslice:current': () => ({ rows: [{ used: 13500 }] }), // 90% of デフォルト15000
+      });
+      const violations = await checkBillingHealth(db as any, mockLogger);
+      expect(violations).toHaveLength(1);
+      expect(violations[0].id).toBe('fixed_cost_quota_lemonslice_high');
+      expect(mockLogger.warn).toHaveBeenCalled();
+    });
+  });
+});
+
+describe('fetchFixedCostQuotaStatus (A2A-0i)', () => {
+  function makeQuotaDb(overrides: Record<string, (sql: string, params: unknown[]) => unknown>) {
+    return {
+      query: jest.fn().mockImplementation((sql: string, params: unknown[] = []) => {
+        for (const [pattern, handler] of Object.entries(overrides)) {
+          if (sql.includes(pattern)) return Promise.resolve(handler(sql, params));
+        }
+        throw new Error(`unexpected query: ${sql}`);
+      }),
+    };
+  }
+
+  afterEach(() => {
+    delete process.env.LEMONSLICE_MONTHLY_CREDIT_QUOTA;
+    delete process.env.LIVEKIT_MONTHLY_ROOM_QUOTA;
+  });
+
+  it('直近3ヶ月連続で50%未満ならdownSignal=true(下げ方向は3ヶ月分の実績が必要)', async () => {
+    const db = makeQuotaDb({
+      'fixed_cost_quota:lemonslice:current': () => ({ rows: [{ used: 1000 }] }),
+      'fixed_cost_quota:lemonslice:history': () => ({
+        rows: [
+          { month: '2026-06-01', used: 3000 },
+          { month: '2026-07-01', used: 4000 },
+          { month: '2026-08-01', used: 2000 },
+        ],
+      }),
+      'fixed_cost_quota:livekit:current': () => ({ rows: [{ used: 0 }] }),
+    });
+    const status = await fetchFixedCostQuotaStatus(db as any, mockLogger);
+    expect(status.lemonslice.downSignal).toBe(true);
+    expect(status.lemonslice.historyMonths).toBe(3);
+  });
+
+  it('3ヶ月のうち1ヶ月でも50%以上ならdownSignal=false', async () => {
+    const db = makeQuotaDb({
+      'fixed_cost_quota:lemonslice:current': () => ({ rows: [{ used: 1000 }] }),
+      'fixed_cost_quota:lemonslice:history': () => ({
+        rows: [
+          { month: '2026-06-01', used: 3000 },
+          { month: '2026-07-01', used: 8000 }, // 53% — 閾値超え
+          { month: '2026-08-01', used: 2000 },
+        ],
+      }),
+      'fixed_cost_quota:livekit:current': () => ({ rows: [{ used: 0 }] }),
+    });
+    const status = await fetchFixedCostQuotaStatus(db as any, mockLogger);
+    expect(status.lemonslice.downSignal).toBe(false);
+  });
+
+  it('完了月の履歴が3ヶ月に満たないならdownSignal=false(母数不足)', async () => {
+    const db = makeQuotaDb({
+      'fixed_cost_quota:lemonslice:current': () => ({ rows: [{ used: 1000 }] }),
+      'fixed_cost_quota:lemonslice:history': () => ({
+        rows: [
+          { month: '2026-07-01', used: 1000 },
+          { month: '2026-08-01', used: 1000 },
+        ],
+      }),
+      'fixed_cost_quota:livekit:current': () => ({ rows: [{ used: 0 }] }),
+    });
+    const status = await fetchFixedCostQuotaStatus(db as any, mockLogger);
+    expect(status.lemonslice.downSignal).toBe(false);
+    expect(status.lemonslice.historyMonths).toBe(2);
+  });
+
+  it('LiveKitはquota未設定ならquota/ratioがnullで、historyクエリ自体を発行しない', async () => {
+    const db = makeQuotaDb({
+      'fixed_cost_quota:lemonslice:current': () => ({ rows: [{ used: 0 }] }),
+      'fixed_cost_quota:lemonslice:history': () => ({ rows: [] }),
+      'fixed_cost_quota:livekit:current': () => ({ rows: [{ used: 42 }] }),
+      // 'fixed_cost_quota:livekit:history' は意図的にハンドラを登録しない。
+      // quota=null のときに呼ばれてしまうと `unexpected query` で失敗し、この
+      // テスト自体が「呼ばれていないこと」の検証になる。
+    });
+    const status = await fetchFixedCostQuotaStatus(db as any, mockLogger);
+    expect(status.livekit.quota).toBeNull();
+    expect(status.livekit.ratio).toBeNull();
+    expect(status.livekit.used).toBe(42);
+    expect(status.livekit.upSignal).toBe(false);
+    expect(status.livekit.downSignal).toBe(false);
   });
 });
 

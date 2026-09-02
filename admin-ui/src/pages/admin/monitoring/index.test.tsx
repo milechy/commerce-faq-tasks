@@ -491,3 +491,105 @@ describe("MonitoringPage — 学習機能の点火状態(自動昇格のPrompt F
     expect(screen.queryByText(/見送られ/)).toBeNull();
   });
 });
+
+// A2A-0i: 固定費(LemonSlice/LiveKit)クォータ消費率カード。判定ロジック自体
+// (80%/50%閾値・3ヶ月連続判定)はbillingHealthCheck.test.tsで検証済みなので、
+// ここではAPIレスポンスのフィールドに応じた表示の出し分けだけを検証する。
+describe("MonitoringPage — 固定費クォータ消費率(LemonSlice/LiveKit)", () => {
+  const BASE_HEALTH = {
+    sourceBreakdown: [{ source: "user", count: 13 }],
+    emptySessionCount: 0,
+    cvSessionLinkRate: { numerator: 0, denominator: 0, rate: null },
+    outcomeRecordRate: { numerator: 0, denominator: 0, rate: null, autoRecorded: 0 },
+    validUserSessionCount: 13,
+  };
+
+  it("上げ方向シグナル(80%以上)のとき引き上げの示唆を表示する", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
+      if (url.includes("/measurement-health")) {
+        return mockOk({
+          ...BASE_HEALTH,
+          fixedCostQuota: {
+            lemonslice: { used: 13500, quota: 15000, ratio: 0.9, upSignal: true, downSignal: false, historyMonths: 3 },
+            livekit: { used: 0, quota: null, ratio: null, upSignal: false, downSignal: false, historyMonths: 0 },
+            asOf: "2026-08-30T00:00:00.000Z",
+          },
+        });
+      }
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("固定費クォータ消費率(LemonSlice/LiveKit)")).toBeTruthy();
+    });
+    expect(screen.getByText("込み枠の80%以上を消費しています。引き上げを検討してください。")).toBeTruthy();
+    // LiveKitは込み枠未設定なので判定保留の注記を出す
+    expect(screen.getByText(/込み枠\(LIVEKIT_MONTHLY_ROOM_QUOTA\)が未設定/)).toBeTruthy();
+  });
+
+  it("下げ方向シグナル(3ヶ月連続50%未満)のとき引き下げの示唆を表示する", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
+      if (url.includes("/measurement-health")) {
+        return mockOk({
+          ...BASE_HEALTH,
+          fixedCostQuota: {
+            lemonslice: { used: 1000, quota: 15000, ratio: 0.067, upSignal: false, downSignal: true, historyMonths: 3 },
+            livekit: { used: 10, quota: 100, ratio: 0.1, upSignal: false, downSignal: true, historyMonths: 3 },
+            asOf: "2026-08-30T00:00:00.000Z",
+          },
+        });
+      }
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getAllByText("直近3ヶ月連続で込み枠の50%未満です。引き下げを検討できます。").length).toBe(2);
+    });
+  });
+
+  it("平常時(80%未満・下げシグナルなし)は示唆メッセージを出さない", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
+      if (url.includes("/measurement-health")) {
+        return mockOk({
+          ...BASE_HEALTH,
+          fixedCostQuota: {
+            lemonslice: { used: 6000, quota: 15000, ratio: 0.4, upSignal: false, downSignal: false, historyMonths: 1 },
+            livekit: { used: 0, quota: null, ratio: null, upSignal: false, downSignal: false, historyMonths: 0 },
+            asOf: "2026-08-30T00:00:00.000Z",
+          },
+        });
+      }
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("固定費クォータ消費率(LemonSlice/LiveKit)")).toBeTruthy();
+    });
+    expect(screen.queryByText(/引き上げを検討/)).toBeNull();
+    expect(screen.queryByText(/引き下げを検討/)).toBeNull();
+  });
+
+  it("client_admin(APIがfixedCostQuotaを返さない)のときカード自体を出さない", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
+      if (url.includes("/measurement-health")) return mockOk(BASE_HEALTH);
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("会話完了率")).toBeTruthy();
+    });
+    expect(screen.queryByText("固定費クォータ消費率(LemonSlice/LiveKit)")).toBeNull();
+  });
+});

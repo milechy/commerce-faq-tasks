@@ -11,6 +11,7 @@ const mockFetchMeasurementHealth = jest.fn();
 const mockFetchSchemaHealth = jest.fn();
 const mockFetchIgnitionStatus = jest.fn();
 const mockFetchHermesAcceptanceRate = jest.fn();
+const mockFetchFixedCostQuotaStatus = jest.fn();
 
 jest.mock('./measurementHealth', () => ({
   fetchMeasurementHealth: (...args: unknown[]) => mockFetchMeasurementHealth(...args),
@@ -20,6 +21,11 @@ jest.mock('./schemaHealth', () => ({
 }));
 jest.mock('./ignitionStatus', () => ({
   fetchIgnitionStatus: (...args: unknown[]) => mockFetchIgnitionStatus(...args),
+}));
+// A2A-0i: fetchFixedCostQuotaStatusも差し替える(空のpool({})に対して本物のクエリを
+// 投げて例外になるのを避ける。fetchHermesAcceptanceRateと同じ理由)。
+jest.mock('../../../lib/billing/billingHealthCheck', () => ({
+  fetchFixedCostQuotaStatus: (...args: unknown[]) => mockFetchFixedCostQuotaStatus(...args),
 }));
 // H-7(GID 1217972930945091): fetchHermesAcceptanceRateだけ差し替える(他の
 // summaryQueries.tsのexportは本物のまま。空のpool({})に対して本物のクエリを
@@ -84,6 +90,11 @@ describe('GET /v1/admin/analytics/measurement-health のスキーマ整合', () 
       pendingCount: 5,
       asOf: '2026-08-30T00:00:00.000Z',
     });
+    mockFetchFixedCostQuotaStatus.mockReset().mockResolvedValue({
+      lemonslice: { used: 0, quota: 15000, ratio: 0, upSignal: false, downSignal: false, historyMonths: 0 },
+      livekit: { used: 0, quota: null, ratio: null, upSignal: false, downSignal: false, historyMonths: 0 },
+      asOf: '2026-08-30T00:00:00.000Z',
+    });
   });
 
   it('super_admin には欠落列を返す', async () => {
@@ -108,10 +119,12 @@ describe('GET /v1/admin/analytics/measurement-health のスキーマ整合', () 
     expect(res.body.schemaHealth).toBeUndefined();
     expect(res.body.ignitionStatus).toBeUndefined();
     expect(res.body.hermesAcceptanceRate).toBeUndefined();
+    expect(res.body.fixedCostQuota).toBeUndefined();
     // テナントに対して余計なクエリを投げない
     expect(mockFetchSchemaHealth).not.toHaveBeenCalled();
     expect(mockFetchIgnitionStatus).not.toHaveBeenCalled();
     expect(mockFetchHermesAcceptanceRate).not.toHaveBeenCalled();
+    expect(mockFetchFixedCostQuotaStatus).not.toHaveBeenCalled();
     // 既存の計測ヘルス自体は従来どおり返る
     expect(res.body.validUserSessionCount).toBe(0);
   });
@@ -174,5 +187,25 @@ describe('GET /v1/admin/analytics/measurement-health のスキーマ整合', () 
 
     expect(res.body.hermesAcceptanceRate.acceptanceRate.rate).toBeNull();
     expect(res.body.hermesAcceptanceRate.acceptanceRate.denominator).toBe(0);
+  });
+
+  // A2A-0i: 固定費(LemonSlice/LiveKit)クォータ。判定ロジック自体(80%/50%閾値・
+  // 3ヶ月連続判定)は billingHealthCheck.test.ts で純関数として検証済みなので、
+  // ここでは「super_adminにだけ合成される」ことと「同じ計算関数を呼んでいる」ことだけを固定する。
+  it('super_admin には固定費クォータの消費率も返す', async () => {
+    mockFetchFixedCostQuotaStatus.mockResolvedValueOnce({
+      lemonslice: { used: 13500, quota: 15000, ratio: 0.9, upSignal: true, downSignal: false, historyMonths: 3 },
+      livekit: { used: 0, quota: null, ratio: null, upSignal: false, downSignal: false, historyMonths: 0 },
+      asOf: '2026-08-30T00:00:00.000Z',
+    });
+
+    const res = await request(makeApp())
+      .get('/v1/admin/analytics/measurement-health')
+      .set('x-role', 'super_admin');
+
+    expect(res.status).toBe(200);
+    expect(res.body.fixedCostQuota.lemonslice.upSignal).toBe(true);
+    expect(res.body.fixedCostQuota.livekit.quota).toBeNull();
+    expect(mockFetchFixedCostQuotaStatus).toHaveBeenCalledTimes(1);
   });
 });
