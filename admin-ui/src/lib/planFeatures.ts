@@ -35,7 +35,9 @@ export type GatedFeature =
   | "premium_avatar"
   | "sai_task"
   | "pre_dispatch"
-  | "hide_branding";
+  | "hide_branding"
+  | "external_analytics"
+  | "agent_search";
 
 const FEATURE_MIN_PLAN: Record<GatedFeature, TenantPlan> = {
   // アバター「そのもの」を使えるか。Standard は R2C 既定アバターのみ利用できる。
@@ -61,6 +63,9 @@ const FEATURE_MIN_PLAN: Record<GatedFeature, TenantPlan> = {
   pre_dispatch: "enterprise",
   // ウィジェットの「Powered by R2C」バッジ非表示権。Growth以上の特典として料金表に明記する。
   hide_branding: "growth",
+  // backend(src/lib/billing/planFeatures.ts)の external_analytics / agent_search と一致させること。
+  external_analytics: "growth",
+  agent_search: "growth",
 };
 
 /** プラン変更の確認画面で「何が増えるか / 何が使えなくなるか」を出すための表示名。 */
@@ -76,6 +81,8 @@ export const GATED_FEATURE_LABELS: Record<GatedFeature, string> = {
   sai_task: "Sai代行",
   pre_dispatch: "アバターの事前ディスパッチ(高速表示)",
   hide_branding: "「Powered by R2C」バッジの非表示",
+  external_analytics: "外部アナリティクス連携（GA4・PostHog）",
+  agent_search: "外部エージェント連携API",
 };
 
 const ALL_GATED_FEATURES = Object.keys(FEATURE_MIN_PLAN) as GatedFeature[];

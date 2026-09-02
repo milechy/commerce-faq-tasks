@@ -5,6 +5,7 @@ import { internalHmacMiddleware } from "../../lib/crypto/hmacVerifier";
 import { runGa4HealthCheck } from "../../lib/ga4/ga4HealthCheck";
 import { fetchGa4Conversions } from "../../lib/ga4/ga4ConversionFetcher";
 import { logger } from "../../lib/logger";
+import { planHasFeature } from "../../lib/billing/planFeatures";
 
 const healthCheckSchema = z.object({
   tenant_id: z.string().min(1),
@@ -23,8 +24,8 @@ export function registerInternalGa4SyncRoutes(app: Express, db: Pool): void {
     internalHmacMiddleware,
     async (_req: Request, res: Response) => {
       try {
-        const rows = await db.query<{ id: string; ga4_property_id: string }>(
-          `SELECT id, ga4_property_id FROM tenants
+        const rows = await db.query<{ id: string; ga4_property_id: string; plan: string | null }>(
+          `SELECT id, ga4_property_id, plan FROM tenants
            WHERE is_active = true
              AND ga4_property_id IS NOT NULL
              AND ga4_status IN ('connected', 'error', 'timeout', 'permission_revoked', 'pending')`,
@@ -32,6 +33,16 @@ export function registerInternalGa4SyncRoutes(app: Express, db: Pool): void {
 
         const results = await Promise.all(
           rows.rows.map(async (row) => {
+            // GID [A2A-0d]: 外部アナリティクス連携はGrowth以上限定。プラン降格後も
+            // ga4_property_id が残るテナントで、Cronが原価の発生するGA4 API呼び出しを
+            // 続けないよう、呼び出し前にプランを確認する(ga4Routes.ts のゲートと揃える)。
+            if (!planHasFeature(row.plan, "external_analytics")) {
+              return {
+                tenant_id: row.id,
+                status: "plan_restricted" as const,
+                error_message: null,
+              };
+            }
             try {
               const result = await runGa4HealthCheck(row.id, row.ga4_property_id, db);
               return {
@@ -69,7 +80,7 @@ export function registerInternalGa4SyncRoutes(app: Express, db: Pool): void {
       const { tenant_id } = parsed.data;
       try {
         const row = await db.query(
-          `SELECT ga4_property_id FROM tenants WHERE id = $1 AND is_active = true`,
+          `SELECT ga4_property_id, plan FROM tenants WHERE id = $1 AND is_active = true`,
           [tenant_id],
         );
         if (row.rowCount === 0) {
@@ -78,6 +89,10 @@ export function registerInternalGa4SyncRoutes(app: Express, db: Pool): void {
         const propertyId = row.rows[0].ga4_property_id as string | null;
         if (!propertyId) {
           return res.json({ ok: false, reason: "ga4_not_configured" });
+        }
+        // GID [A2A-0d]: 外部アナリティクス連携はGrowth以上限定(ga4Routes.ts のゲートと揃える)。
+        if (!planHasFeature(row.rows[0].plan as string | null, "external_analytics")) {
+          return res.json({ ok: false, reason: "plan_restricted" });
         }
         const result = await runGa4HealthCheck(tenant_id, propertyId, db);
         return res.json({ ok: result.status === "connected", result });
@@ -100,18 +115,23 @@ export function registerInternalGa4SyncRoutes(app: Express, db: Pool): void {
       const { tenant_id, start_date, end_date } = parsed.data;
       try {
         const row = await db.query(
-          `SELECT ga4_property_id, ga4_status FROM tenants WHERE id = $1 AND is_active = true`,
+          `SELECT ga4_property_id, ga4_status, plan FROM tenants WHERE id = $1 AND is_active = true`,
           [tenant_id],
         );
         if (row.rowCount === 0) {
           return res.status(404).json({ error: "tenant_not_found" });
         }
-        const { ga4_property_id: propertyId, ga4_status: status } = row.rows[0] as {
+        const { ga4_property_id: propertyId, ga4_status: status, plan } = row.rows[0] as {
           ga4_property_id: string | null;
           ga4_status: string;
+          plan: string | null;
         };
         if (!propertyId || status !== "connected") {
           return res.json({ ok: false, reason: `ga4_status_${status}` });
+        }
+        // GID [A2A-0d]: 外部アナリティクス連携はGrowth以上限定(ga4Routes.ts のゲートと揃える)。
+        if (!planHasFeature(plan, "external_analytics")) {
+          return res.json({ ok: false, reason: "plan_restricted" });
         }
         const summary = await fetchGa4Conversions(tenant_id, propertyId, start_date, end_date, db);
         return res.json({ ok: !!summary, summary });
