@@ -3,8 +3,14 @@ import { useLang } from "../../../i18n/LangContext";
 import { BillingSection } from "./BillingSection";
 import type { TenantDetail } from "./types";
 import { CARD_STYLE, INPUT_STYLE, LABEL_STYLE } from "./types";
-import { buildOriginWarning } from "../../../lib/tenantOriginWarning";
 import { HermesConsentToggle } from "../../../components/HermesConsentToggle";
+import { buildOriginWarningLevel, type OriginWarningLevel } from "../../../lib/tenantOriginWarning";
+
+const ORIGIN_WARNING_KEY: Record<OriginWarningLevel, "tenant_detail.origin_warning_empty" | "tenant_detail.origin_warning_r2c_own_only" | "tenant_detail.origin_warning_r2c_own_mixed"> = {
+  empty: "tenant_detail.origin_warning_empty",
+  r2c_own_only: "tenant_detail.origin_warning_r2c_own_only",
+  r2c_own_mixed: "tenant_detail.origin_warning_r2c_own_mixed",
+};
 
 // ─── タブ: 設定 ───────────────────────────────────────────────────────────────
 
@@ -35,7 +41,8 @@ export function SettingsTab({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // 保存をブロックしない警告(意図的に空にする運用があるため)。null なら非表示。
-  const [warning, setWarning] = useState<string | null>(null);
+  // 強度は3段階(empty/r2c_own_only/r2c_own_mixed) — buildOriginWarningLevel を参照。
+  const [warningLevel, setWarningLevel] = useState<OriginWarningLevel | null>(null);
 
   const parseOrigins = (raw: string): string[] =>
     raw.split("\n").map((s) => s.trim()).filter((s) => s.length > 0);
@@ -61,7 +68,7 @@ export function SettingsTab({
       return;
     }
     // 保存はブロックしない警告。意図的に空にする運用がありうるため表示のみ。
-    setWarning(buildOriginWarning(allowed_origins));
+    setWarningLevel(buildOriginWarningLevel(allowed_origins));
     setSaving(true);
     setError(null);
     try {
@@ -91,21 +98,36 @@ export function SettingsTab({
         </div>
       )}
 
-      {warning && (
+      {warningLevel && (
         <div
           role="alert"
-          style={{
-            marginBottom: 16,
-            padding: "12px 16px",
-            borderRadius: 10,
-            background: "rgba(120,53,15,0.35)",
-            border: "1px solid rgba(251,191,36,0.4)",
-            color: "#fbbf24",
-            fontSize: 14,
-            lineHeight: 1.6,
-          }}
+          style={
+            warningLevel === "r2c_own_only"
+              ? {
+                  // 致命的: ウィジェットが1ページも動かない。error と同系色で目立たせる。
+                  marginBottom: 16,
+                  padding: "12px 16px",
+                  borderRadius: 10,
+                  background: "rgba(127,29,29,0.4)",
+                  border: "1px solid rgba(248,113,113,0.3)",
+                  color: "#fca5a5",
+                  fontSize: 14,
+                  lineHeight: 1.6,
+                }
+              : {
+                  // 軽度: 動くが不要なエントリがある / fail-open
+                  marginBottom: 16,
+                  padding: "12px 16px",
+                  borderRadius: 10,
+                  background: "rgba(120,53,15,0.35)",
+                  border: "1px solid rgba(251,191,36,0.4)",
+                  color: "#fbbf24",
+                  fontSize: 14,
+                  lineHeight: 1.6,
+                }
+          }
         >
-          ⚠️ {warning}
+          {t(ORIGIN_WARNING_KEY[warningLevel])}
         </div>
       )}
 

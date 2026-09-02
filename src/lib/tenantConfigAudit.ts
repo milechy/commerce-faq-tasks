@@ -90,6 +90,21 @@ export function isR2cOwnDomainOnly(allowedOrigins: string[]): boolean {
 }
 
 /**
+ * A2A-0j: allowed_origins に R2C 自身の運用ドメインが1件以上含まれるが、
+ * テナントの実サイトのドメインも含まれている(=全件一致ではない)場合に true を返す。
+ * 全件が R2C 自身のみの致命的ケース(ウィジェットが1ページも動かない)は
+ * isR2cOwnDomainOnly が担当する。こちらは「動きはするが不要なエントリが混ざっている」
+ * 軽度のケース(例: Accept の実データ, 2026-09-02 実測)を拾う。
+ * サイト訪問者のブラウザが送る Origin はテナントの実ドメインだけなので、
+ * R2C自身のエントリはどの場面でも一致せず、削除しても支障がない。
+ */
+export function isR2cOwnDomainMixed(allowedOrigins: string[]): boolean {
+  if (allowedOrigins.length === 0) return false;
+  const ownCount = allowedOrigins.filter(isR2cOwnHost).length;
+  return ownCount > 0 && ownCount < allowedOrigins.length;
+}
+
+/**
  * 保存時バリデーション(admin/tenants/routes.ts)・照合(originCheck.ts)と同じ
  * isValidOriginPattern で不正な形(パブリックサフィックスワイルドカード等)を検出する。
  * 過去に手動UPDATE等で入り込んだ値の後方点検が目的。
@@ -105,6 +120,8 @@ export function hasEmptySystemPrompt(systemPrompt: string | null | undefined): b
 export interface TenantConfigIssues {
   emptyOrigins: boolean;
   r2cOwnDomainOnly: boolean;
+  /** A2A-0j: 全件一致ではなく、R2C自身のドメインが実ドメインに混在している(軽度)。 */
+  r2cOwnDomainMixed: boolean;
   invalidOriginPattern: boolean;
   /** ブラウザのOriginと決して一致しない登録(表記揺れ)。空なら問題なし。 */
   unmatchableOrigins: string[];
@@ -118,6 +135,7 @@ export function auditTenantConfig(input: {
   return {
     emptyOrigins: hasEmptyOrigins(input.allowedOrigins),
     r2cOwnDomainOnly: isR2cOwnDomainOnly(input.allowedOrigins),
+    r2cOwnDomainMixed: isR2cOwnDomainMixed(input.allowedOrigins),
     invalidOriginPattern: hasInvalidOriginPattern(input.allowedOrigins),
     unmatchableOrigins: findUnmatchableOrigins(input.allowedOrigins),
     emptySystemPrompt: hasEmptySystemPrompt(input.systemPrompt),
@@ -128,6 +146,7 @@ export function hasAnyIssue(issues: TenantConfigIssues): boolean {
   return (
     issues.emptyOrigins ||
     issues.r2cOwnDomainOnly ||
+    issues.r2cOwnDomainMixed ||
     issues.invalidOriginPattern ||
     issues.unmatchableOrigins.length > 0 ||
     issues.emptySystemPrompt

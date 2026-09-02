@@ -47,7 +47,8 @@ interface TenantReport {
 function formatIssueLabels(issues: TenantConfigIssues): string[] {
   const labels: string[] = [];
   if (issues.emptyOrigins) labels.push("allowed_origins空(fail-open)");
-  if (issues.r2cOwnDomainOnly) labels.push("R2C自身のドメインのみ");
+  if (issues.r2cOwnDomainOnly) labels.push("R2C自身のドメインのみ(致命的: ウィジェットが1ページも動かない)");
+  if (issues.r2cOwnDomainMixed) labels.push("R2C自身のドメインが混在(軽度: 動くが不要なエントリ)");
   if (issues.invalidOriginPattern) labels.push("不正なオリジン形式(パブリックサフィックスワイルドカード等)");
   if (issues.unmatchableOrigins.length > 0) {
     // 完全一致で照合されるため、これらは1件も一致せず全ページでウィジェットが止まる。
