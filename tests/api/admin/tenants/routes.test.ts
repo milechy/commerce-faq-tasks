@@ -404,6 +404,27 @@ describe("Tenant Admin Routes", () => {
       expect(res.body.onboarding_completed_at).toBeNull();
     });
 
+    // 既知の不具合修正の回帰テスト: SELECT に allowed_origins が含まれておらず、
+    // admin-ui/AllowedOriginsSettings.tsx が保存済みの許可ドメインを常に空配列として
+    // 読み込み、1件追加するだけで既存の許可ドメインを黙って全消しする事故になっていた。
+    // excluded_page_patterns も同じ経路で読むため同時に検証する。
+    it("returns allowed_origins/excluded_page_patterns（許可ドメイン全消し事故の回帰）", async () => {
+      mockDb.query.mockResolvedValueOnce({
+        rows: [{
+          id: "tenant1", name: "Test", features: {}, lemonslice_agent_id: null, conversion_types: [],
+          allowed_origins: ["https://shop.example.com"],
+          excluded_page_patterns: ["/cart", "/checkout/**"],
+        }],
+        rowCount: 1,
+      });
+      const res = await request(app)
+        .get("/v1/admin/my-tenant")
+        .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`);
+      expect(res.status).toBe(200);
+      expect(res.body.allowed_origins).toEqual(["https://shop.example.com"]);
+      expect(res.body.excluded_page_patterns).toEqual(["/cart", "/checkout/**"]);
+    });
+
     // Asana 1217040568432160: オンボーディング4段階(docs/ONBOARDING_FIRST_LOGIN.md §3.1③)
     describe("onboarding_stage", () => {
       it("全段階未到達の新規テナントでは全て false を返す", async () => {
@@ -706,6 +727,30 @@ describe("Tenant Admin Routes", () => {
       const [sql] = mockDb.query.mock.calls[0];
       expect(sql).toContain("faq_question_hint");
       expect(sql).toContain("faq_answer_hint");
+    });
+
+    it("updates excluded_page_patterns for client_admin", async () => {
+      mockDb.query.mockResolvedValueOnce({
+        rows: [{ id: "tenant1", name: "Test", features: {}, lemonslice_agent_id: null, excluded_page_patterns: ["/cart", "/checkout/**"] }],
+        rowCount: 1,
+      });
+      const res = await request(app)
+        .patch("/v1/admin/my-tenant")
+        .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`)
+        .send({ excluded_page_patterns: ["/cart", "/checkout/**"] });
+      expect(res.status).toBe(200);
+      expect(res.body.excluded_page_patterns).toEqual(["/cart", "/checkout/**"]);
+      const [sql] = mockDb.query.mock.calls[0];
+      expect(sql).toContain("excluded_page_patterns");
+    });
+
+    it("rejects excluded_page_patterns without a leading slash", async () => {
+      const res = await request(app)
+        .patch("/v1/admin/my-tenant")
+        .set("Authorization", `Bearer ${CLIENT_ADMIN_TOKEN}`)
+        .send({ excluded_page_patterns: ["cart"] });
+      expect(res.status).toBe(400);
+      expect(mockDb.query).not.toHaveBeenCalled();
     });
 
     it("sets onboarding_industry and onboarding_completed_at (GID 1216274591838389)", async () => {

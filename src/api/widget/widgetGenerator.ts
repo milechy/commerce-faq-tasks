@@ -24,6 +24,12 @@ export interface TenantWidgetConfig {
   showAdPromo?: boolean;
   /** 広告帯のリンク先（着地ページ、UTM + テナント識別子付き） */
   adPromoUrl?: string;
+  /**
+   * ウィジェットを表示しないページのパスパターン（tenants.excluded_page_patterns）。
+   * fail-safeはshowBrandingBadgeと同じ「表示する」側（未設定時は空配列=全ページ表示）。
+   * 判定不能時に全ページで消えてしまう方が、出すぎるより重い事故なため。
+   */
+  excludedPagePatterns?: string[];
 }
 
 const WIDGET_SRC_PATH = path.resolve(process.cwd(), "public", "widget.js");
@@ -53,13 +59,55 @@ function randomPrefix(): string {
   return "_r" + crypto.randomBytes(4).toString("hex");
 }
 
+const OBFUSCATOR_OPTIONS = {
+  compact: true,
+  controlFlowFlattening: false,
+  deadCodeInjection: false,
+  stringArray: true,
+  stringArrayEncoding: ["base64"],
+  selfDefending: false,
+  disableConsoleOutput: true,
+} as const;
+
+/**
+ * public/widget.js の本文（全テナント共通・tenant設定を含まない）を難読化した結果を
+ * プロセス内に1度だけキャッシュする。
+ *
+ * 背景: GET /widget/:tenantSlug.js の Cache-Control を 24h→5分に短縮した結果、
+ * オリジンへのリクエスト頻度が最大288倍に増えうる。obfuscate() は約156KBのソースに対し
+ * 実測 約250ms かかる同期処理でイベントループを止めるため、リクエスト毎の実行は
+ * デプロイ直後のトラフィック下でAPI全体を詰まらせる恐れがある。
+ * 本文はテナント間で完全に同一（tenant設定を含まない）ため、キャッシュしても
+ * テナントごとの出し分けやトークンの鮮度には影響しない。プロセス再起動（=デプロイ毎）
+ * でのみ再計算される。
+ */
+let cachedBody: { code: string; obfuscated: boolean } | null = null;
+
+function getObfuscatedBody(): { code: string; obfuscated: boolean } {
+  if (cachedBody) return cachedBody;
+  const source = fs.readFileSync(WIDGET_SRC_PATH, "utf-8");
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const JavaScriptObfuscator = require("javascript-obfuscator");
+    const result = JavaScriptObfuscator.obfuscate(source, {
+      ...OBFUSCATOR_OPTIONS,
+      seed: Math.floor(Math.random() * 1_000_000),
+    });
+    cachedBody = { code: result.getObfuscatedCode(), obfuscated: true };
+  } catch {
+    // Obfuscator not available in prod — cache the plain source instead
+    // (availability doesn't change at runtime, so this is stable for the process lifetime).
+    cachedBody = { code: source, obfuscated: false };
+  }
+  return cachedBody;
+}
+
 /**
  * Generate per-tenant widget JS.
  * Injects a config block at the top, then applies light variable-name randomisation.
  * Falls back to plain config injection if javascript-obfuscator is unavailable.
  */
 export async function generateWidgetJs(config: TenantWidgetConfig): Promise<string> {
-  const source = fs.readFileSync(WIDGET_SRC_PATH, "utf-8");
   const token = generateWidgetToken(config.tenantId);
   const prefix = randomPrefix();
 
@@ -79,6 +127,7 @@ export async function generateWidgetJs(config: TenantWidgetConfig): Promise<stri
     // 掲出しない側へ倒す(有料テナントへの誤掲出の方が無料テナントの掲出漏れより重い)。
     showAdPromo: ${JSON.stringify(config.showAdPromo ?? false)},
     adPromoUrl: ${JSON.stringify(config.adPromoUrl ?? null)},
+    excludedPagePatterns: ${JSON.stringify(config.excludedPagePatterns ?? [])},
     _wt: ${JSON.stringify(token)}
   };
   if (typeof window !== "undefined") {
@@ -87,25 +136,24 @@ export async function generateWidgetJs(config: TenantWidgetConfig): Promise<stri
 })();
 `;
 
-  const fullSource = configBlock + "\n" + source;
+  const body = getObfuscatedBody();
+  if (!body.obfuscated) {
+    // Obfuscator not available — return config-injected plain source (existing fallback path).
+    return configBlock + "\n" + body.code;
+  }
 
-  // Attempt dynamic obfuscation (javascript-obfuscator may be a devDep)
+  // トークン(_wt)はリクエスト毎に新しいnonceで署名される（使い回しでの推測可能性を
+  // 避けるため）。そのため設定ブロックは本文キャッシュとは別に、毎回このリクエスト分だけ
+  // 難読化する。156KBの本文に対する約250msに対し、この小さなブロックは約10msで済む。
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const JavaScriptObfuscator = require("javascript-obfuscator");
-    const result = JavaScriptObfuscator.obfuscate(fullSource, {
-      compact: true,
-      controlFlowFlattening: false,
-      deadCodeInjection: false,
-      stringArray: true,
-      stringArrayEncoding: ["base64"],
-      selfDefending: false,
-      disableConsoleOutput: true,
+    const result = JavaScriptObfuscator.obfuscate(configBlock, {
+      ...OBFUSCATOR_OPTIONS,
       seed: Math.floor(Math.random() * 1_000_000),
     });
-    return result.getObfuscatedCode();
+    return result.getObfuscatedCode() + "\n" + body.code;
   } catch {
-    // Obfuscator not available in prod — return config-injected source
-    return fullSource;
+    return configBlock + "\n" + body.code;
   }
 }

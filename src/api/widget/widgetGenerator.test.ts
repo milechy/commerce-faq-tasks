@@ -119,6 +119,37 @@ describe("widgetGenerator — WIDGET_JWT_SECRET 分離 (B3)", () => {
       expect(payload.sub).toBe("");
     });
   });
+
+  // GET /widget/:tenantSlug.js の Cache-Control を 24h→5分に短縮したことで、
+  // オリジンへのリクエスト頻度が増える可能性がある。本文(public/widget.js)の
+  // 難読化は約156KBに対し実測約250msかかる同期処理のため、リクエスト毎の実行を
+  // 避けてプロセス内キャッシュする（widgetGenerator.ts の getObfuscatedBody 参照）。
+  describe("本文キャッシュ（Cache-Control短縮対応）", () => {
+    it("複数回生成してもソースファイルの読み込みは1回のみ（本文キャッシュがヒットする）", async () => {
+      process.env.WIDGET_JWT_SECRET = "s";
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const fsMock = require("node:fs") as { readFileSync: jest.Mock };
+
+      await generateWidgetJs(BASE_CONFIG);
+      const countAfterFirst = fsMock.readFileSync.mock.calls.length;
+      await generateWidgetJs(BASE_CONFIG);
+      await generateWidgetJs({ ...BASE_CONFIG, tenantId: "tenant-b" });
+      expect(fsMock.readFileSync.mock.calls.length).toBe(countAfterFirst);
+    });
+
+    it("本文がキャッシュされていても、トークン(nonce)は毎回新しく生成される（キャッシュがセキュリティ契約を壊さない）", async () => {
+      process.env.WIDGET_JWT_SECRET = "s";
+      signMock.mockClear();
+
+      await generateWidgetJs(BASE_CONFIG);
+      await generateWidgetJs(BASE_CONFIG);
+
+      expect(signMock).toHaveBeenCalledTimes(2);
+      const [payload1] = signMock.mock.calls[0] as [Record<string, unknown>, string, unknown];
+      const [payload2] = signMock.mock.calls[1] as [Record<string, unknown>, string, unknown];
+      expect(payload1.nonce).not.toBe(payload2.nonce);
+    });
+  });
 });
 
 describe("widgetGenerator — 「Powered by R2C」バッジ設定の注入 (PR-B)", () => {
@@ -178,5 +209,42 @@ describe("widgetGenerator — 「Powered by R2C」バッジ設定の注入 (PR-B
     });
     expect(out).toContain("showBrandingBadge: true");
     expect(out).toContain('"https://r2c.biz/lp/from-chat/?r2c_ref=tenant-a"');
+  });
+});
+
+describe("widgetGenerator — ページ除外設定(excludedPagePatterns)の注入", () => {
+  const originalEnv = { ...process.env };
+
+  function freshGenerateWidgetJs() {
+    jest.resetModules();
+    jest.doMock("javascript-obfuscator", () => {
+      throw new Error("javascript-obfuscator not available in test");
+    });
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return (require("./widgetGenerator") as typeof import("./widgetGenerator"))
+      .generateWidgetJs;
+  }
+
+  beforeEach(() => {
+    process.env.WIDGET_JWT_SECRET = "s";
+  });
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+    jest.dontMock("javascript-obfuscator");
+    jest.resetModules();
+  });
+
+  it("未指定時は空配列で埋め込まれる（fail-safe: 判定不能時は全ページ表示）", async () => {
+    const out = await freshGenerateWidgetJs()(BASE_CONFIG);
+    expect(out).toContain("excludedPagePatterns: []");
+  });
+
+  it("指定時はそのまま配列として埋め込まれる", async () => {
+    const out = await freshGenerateWidgetJs()({
+      ...BASE_CONFIG,
+      excludedPagePatterns: ["/cart", "/checkout/**"],
+    });
+    expect(out).toContain('excludedPagePatterns: ["/cart","/checkout/**"]');
   });
 });

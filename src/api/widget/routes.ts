@@ -3,7 +3,8 @@
 //
 // - Looks up tenant by ID (slug = tenant ID).
 // - Injects tenant config + 24h session token.
-// - Returns obfuscated JS with Cache-Control: public, max-age=86400.
+// - Returns obfuscated JS with Cache-Control: public, max-age=300
+//   (短縮理由: excluded_page_patterns 等のテナント設定変更をほぼ即時に反映するため)。
 // - 404 if tenant not found or inactive.
 
 import type { Express, Request, Response } from "express";
@@ -63,7 +64,7 @@ export function registerWidgetRoutes(app: Express, db: Pool | null): void {
 
     try {
       const result = await db.query(
-        `SELECT id, is_active, features, plan
+        `SELECT id, is_active, features, plan, excluded_page_patterns
          FROM tenants
          WHERE id = $1`,
         [tenantSlug]
@@ -82,11 +83,12 @@ export function registerWidgetRoutes(app: Express, db: Pool | null): void {
       const defaultAvatarEnabled: boolean = features.avatar ?? false;
 
       // GID 1216978855735482: 「アバターあり vs テキストのみ」A/Bテスト。
-      // このエンドポイントは24hブラウザキャッシュされ、かつ生成時点ではまだ
-      // chat_sessionのsession_idが存在しない（ページ読み込み時に1回だけ呼ばれる）。
-      // そのため厳密なsession単位ではなく、visitor近似のsticky key（IP+テナントID）で
-      // 決定的に割り当てる。同じ訪問者はブラウザキャッシュにより最大24h同じ結果になり、
-      // 副次的にセッションをまたいだstickinessも得られる。
+      // 生成時点ではまだ chat_session の session_id が存在しない（ページ読み込み時に
+      // 1回だけ呼ばれる）ため、厳密なsession単位ではなく、visitor近似のsticky key
+      // （IP+テナントID）で決定的に割り当てる。IPが同じ限り何度呼び出しても同じ結果に
+      // なるためキャッシュ期間の長さそのものには依存しないが、Cache-Controlを
+      // 5分（旧24h）に短縮したことで、IPが変わる訪問（モバイル⇄Wi-Fi切替等）が
+      // 従来より短い間隔でブラウザキャッシュを経由せず再割当されうる点は変わった。
       // features.avatar=false のテナントでは実験を一切参照しない（ガード）。
       const stickyKey = `${req.ip ?? "unknown"}:${tenant.id}`;
       const assignment = await resolveAvatarAssignment(db, tenant.id, stickyKey, defaultAvatarEnabled);
@@ -111,10 +113,14 @@ export function registerWidgetRoutes(app: Express, db: Pool | null): void {
         badgeUrl: buildBadgeUrl(tenant.id),
         showAdPromo,
         adPromoUrl: buildAdPromoUrl(tenant.id),
+        excludedPagePatterns: tenant.excluded_page_patterns ?? [],
       });
 
       res.set("Content-Type", "application/javascript; charset=utf-8");
-      res.set("Cache-Control", "public, max-age=86400");
+      // ページ除外設定(excluded_page_patterns)の変更をほぼ即時に反映させるため、
+      // 24h(旧 max-age=86400)から5分に短縮。A/Bアバター割当はIP+テナントIDの
+      // 決定的sticky keyのため、キャッシュが切れて再生成されても結果は変わらない。
+      res.set("Cache-Control", "public, max-age=300");
       res.set("X-Content-Type-Options", "nosniff");
       return res.send(js);
     } catch (err) {

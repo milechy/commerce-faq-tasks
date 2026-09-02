@@ -654,6 +654,83 @@ describe("GET /v1/admin/my-tenant / GET /v1/admin/tenants/:id — widget_theme",
 });
 
 // --------------------------------------------------------------------------
+// allowed_origins / excluded_page_patterns — 既知の不具合修正の回帰テスト。
+// GET /v1/admin/my-tenant の SELECT に allowed_origins が含まれておらず、
+// admin-ui/AllowedOriginsSettings.tsx が保存済みの値を常に空配列として読み込み、
+// 1件追加するだけで既存の許可ドメインを黙って全消しする事故になっていた。
+// excluded_page_patterns も同じGETを読むため、同時に検証する。
+// --------------------------------------------------------------------------
+
+describe("GET /v1/admin/my-tenant — allowed_origins / excluded_page_patterns", () => {
+  it("保存済みの allowed_origins と excluded_page_patterns の両方を応答に含める", async () => {
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValueOnce({
+        rows: [{
+          id: "tenant-a", name: "テストテナント", features: null, lemonslice_agent_id: null,
+          conversion_types: [],
+          allowed_origins: ["https://shop.example.com"],
+          excluded_page_patterns: ["/cart", "/checkout/**"],
+        }],
+        rowCount: 1,
+      })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "client_admin"))
+      .get("/v1/admin/my-tenant")
+      .set("Authorization", "Bearer dummy");
+
+    expect(res.status).toBe(200);
+    expect(res.body.allowed_origins).toEqual(["https://shop.example.com"]);
+    expect(res.body.excluded_page_patterns).toEqual(["/cart", "/checkout/**"]);
+  });
+});
+
+describe("PATCH /v1/admin/my-tenant — excluded_page_patterns", () => {
+  it("excluded_page_patterns を保存し、更新後の値を返す", async () => {
+    const dbQuery = jest.fn().mockResolvedValueOnce({
+      rows: [{
+        id: "tenant-a", name: "テストテナント", features: {},
+        lemonslice_agent_id: null, faq_question_hint: null, faq_answer_hint: null,
+        onboarding_industry: null, onboarding_completed_at: null,
+        allowed_origins: [], excluded_page_patterns: ["/cart", "/checkout/**"],
+      }],
+      rowCount: 1,
+    });
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "client_admin"))
+      .patch("/v1/admin/my-tenant")
+      .set("Authorization", "Bearer dummy")
+      .send({ excluded_page_patterns: ["/cart", "/checkout/**"] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.excluded_page_patterns).toEqual(["/cart", "/checkout/**"]);
+    const [sql] = dbQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain("excluded_page_patterns");
+  });
+
+  it("先頭スラッシュの無いパスは400で拒否される", async () => {
+    const db = { query: jest.fn() };
+    const res = await request(makeApp(db, "client_admin"))
+      .patch("/v1/admin/my-tenant")
+      .set("Authorization", "Bearer dummy")
+      .send({ excluded_page_patterns: ["cart"] });
+    expect(res.status).toBe(400);
+  });
+
+  it("クエリ文字列(?)を含むパスは400で拒否される（location.pathnameに載らず絶対に一致しないため）", async () => {
+    const db = { query: jest.fn() };
+    const res = await request(makeApp(db, "client_admin"))
+      .patch("/v1/admin/my-tenant")
+      .set("Authorization", "Bearer dummy")
+      .send({ excluded_page_patterns: ["/cart?step=2"] });
+    expect(res.status).toBe(400);
+  });
+});
+
+// --------------------------------------------------------------------------
 // ⑦ PATCH /v1/admin/my-tenant — avatar/voice の plan ゲート(LP料金表: Growth〜)
 // --------------------------------------------------------------------------
 

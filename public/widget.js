@@ -95,6 +95,34 @@
     return;
   }
 
+  // ページ単位のウィジェット非表示設定（tenants.excluded_page_patterns）。
+  // TriggerEngine.prototype._matchPathname（ページ声がけのAND条件判定用）と同じ
+  // グロブ構文をここでも使うため、実装を1箇所（このトップレベル関数）に集約し、
+  // TriggerEngine 側は委譲するだけにする（構文解釈が2箇所に割れて「保存できたが
+  // 効かない」事故になるのを避けるため）。
+  // DOM構築・SDK読み込み・fetchより前に同期判定し、該当ページでは一切マウントしない
+  // （一瞬表示されてから消えるチラつきと、除外ページでの不要な通信を防ぐ）。
+  function matchPathnameGlob(pathname, pattern) {
+    try {
+      // "*" 以外の正規表現メタ文字（. + ^ $ { } ( ) | [ ] \）を先にエスケープする。
+      // エスケープ無しだと "/foo.html" が "/fooXhtml" にも一致する、"/cart(" のような
+      // 入力で new RegExp が例外を投げてサイレントに false（保存できたのに効かない）に
+      // なる、といった事故があるため。"*" だけはグロブ構文として意図的に残す。
+      var regexStr = pattern
+        .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+        .replace(/\*\*/g, '@@R2C_DBLSTAR@@')
+        .replace(/\*/g, '[^/]*')
+        .replace(/@@R2C_DBLSTAR@@/g, '.*');
+      var regex = new RegExp('^' + regexStr + '$');
+      return regex.test(pathname);
+    } catch (_e) { return false; }
+  }
+
+  var excludedPagePatterns = _rajiuceTenantCfg.excludedPagePatterns || [];
+  for (var _excludeIdx = 0; _excludeIdx < excludedPagePatterns.length; _excludeIdx++) {
+    if (matchPathnameGlob(window.location.pathname, excludedPagePatterns[_excludeIdx])) return;
+  }
+
   // スクリプトの src からウィジェットの API オリジンを決定
   var scriptSrc = currentScript ? currentScript.getAttribute('src') : '';
   var widgetOrigin = window.location.origin;
@@ -3803,18 +3831,10 @@
     } catch (_e) { return false; }
   };
 
+  // グロブ構文の実装本体はファイル冒頭の matchPathnameGlob() に集約している
+  // （ページ除外設定と声がけ条件で構文解釈が2箇所に割れるのを防ぐため）。
   TriggerEngine.prototype._matchPathname = function (pathname, pattern) {
-    try {
-      // 注意: "**" → ".*" を先に置換すると生成された "." が次段の単一"*"置換に
-      // 誤って再ヒットするため（例: "shoes/**" → "shoes/.*" → "shoes/.[^/]*"）、
-      // プレースホルダーを挟んで二段置換の衝突を避ける。
-      var regexStr = pattern
-        .replace(/\*\*/g, '@@R2C_DBLSTAR@@')
-        .replace(/\*/g, '[^/]*')
-        .replace(/@@R2C_DBLSTAR@@/g, '.*');
-      var regex = new RegExp('^' + regexStr + '$');
-      return regex.test(pathname);
-    } catch (_e) { return false; }
+    return matchPathnameGlob(pathname, pattern);
   };
 
   // GID 1216275373432737: セッション内で閲覧したページ履歴を記録（AND条件判定に使用）

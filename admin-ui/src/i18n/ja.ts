@@ -114,6 +114,24 @@ const ja = {
   "knowledge.allowed_origins_saved": "✅ 許可ドメインを保存しました",
   "knowledge.allowed_origins_save_error": "❌ 保存に失敗しました。もう一度お試しください。",
 
+  // ページ単位のウィジェット非表示設定（許可ドメイン内でも特定パスでは出さない）
+  "knowledge.excluded_pages_settings_title": "Widgetを表示しないページの設定",
+  "knowledge.excluded_pages_settings_desc": "許可ドメイン内でも、カートや決済ページなどWidgetを出したくないページのパスを登録できます。/cart は完全一致、/products/* は1階層下まで、/blog/** は配下すべてに一致します。",
+  "knowledge.excluded_pages_input_placeholder": "/cart",
+  "knowledge.excluded_pages_add": "追加",
+  // 除外0件=すべてのページで表示中は正常な既定状態(許可ドメインの空欄=保護なしとは意味が逆)。
+  // 警告色ではなく中立な表示にする。
+  "knowledge.excluded_pages_empty": "現在、すべてのページでWidgetが表示されます",
+  "knowledge.excluded_pages_empty_desc": "パスを1件以上登録すると、該当するページではWidgetが一切表示されなくなります。",
+  "knowledge.excluded_pages_invalid_leading_slash": "パスは / から始めてください（例: /cart, /products/*, /blog/**）",
+  "knowledge.excluded_pages_invalid_query": "クエリ文字列(?)やフラグメント(#)は指定できません（パスのみ）",
+  "knowledge.excluded_pages_duplicate": "既に登録されています",
+  "knowledge.excluded_pages_max_reached": "登録できるのは20件までです",
+  "knowledge.excluded_pages_saved": "✅ 除外ページを保存しました",
+  "knowledge.excluded_pages_save_error": "❌ 保存に失敗しました。もう一度お試しください。",
+  "knowledge.excluded_pages_reflect_note": "⏱️ 反映には最大5分かかります。",
+  "knowledge.excluded_pages_embed_note": "⚠️ この設定は埋め込みコードが最新の形式（https://api.r2c.biz/widget/{テナントID}.js）である場合のみ有効です。旧形式の /widget.js 直接埋め込みには反映されません。",
+
   // Tabs
   "knowledge.tab_list": "ナレッジ一覧",
   "knowledge.tab_text": "テキスト入力",
