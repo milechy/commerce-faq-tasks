@@ -8,6 +8,28 @@ vi.mock("../lib/api", () => ({
   API_BASE: "http://localhost:3100",
 }));
 
+// [A2A-0h]: 文言をi18n化(admin-ui/src/i18n/{ja,en}.ts の hermes_consent.*)したため、
+// LangContext を実辞書(ja.ts)をそのまま使う安定した t() に置き換える
+// (KnowledgeListTab.test.tsx / [id].test.tsx と同じ既存パターン。LangProvider は
+// localStorage に依存し、このテスト環境の Node組み込み localStorage で例外になる)。
+vi.mock("../i18n/LangContext", async () => {
+  const jaModule = await import("../i18n/ja");
+  const ja = jaModule.default as Record<string, string>;
+  const stableT = (key: string, vars?: Record<string, string | number>) => {
+    let text = ja[key] ?? key;
+    if (vars) {
+      for (const [k, v] of Object.entries(vars)) {
+        text = text.replace(new RegExp(`\\{${k}\\}`, "g"), String(v));
+      }
+    }
+    return text;
+  };
+  const stableValue = { lang: "ja" as const, setLang: () => {}, t: stableT };
+  return {
+    useLang: () => stableValue,
+  };
+});
+
 import { authFetch } from "../lib/api";
 
 const mockOk = (data: unknown): Promise<Response> =>

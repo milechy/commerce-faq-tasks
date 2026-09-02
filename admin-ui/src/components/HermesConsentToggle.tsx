@@ -20,9 +20,18 @@
 // PATCH /v1/admin/my-tenant・/v1/admin/tenants/:id の両方に同じ強制判定を入れている)。
 // 後方互換: features.learning が未設定のテナントは features.hermes_raw_data_consent を読む
 // (src/lib/hermesConsent.ts の resolveLearningConsent と同じ優先順位)。
+//
+// [A2A-0h]: 文言を admin-ui/src/i18n/{ja,en}.ts の hermes_consent.* に抽出(旧: 日本語ハードコード)。
+// 説明文は give-to-get(提供すると他社の学習成果=グローバルルールを受け取れる。OFFなら
+// 提供もしないが受け取りもしない)の相互性が伝わるよう書き直した。同意の判定ロジック
+// (resolveShare・fail-safeの既定値)自体は変更していない。
+// overrideTenantId は元々「super_adminのプレビュー中テナントID」用だったが、
+// /admin/tenants/:id(SettingsTab)からの直接操作でも同じPATCH /v1/admin/tenants/:id を
+// 再利用するために転用している(下記コメント参照)。
 
 import { useEffect, useState } from "react";
 import { authFetch, API_BASE } from "../lib/api";
+import { useLang } from "../i18n/LangContext";
 
 interface LearningConsent {
   learn: boolean;
@@ -55,6 +64,7 @@ interface HermesConsentToggleProps {
 }
 
 export function HermesConsentToggle({ overrideTenantId }: HermesConsentToggleProps = {}) {
+  const { t } = useLang();
   const [features, setFeatures] = useState<TenantFeatures | null>(null);
   const [plan, setPlan] = useState<Plan>(null);
   const [saving, setSaving] = useState(false);
@@ -115,7 +125,7 @@ export function HermesConsentToggle({ overrideTenantId }: HermesConsentTogglePro
       if (!res.ok) {
         setFeatures(prev); // ロールバック
         const body = (await res.json().catch(() => null)) as { message?: string } | null;
-        showToast(`❌ ${body?.message ?? "保存に失敗しました。もう一度お試しください。"}`);
+        showToast(`❌ ${body?.message ?? t("hermes_consent.toast_error_default")}`);
         return;
       }
 
@@ -123,12 +133,12 @@ export function HermesConsentToggle({ overrideTenantId }: HermesConsentTogglePro
       setFeatures({ ...prev, ...updated.features });
       showToast(
         next
-          ? "✅ 共有学習プールに参加しました"
-          : "✅ 参加を取り消しました",
+          ? t("hermes_consent.toast_joined")
+          : t("hermes_consent.toast_left"),
       );
     } catch {
       setFeatures(prev); // ロールバック
-      showToast("❌ 保存に失敗しました。もう一度お試しください。");
+      showToast(`❌ ${t("hermes_consent.toast_error_default")}`);
     } finally {
       setSaving(false);
     }
@@ -159,25 +169,17 @@ export function HermesConsentToggle({ overrideTenantId }: HermesConsentTogglePro
       >
         <div>
           <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0, color: "var(--foreground)" }}>
-            🧠 共有学習プールへの参加
+            {t("hermes_consent.title")}
           </h2>
           <p style={{ fontSize: 14, color: "var(--muted-foreground)", margin: "6px 0 0", maxWidth: 480 }}>
-            参加すると、他社の会話から学んだ改善が反映された「グローバルルール」が貴社のAI応答にも
-            使われるようになります(このページに🌐グローバルとして表示されるルール)。その代わりに、
-            貴社の会話ログ(QA AI・アバターとのやり取り。チャットを開いたが発話が無かったセッションを
-            含む)、そこに至るまでのページ閲覧履歴・流入元(URLのパス部分。検索語や会員IDなどの
-            クエリ文字列は除く)、成約時の詳細(金額・成約の種類・成約時点の会話ステージを含む)が、
-            社外の分析基盤での分析対象になります。
+            {t("hermes_consent.description_main")}
           </p>
           <p style={{ fontSize: 14, color: "var(--muted-foreground)", margin: "8px 0 0", maxWidth: 480 }}>
-            R2C社内での学習(FAQ改善・回答の自動学習)は、この設定に関わらず常に行われます。
-            ここで操作するのは社外への提供のみです。OFFにすると以降の新規データ提供は停止しますが、
-            それまでに提供済みのデータへの反映は取り消せません。
+            {t("hermes_consent.description_internal")}
           </p>
           {forcedByPlan && (
             <p style={{ fontSize: 13, color: "#f0b429", margin: "8px 0 0", maxWidth: 480 }}>
-              ⚠️ 現在のプラン(広告プラン)では、無料でのご提供の対価として参加が必須です。
-              停止するには有料プランへの変更が必要です。
+              {t("hermes_consent.forced_notice")}
             </p>
           )}
         </div>
@@ -188,10 +190,10 @@ export function HermesConsentToggle({ overrideTenantId }: HermesConsentTogglePro
           aria-pressed={consentGranted}
           aria-label={
             forcedByPlan
-              ? "広告プランのため参加は必須です(変更不可)"
+              ? t("hermes_consent.aria_forced")
               : consentGranted
-                ? "共有学習プールへの参加を取り消す"
-                : "共有学習プールに参加する"
+                ? t("hermes_consent.aria_revoke")
+                : t("hermes_consent.aria_join")
           }
           style={{
             padding: "12px 28px",
@@ -213,12 +215,12 @@ export function HermesConsentToggle({ overrideTenantId }: HermesConsentTogglePro
           }}
         >
           {saving
-            ? "保存中..."
+            ? t("hermes_consent.btn_saving")
             : forcedByPlan
-              ? "🔒 必須(広告プラン)"
+              ? t("hermes_consent.btn_forced")
               : consentGranted
-                ? "✅ 参加中"
-                : "⏸️ 未参加"}
+                ? t("hermes_consent.btn_active")
+                : t("hermes_consent.btn_inactive")}
         </button>
       </div>
       {toast && (

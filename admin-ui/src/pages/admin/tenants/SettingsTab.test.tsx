@@ -7,6 +7,15 @@ vi.mock("../../../i18n/LangContext", () => ({
   useLang: () => ({ t: (key: string) => key }),
 }));
 
+// [A2A-0h]: SettingsTab は isSuperAdmin=true で HermesConsentToggle(Super Admin直接操作面)を
+// 描画するようになった。同コンポーネントが lib/api の authFetch(supabaseの実セッション取得を
+// 経由する)を直接叩くため、モックしないと実ネットワーク/実Supabaseに触れてしまう
+// ([id].test.tsx と同じ理由でのモック)。
+vi.mock("../../../lib/api", () => ({
+  authFetch: vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({}) }),
+  API_BASE: "http://localhost:3100",
+}));
+
 function makeTenant(overrides: Partial<TenantDetail> = {}): TenantDetail {
   return {
     id: "t1",
