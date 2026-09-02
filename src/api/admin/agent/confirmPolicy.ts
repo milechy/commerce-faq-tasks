@@ -28,6 +28,11 @@ export const WRITE_TOOL_RISK_TIERS: Record<string, RiskTier> = {
   set_ga4_id: 'low',
   set_posthog: 'low',
   set_widget_theme: 'low',
+  // update_allowed_originsとは異なりmediumではなくlow: サーバ側の認可判定には
+  // 一切関与しない(クライアントサイドでウィジェットをマウントしないだけ)。
+  // 0件=「除外なし・全ページ表示」が安全な既定状態であり、allowed_originsのような
+  // fail-open/closedの非対称も無い。単一の設定値・元に戻せば完全に元の状態へ戻る。
+  update_excluded_page_patterns: 'low',
   // 顧客には表示されない、店主自身のFAQ登録フォームの入力支援文言。set_ga4_id/set_posthog
   // と同じ性質(単一の設定値、元の値を入れ直せば完全に戻る、外部送出も課金も無い)。
   set_faq_hints: 'low',

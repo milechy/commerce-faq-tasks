@@ -79,12 +79,14 @@ handoff は出るが、店主はチャットを離れる。離れた先で「何
 
 | 型 | 性質 | 表現 | 件数 |
 |---|---|---|---|
-| **T1 状態の確認と切替** | 対象が1つ、状態が二値または短いリスト、頻度が低い | **状態カード** — 現在の状態を必ず先に見せ、その場で切り替える | 4 |
+| **T1 状態の確認と切替** | 対象が1つ、状態が二値または短いリスト、頻度が低い | **状態カード** — 現在の状態を必ず先に見せ、その場で切り替える | 5 |
 | **T2 集合の選択** | 対象がN件、価値は「どのN件か」の確定 | **選択可能な一覧カード** — 絞り込み条件 → 対象件数と実例の提示 → 確定 | 3 |
 | **T3 見て選ぶ・聴いて選ぶ** | 候補提示 → 感覚的な採否 | **候補カード + チャットへの添付** (既存 `avatarCandidates` / `avatarVoiceCandidates` の系譜) | 4 |
 | **T4 傾向の把握** | 価値は比較と方向であって単一の数値ではない | **要約 + 可視化カード** — AIの解釈文とグラフを同じカードに同居させる | 5 |
 
-### 3.1 16件の割当
+### 3.1 17件の割当
+
+本表は §12 の #17(プラン変更・支払いカード登録、D2改訂/CP-3)を含まない。型の割当対象は「不可視の自己設定機能」に限るため、閲覧・決済系のCP-3はここでは扱わない。§12 の #18(ページ除外設定、2026-09-02に別ブランチ `feature/widget-page-exclusion` で追加)はCP-3より前の当初監査(基準コミット`a95373c2`)より後に追加された機能で、当初の16件と性質は同じ(不可視の自己設定機能)のため、この表では17件目として組み込む(§12の通番とは1つずれる)。
 
 | # | 機能 | 型 | 現状 | 旧UI実装 |
 |---|---|---|---|---|
@@ -104,6 +106,7 @@ handoff は出るが、店主はチャットを離れる。離れた先で「何
 | 14 | ナレッジ別の成約貢献度 | T4 | `knowledge_attribution` | `KnowledgeAttributionTab.tsx` |
 | 15 | ご利用状況・お支払い (閲覧一式) | T4 | `billing` | `billing/index.tsx` |
 | 16 | 集計期間 90 日 | T4 | tool化(2026-08-25, enum拡張) | `analytics/utils.ts:3` |
+| 17 | ページ除外設定の自己設定(`excluded_page_patterns`) | T1 | tool化(2026-09-02, `update_excluded_page_patterns`) | `ExcludedPagesSettings.tsx` |
 
 ### 3.2 handoff の位置づけ
 
@@ -493,7 +496,7 @@ handoff は出るが、店主はチャットを離れる。離れた先で「何
 
 ## 12. 反映状況台帳（機械可読、W0）
 
-§3.1 の16件と1:1対応する。**この表が S0（可視化）の唯一の判定台帳**であり、`src/api/admin/agent/legacyUiParity.test.ts` がこの表と `toolDefinitions.ts` を突き合わせて機械検査する。人手のチェックリストや別ファイルへの複製は作らない（§4.1・9.0）。
+§3.1 の17件と1:1対応する(#17は2026-08-25の当初監査より後に追加された機能。§3.1参照)。**この表が S0（可視化）の唯一の判定台帳**であり、`src/api/admin/agent/legacyUiParity.test.ts` がこの表と `toolDefinitions.ts` を突き合わせて機械検査する。人手のチェックリストや別ファイルへの複製は作らない（§4.1・9.0）。
 
 「参照」列の値は以下のいずれかのみ:
 - `` `tool:<name>` `` — その機能がツール `<name>`（複数ある場合は `tool:a,b`）で実行可能。`<name>` は `toolDefinitions.ts` の `ADMIN_AGENT_TOOLS` に実在すること
@@ -522,8 +525,6 @@ handoff は出るが、店主はチャットを離れる。離れた先で「何
 | 15 | ご利用状況・お支払い | `tool:get_billing_summary` |
 | 16 | 集計期間90日 | `tool:get_analytics_summary,get_conversion_summary` |
 | 17 | プラン変更・支払いカード登録 | `tool:change_my_plan,start_billing_checkout` |
+| 18 | ページ除外設定の自己設定 | `tool:update_excluded_page_patterns` |
 
-現在地（2026-09-02、CP-3完了時点）: `tool:` 14 / `handoff:` 0 / `direct` 3 / `pending` 0。**17件全ての実装が完了**（`handoff:` が0件になった）。#17(プラン変更・支払いカード登録)はD2改訂(上記§7)により新設した行で、要件定義§3.1の当初16件には含まれない(D2改訂自体が要件の追加)。
-
-★別ブランチ `feature/widget-page-exclusion`(commit 515bc425)が独立に17件目(別機能)を追加している★
-このブランチとマージする際は、両方の行を残し(#17が重複するため片方を#18に採番し直す)、`legacyUiParity.test.ts` の行数検査を実際の行数(18)に合わせて更新すること。どちらかを削らない。W3-4(#11新規作成ウィザード)は新規ツール `create_avatar_config` を追加した — 旧UIウィザード(全6ステップ)をそのまま写像せず、見た目に関わる意思決定(種別・性別/年代/服装 等)だけを会話で受け取り、既存の `avatar_adopted` カードに合流させる(画像生成・声の用意はW3-1〜W3-3の既存フローがそのまま使える)。カードに引き継いだ見た目の意思決定は `generateAvatarCandidates`/`generatePremiumAvatarCandidate` が `buildAvatarPrompt` への入力として使い、`adopt_avatar_preset` 由来のカード(意思決定を持たない)は従来どおり人物/bust/smile/simple の既定のまま変わらない。
+現在地（2026-09-02、CP-3 + feature/widget-page-exclusion 統合時点）: `tool:` 15 / `handoff:` 0 / `direct` 3 / `pending` 0。**18件全ての実装が完了**（`handoff:` が0件になった）。#17(プラン変更・支払いカード登録)はD2改訂(上記§7)により新設した行で、要件定義§3.1の当初16件には含まれない(D2改訂自体が要件の追加)。#18(ページ除外設定)は別ブランチ `feature/widget-page-exclusion`(commit 515bc425)が独立に追加した機能で、rebase時に#17との番号重複を解消するため#18へ採番し直した。W3-4(#11新規作成ウィザード)は新規ツール `create_avatar_config` を追加した — 旧UIウィザード(全6ステップ)をそのまま写像せず、見た目に関わる意思決定(種別・性別/年代/服装 等)だけを会話で受け取り、既存の `avatar_adopted` カードに合流させる(画像生成・声の用意はW3-1〜W3-3の既存フローがそのまま使える)。カードに引き継いだ見た目の意思決定は `generateAvatarCandidates`/`generatePremiumAvatarCandidate` が `buildAvatarPrompt` への入力として使い、`adopt_avatar_preset` 由来のカード(意思決定を持たない)は従来どおり人物/bust/smile/simple の既定のまま変わらない。

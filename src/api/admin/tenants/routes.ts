@@ -20,6 +20,7 @@ import { syncSubscriptionForTenant, needsBillingAttention, type SubscriptionSync
 import { changeTenantPlan, computeFeatureRevocationOnDowngrade } from "../../../lib/billing/changeTenantPlan";
 import { deriveOnboardingStage, type OnboardingStageStatus } from "../agent/onboardingStage";
 import { isValidOriginPattern } from "../../middleware/originCheck";
+import { isValidExcludedPagePattern } from "../../../lib/excludedPagePattern";
 import { purgeTenantChatData } from "../chat-history/retentionRepository";
 
 // free_ad(starterより下の最下段。広告原資の無料プラン)と
@@ -122,21 +123,15 @@ const allowedOriginsSchema = z
 
 // 許可ドメイン内でも特定ページではウィジェットを出したくない、というテナント自己設定。
 // allowedOriginsSchema と同じ理由(super_admin用とclient_admin自己申告用で片方だけ緩い
-// 状態を作らない)で単一インスタンスを共有する。
-// 判定本体は public/widget.js の matchPathnameGlob が window.location.pathname に対して
-// 行う(クエリ/フラグメントはpathnameに載らない)ため、?や#を含む値は「保存できたが
-// 絶対に一致しない」設定になってしまう。ここで先に弾く。
+// 状態を作らない)で単一インスタンスを共有する。判定本体は isValidExcludedPagePattern
+// (src/lib/excludedPagePattern.ts)に置き、チャットツール側(actionExecutor.ts)とも
+// 同じ定義を使う(allowed_originsのisValidOriginPatternと同じパターン)。
 const excludedPagePatternsSchema = z
   .array(
     z
       .string()
-      .min(1)
-      .max(200)
-      .refine((v) => v.startsWith("/"), {
-        message: "パスは / から始めてください（例: /cart, /products/*, /blog/**）",
-      })
-      .refine((v) => !v.includes("?") && !v.includes("#"), {
-        message: "クエリ文字列(?)やフラグメント(#)は指定できません（パスのみ）",
+      .refine(isValidExcludedPagePattern, {
+        message: "パスは / から始め、?や#を含まない200文字以内の形式で指定してください（例: /cart, /products/*, /blog/**）",
       })
   )
   .max(20)

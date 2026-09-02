@@ -29,6 +29,7 @@ CLIは新セッション開始時に以下を確認・報告する（省略禁�
 3. **Partner Friendly** — No jargon. Every error = kind message. Every action = success feedback.
 
 ## チャットUI / 管理エージェント
+**テナント向け機能の「UI/UX」は CopilotUI(`/copilot-preview`)を指す。** 旧admin-ui(`/admin/*`)への実装のみで完了としない(2026-08-25に旧UI→CopilotUI未反映16件を解消したプロジェクトの再発防止。詳細は `docs/COPILOT_UI_PARITY.md`)。
 詳細は配下の CLAUDE.md を参照: `src/api/admin/CLAUDE.md`（認可・SQL・ツール追加手順・計測）/ `admin-ui/CLAUDE.md`（面の役割分担・禁止事項・テスト）
 
 ## Definition of Done
