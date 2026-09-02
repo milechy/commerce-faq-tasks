@@ -175,6 +175,16 @@ export const FLUX_PRO_COST_PER_IMAGE_USD = Number(process.env.FLUX_PRO_COST_PER_
 export const LEMONSLICE_AVATAR_REGISTRATION_COST_USD =
   Number(process.env.LEMONSLICE_AVATAR_REGISTRATION_COST_USD ?? '0') || 0;
 
+/**
+ * A2A-0i: LiveKit room-token発行イベントの計上に使う model のセンチネル値。
+ * livekitTokenRoutes.ts（書き込み）と billingHealthCheck.ts の固定費クォータ監視
+ * （読み取り）の唯一の出どころ。usage_logs.model は本来LLMモデル名の列だが、
+ * このイベントはLLM呼び出しを伴わない（inputTokens/outputTokens=0固定・billable=false）ため
+ * 新しい列を増やさずに既存列を識別子として流用する。normalizeModelKey は未知の
+ * モデル名を0コストとして安全に扱う（LLM_COSTSに存在しないため）。
+ */
+export const LIVEKIT_ROOM_TOKEN_MODEL = 'livekit-room-token';
+
 export interface UsageRecord {
   model: string;
   inputTokens: number;

@@ -19,6 +19,8 @@ import type { AuthedRequest } from "../../agent/http/authMiddleware";
 import { logger } from '../../lib/logger';
 import { queryTenantPlan, planHasFeature } from "../../lib/billing/planFeatures";
 import { resolveBillingAccess, blocksPaidFeature } from "../../lib/billing/suspensionGate";
+import { trackUsage } from "../../lib/billing/usageTracker";
+import { LIVEKIT_ROOM_TOKEN_MODEL } from "../../lib/billing/costCalculator";
 
 // ─── LiveKit JWT 生成 ─────────────────────────────────────────────────────────
 
@@ -267,6 +269,23 @@ export function registerLiveKitTokenRoutes(
       if (shouldDispatch) {
         dispatchAgentToRoom(livekitUrl, apiKey, apiSecret, roomName, verifiedAvatarConfigId ?? undefined)
           .catch(err => logger.error("[livekitTokenRoutes] dispatchAgentToRoom error:", err));
+
+        // A2A-0i: LiveKit($50/月固定費)の消費量計測。実際に roomClient.createRoom が
+        // 呼ばれる(=LiveKit側の課金対象イベントが発生する)のは shouldDispatch=true の
+        // ときだけなので、ここでだけ計上する。avatar_session_ms（agent.py のセッション
+        // 終了時コールバック経由）とは別経路の独立した計測で、こちらはリクエストの
+        // 同期パスで確実に呼ばれるためagent.py側のfire-and-forget/クラッシュ時の
+        // 計上漏れの影響を受けない。billable=falseで明示（テナント請求には使わない、
+        // 社内の原価/枠監視のみが目的）。
+        trackUsage({
+          tenantId,
+          requestId: `livekit-room-${crypto.randomUUID()}`,
+          model: LIVEKIT_ROOM_TOKEN_MODEL,
+          inputTokens: 0,
+          outputTokens: 0,
+          featureUsed: "avatar",
+          billable: false,
+        });
       } else {
         logger.info(`[livekitTokenRoutes] pre_dispatch=false, connect=false — skipping agent dispatch for tenant: ${tenantId}`);
       }

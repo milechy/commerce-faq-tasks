@@ -21,7 +21,9 @@ function barColor(percentage: number): string {
   return "#4ade80";
 }
 
-function QuotaBar({
+// A2A-0i: /admin/monitoring の固定費(LemonSlice/LiveKit)クォータカードからも
+// 同じ「用済み/込み枠」バーを再利用する(表示ロジックの唯一の出どころ)。
+export function QuotaBar({
   label, used, included, unit, overage, overageUnit,
 }: {
   label: string;
