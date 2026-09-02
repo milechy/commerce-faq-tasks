@@ -2621,7 +2621,8 @@
       // 要件Rj/F5: AI回答テキストと構造的に分離したDOM(禁止40)。
       // bubble/actions/ts の兄弟要素として追加し、textContentの一部にしない。
       if (msg.role === 'assistant' && !msg.system && _answerFeedbackEnabled) {
-        inner.appendChild(buildFeedbackRow(msg.id));
+        // 是正4-2: 実IDがあれば優先。無ければ従来通り msg.id (requestId等)。
+        inner.appendChild(buildFeedbackRow(msg.messageId || msg.id));
       }
       var ts = el('div', { className: 'ts' });
       ts.textContent = formatTime(msg.timestamp);
@@ -3039,6 +3040,11 @@
 
         var assistantMsg = {
           id: (json.data && json.data.id) || generateMsgId(),
+          // 是正4-2(GID 1218086286324510): サーバが返す実 chat_messages.id。
+          // 👎 の message_ref にこれを使うと回答と厳密に紐づく(buildFeedbackRow参照)。
+          // 未対応の旧サーバ/保存失敗時は無い(undefined)ため、その場合は
+          // 従来通り msg.id (requestId) にフォールバックする。
+          messageId: (json.data && typeof json.data.message_id === 'string') ? json.data.message_id : undefined,
           role: 'assistant',
           content: assistantContent,
           actions:

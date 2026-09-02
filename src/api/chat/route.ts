@@ -567,6 +567,53 @@ export function createChatHandler(logger: Logger) {
         dataSharedExternally = undefined;
       }
 
+      // Phase38+/2026-08-25(P10): ナレッジギャップ検出は detectGap(gapDetector.ts)
+      // に一本化する(第2の起票経路を作らない)。no_rag/low_confidence は
+      // synthesisTool.ts の detectGap 呼び出しが同じ gapSignal で既に判定済みのため、
+      // ここで同条件を再検出すると同一メッセージの frequency を二重加算してしまう
+      // (upsertGap は7日以内ILIKE一致の既存行を見つけて+1する)。
+      // ここで拾うのは「ヒットはあり信頼度も十分だったのに、LLMの応答文面が
+      // 未回答を示している」ケースのみ — synthesisTool.ts 側では検出できない
+      // 固有の信号であり、fallback として記録する。
+      const gapSignal = result.meta?.gapSignal;
+
+      // Phase38: アシスタント応答をDBに保存
+      // Phase68: ragSources を専用カラムに記録してナレッジCV影響度集計に利用する
+      // 是正4-2(GID 1218086286324510): 👎 の message_ref を実メッセージに厳密に
+      // 紐づけるため(eventRoutes.ts bridgeAnswerFeedbackToGaps参照)、採番された
+      // chat_messages.id を応答に含める必要がある。そのためレスポンス送信前に
+      // await する(以前はレスポンス後のfire-and-forgetだった)。保存に失敗しても
+      // レスポンス自体は止めない(fail-safe: message_id を省略するだけ。widget側は
+      // このフィールドが無ければ従来通りの近似にフォールバックする)。
+      let assistantMessageId: string | undefined;
+      try {
+        assistantMessageId = await saveMessage({
+          tenantId,
+          sessionId,
+          role: "assistant",
+          content,
+          metadata: {
+            model: (result as any).meta?.route,
+            ragStats: (result as any).meta?.ragStats,
+            rag_hit_count: gapSignal?.hitCount ?? 0,
+            rag_top_score: gapSignal?.topScore ?? 0,
+            knowledge_gap: isKnowledgeGap(gapSignal) || isResponseGap(content),
+            // GID 1216978677398163 (PR-14): ルール効果測定(ruleEffect.ts)の母集団判定に使う
+            applied_rule_ids: result.appliedRuleIds ?? [],
+            ...(piiCheck.isPiiRoute
+              ? { piiRoute: true, piiReasons: piiCheck.reasons }
+              : {}),
+          },
+          ragSources: result.meta?.ragSources,
+          trafficSource,
+          promptVariantId: result.promptVariantId,
+          promptVariantName: result.promptVariantName,
+          visitorId: body.visitor_id || undefined,
+        });
+      } catch (err) {
+        logger.warn({ err }, "[chat-history] save assistant message failed");
+      }
+
       const chatMessage: ChatMessage = {
         id: requestId,
         role: "assistant",
@@ -580,6 +627,9 @@ export function createChatHandler(logger: Logger) {
         // Phase73: recommend ステージで productCard が設定されていれば転送
         ...(result.productCard ? { productCard: result.productCard } : {}),
         data_shared_externally: dataSharedExternally,
+        // 是正4-2(GID 1218086286324510): 保存できた場合のみ含める(追加フィールド、
+        // 既存レスポンス形は変更しない)。
+        ...(assistantMessageId ? { message_id: assistantMessageId } : {}),
       };
 
       logger.info(
@@ -603,15 +653,6 @@ export function createChatHandler(logger: Logger) {
 
       res.status(200).json(response);
 
-      // Phase38+/2026-08-25(P10): ナレッジギャップ検出は detectGap(gapDetector.ts)
-      // に一本化する(第2の起票経路を作らない)。no_rag/low_confidence は
-      // synthesisTool.ts の detectGap 呼び出しが同じ gapSignal で既に判定済みのため、
-      // ここで同条件を再検出すると同一メッセージの frequency を二重加算してしまう
-      // (upsertGap は7日以内ILIKE一致の既存行を見つけて+1する)。
-      // ここで拾うのは「ヒットはあり信頼度も十分だったのに、LLMの応答文面が
-      // 未回答を示している」ケースのみ — synthesisTool.ts 側では検出できない
-      // 固有の信号であり、fallback として記録する。
-      const gapSignal = result.meta?.gapSignal;
       const hasConfidentHit = (gapSignal?.hitCount ?? 0) > 0 && (gapSignal?.topScore ?? 0) >= 0.3;
       if (isResponseGap(content) && hasConfidentHit) {
         detectGap({
@@ -625,34 +666,6 @@ export function createChatHandler(logger: Logger) {
           logger.warn({ err }, "[knowledge-gap] detect failed")
         );
       }
-
-      // Phase38: アシスタント応答をDBに保存（fire-and-forget、レスポンス後）
-      // Phase68: ragSources を専用カラムに記録してナレッジCV影響度集計に利用する
-      saveMessage({
-        tenantId,
-        sessionId,
-        role: "assistant",
-        content,
-        metadata: {
-          model: (result as any).meta?.route,
-          ragStats: (result as any).meta?.ragStats,
-          rag_hit_count: gapSignal?.hitCount ?? 0,
-          rag_top_score: gapSignal?.topScore ?? 0,
-          knowledge_gap: isKnowledgeGap(gapSignal) || isResponseGap(content),
-          // GID 1216978677398163 (PR-14): ルール効果測定(ruleEffect.ts)の母集団判定に使う
-          applied_rule_ids: result.appliedRuleIds ?? [],
-          ...(piiCheck.isPiiRoute
-            ? { piiRoute: true, piiReasons: piiCheck.reasons }
-            : {}),
-        },
-        ragSources: result.meta?.ragSources,
-        trafficSource,
-        promptVariantId: result.promptVariantId,
-        promptVariantName: result.promptVariantName,
-        visitorId: body.visitor_id || undefined,
-      }).catch((err) =>
-        logger.warn({ err }, "[chat-history] save assistant message failed")
-      );
 
       // fire-and-forget: 使用量記録（APIレスポンスをブロックしない）
       // Subtask 3 構造修正: 回答経路（searchAgent/orchestrator）が chat モデルの実トークンを
