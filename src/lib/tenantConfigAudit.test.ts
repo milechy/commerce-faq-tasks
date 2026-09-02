@@ -231,6 +231,69 @@ describe("findUnmatchableOrigins — ブラウザOriginと決して一致しな�
   });
 });
 
+// ───────────────────────────────────────────────────────────────────────────
+// A2A-0hj テスト強化(2026-09-02): admin-ui/src/lib/tenantOriginWarning.test.ts と
+// 同じ入力バリエーションで、判定基準が両実装で揃っていることを固定する。
+// ───────────────────────────────────────────────────────────────────────────
+describe("isR2cOwnDomainOnly / isR2cOwnDomainMixed — 誤検出を避ける(紛らわしい別ドメイン)", () => {
+  it.each([
+    ["evil.comにr2c.bizが前置", "https://r2c.biz.evil.com"],
+    ["myr2c.biz(接頭辞違い)", "https://myr2c.biz"],
+    ["admin.r2c.bizのサブドメイン扱い別ホスト", "https://foo.admin.r2c.biz"],
+  ])("%s は R2C自身のドメインとして検出しない(誤検出でユーザーを止めない)", (_name, origin) => {
+    expect(isR2cOwnDomainOnly([origin])).toBe(false);
+    expect(isR2cOwnDomainMixed([origin, "https://shop.example.com"])).toBe(false);
+  });
+});
+
+describe("isR2cOwnDomainOnly — 現状の実装が拾えない形(検出漏れ、報告目的で固定)", () => {
+  // このスクリプト(SCRIPTS/audit-tenant-config.ts)はDBの値をそのまま読むため、
+  // admin-ui のhttps://始まりバリデーションを経由しない手動投入データが対象になりうる。
+  it("スキーム無し(admin.r2c.biz)はR2C自身のドメインとして検出されない", () => {
+    expect(isR2cOwnDomainOnly(["admin.r2c.biz"])).toBe(false);
+  });
+
+  it("http://(非https)はR2C自身のドメインとして検出されない", () => {
+    expect(isR2cOwnDomainOnly(["http://admin.r2c.biz"])).toBe(false);
+  });
+
+  it("ワイルドカード(https://*.r2c.biz)はR2C自身のドメインとして検出されない", () => {
+    expect(isR2cOwnDomainOnly(["https://*.r2c.biz"])).toBe(false);
+  });
+});
+
+describe("isR2cOwnDomainOnly / isR2cOwnDomainMixed — 重複エントリ", () => {
+  it("R2C自身のドメインが重複していても、実ドメインが1件でもあればmixedとして検出する", () => {
+    expect(
+      isR2cOwnDomainMixed([
+        "https://admin.r2c.biz",
+        "https://admin.r2c.biz",
+        "https://api.r2c.biz",
+        "https://shop.example.com",
+      ])
+    ).toBe(true);
+  });
+
+  it("R2C自身のドメインの重複のみ(実ドメイン無し)はonlyとして検出する(mixedではない)", () => {
+    expect(isR2cOwnDomainOnly(["https://admin.r2c.biz", "https://admin.r2c.biz"])).toBe(true);
+    expect(isR2cOwnDomainMixed(["https://admin.r2c.biz", "https://admin.r2c.biz"])).toBe(false);
+  });
+});
+
+describe("auditTenantConfig — 4状態(emptyOrigins/r2cOwnDomainOnly/r2cOwnDomainMixed/問題なし)は排他的", () => {
+  it.each<[string, string[], "empty" | "only" | "mixed" | "none"]>([
+    ["空配列", [], "empty"],
+    ["R2C自身のみ複数", ["https://admin.r2c.biz", "https://api.r2c.biz"], "only"],
+    ["R2C自身1件+実ドメイン1件", ["https://admin.r2c.biz", "https://shop.example.com"], "mixed"],
+    ["実ドメインのみ", ["https://shop.example.com"], "none"],
+  ])("%s → 対応する1状態のみが true になる", (_name, allowedOrigins, expected) => {
+    const issues = auditTenantConfig({ allowedOrigins, systemPrompt: "x" });
+    expect(issues.emptyOrigins).toBe(expected === "empty");
+    expect(issues.r2cOwnDomainOnly).toBe(expected === "only");
+    expect(issues.r2cOwnDomainMixed).toBe(expected === "mixed");
+  });
+});
+
 describe("auditTenantConfig / hasAnyIssue — 一致し得ない登録の配線", () => {
   it("表記揺れの登録が unmatchableOrigins に出て、hasAnyIssue が true になる", () => {
     const issues = auditTenantConfig({

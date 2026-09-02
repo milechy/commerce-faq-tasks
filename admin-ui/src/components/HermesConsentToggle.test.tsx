@@ -257,4 +257,68 @@ describe("HermesConsentToggle", () => {
     const btn = screen.getByRole("button") as HTMLButtonElement;
     expect(btn.disabled).toBe(false);
   });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // A2A-0hj テスト強化(2026-09-02): resolveShare / handleToggle の判定ロジック自体は
+  // 変更しない。API応答が壊れている場合にこのコンポーネントが例外を投げずfail-safe
+  // (未参加表示)に倒れることだけを固定する。
+  // ─────────────────────────────────────────────────────────────────────────
+  it("features がAPI応答で文字列(壊れた形)のとき、例外を投げずfail-safe(未参加)表示になる", async () => {
+    vi.mocked(authFetch).mockReturnValueOnce(mockOk({ plan: "growth", features: "corrupted" }));
+    render(<HermesConsentToggle />);
+
+    await waitFor(() => {
+      expect(screen.getByText("⏸️ 未参加")).toBeTruthy();
+    });
+    const btn = screen.getByRole("button") as HTMLButtonElement;
+    expect(btn.disabled).toBe(false); // free_ad強制ではないので操作は可能
+  });
+
+  it("features がAPI応答で数値(壊れた形)のとき、例外を投げずfail-safe(未参加)表示になる", async () => {
+    vi.mocked(authFetch).mockReturnValueOnce(mockOk({ plan: "growth", features: 42 }));
+    render(<HermesConsentToggle />);
+
+    await waitFor(() => {
+      expect(screen.getByText("⏸️ 未参加")).toBeTruthy();
+    });
+  });
+
+  it("features がAPI応答でnullのとき、例外を投げずfail-safe(未参加)表示になる", async () => {
+    vi.mocked(authFetch).mockReturnValueOnce(mockOk({ plan: "growth", features: null }));
+    render(<HermesConsentToggle />);
+
+    await waitFor(() => {
+      expect(screen.getByText("⏸️ 未参加")).toBeTruthy();
+    });
+  });
+
+  it("連打: 保存中に同じボタンをもう一度クリックしても二重にPATCHが飛ばない", async () => {
+    mockInitialFetch(false);
+    let resolvePatch!: (v: Response) => void;
+    vi.mocked(authFetch).mockReturnValueOnce(
+      new Promise<Response>((r) => {
+        resolvePatch = r;
+      }),
+    );
+    render(<HermesConsentToggle />);
+
+    const btn = (await screen.findByRole("button")) as HTMLButtonElement;
+    await waitFor(() => expect(btn.disabled).toBe(false));
+
+    fireEvent.click(btn); // 1回目: 楽観的更新 + PATCH開始、以後 saving=true でdisabled
+    expect(btn.disabled).toBe(true);
+    fireEvent.click(btn); // 2回目(連打): disabled中なのでhandleToggleの先頭で無視されるはず
+    fireEvent.click(btn); // 3回目(連打)
+
+    resolvePatch({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ features: {} }),
+    } as Response);
+
+    await waitFor(() => expect(btn.disabled).toBe(false));
+
+    // 初期GET 1回 + PATCH 1回 = 合計2回。連打分が追加でPATCHを飛ばしていないこと。
+    expect(vi.mocked(authFetch)).toHaveBeenCalledTimes(2);
+  });
 });
