@@ -17,6 +17,9 @@ export interface OrchestratorInput {
     debug?: boolean
     /** Phase57: Widget の visitor_id */
     visitorId?: string
+    /** Phase69-2 [外1] GID 1218086284362759: 検索結果から除外するエントリID一覧
+     * (リクエスト excluded_ids と tenants.default_excluded_ids のマージ済み) */
+    excludedIds?: string[]
   }
 }
 
@@ -60,6 +63,7 @@ export async function runDialogOrchestrator(
   const { plan, options, tenantId, sessionId } = input
   const visitorId = options?.visitorId
   const debug = options?.debug ?? false
+  const excludedIds = options?.excludedIds
 
   // 1) Clarification branch
   if (plan.needsClarification) {
@@ -112,6 +116,7 @@ export async function runDialogOrchestrator(
     tenantId,
     visitorId,
     sessionId,
+    excludedIds,
   })
 
   // 4) Return orchestrated result

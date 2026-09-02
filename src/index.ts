@@ -28,6 +28,7 @@ import { businessHealthHandler } from "./lib/healthBusiness";
 import { runDialogTurn } from "./agent/dialog/dialogAgent";
 import { initAuthMiddleware } from "./agent/http/authMiddleware";
 import { createAgentSearchHandler } from "./agent/http/agentSearchRoute";
+import { fetchDefaultExcludedIds, mergeExcludedIds } from "./lib/defaultExcludedIds";
 import { createCorsMiddleware } from "./lib/cors";
 import { securityHeadersMiddleware } from "./lib/headers";
 import { createRateLimitMiddleware } from "./lib/rate-limit";
@@ -415,12 +416,30 @@ app.post("/dialog/turn", ...apiStack, async (req, res) => {
         useLlmPlanner: z.boolean().optional(),
         personaTags: z.array(z.string()).optional(),
         debug: z.boolean().optional(),
+        // Phase69-2 [外1] GID 1218086284362759: agentSearchRoute.ts の
+        // AgentSearchSchema.excluded_ids と制約を完全に揃える（最大500件）。
+        excluded_ids: z.array(z.string()).max(500).optional(),
       })
+      // 根本対策: 未知キーは黙って strip せず 400 で明示的に拒否する
+      // (excluded_ids が長らく無言で捨てられていた事故の再発防止)。
+      .strict()
       .optional(),
   });
 
   const parsed = schemaIn.safeParse(req.body ?? {});
   if (!parsed.success) {
+    // options 配下の検証エラー（excluded_ids の制約違反・未知キー混入を含む）は
+    // docs/PHASE69_2_API_SPEC.md §2.3 の仕様どおり invalid_excluded_ids で返す。
+    // それ以外（message 欠落など）は従来どおり invalid_request のまま。
+    const touchesOptions = parsed.error.issues.some(
+      (issue) => issue.path[0] === "options"
+    );
+    if (touchesOptions) {
+      return res.status(400).json({
+        error: "invalid_excluded_ids",
+        details: parsed.error.flatten(),
+      });
+    }
     return res.status(400).json({
       error: "invalid_request",
       details: parsed.error.issues,
@@ -429,7 +448,26 @@ app.post("/dialog/turn", ...apiStack, async (req, res) => {
 
   try {
     const tenantId = (req as AuthedRequest).tenantId;
-    const turn = await runDialogTurn({ ...parsed.data, tenantId });
+
+    // Phase69-2 [外1] GID 1218086284362759: agentSearchRoute.ts:93-95 と同じ形で
+    // ルートハンドラ側だけでテナントの default_excluded_ids をリクエスト側の
+    // excluded_ids とマージする。runDialogTurn（共有関数、/api/chat からも呼ばれる）
+    // の内部に置くと /api/chat 経由の全トラフィックにも無条件のDB往復が発生して
+    // しまうため、HTTP 直エンドポイントである /dialog/turn 側だけで行う。
+    const dbDefaultExcludedIds = await fetchDefaultExcludedIds(tenantId ?? "");
+    const mergedExcludedIds = mergeExcludedIds(
+      parsed.data.options?.excluded_ids,
+      dbDefaultExcludedIds
+    );
+
+    const turn = await runDialogTurn({
+      ...parsed.data,
+      tenantId,
+      options: {
+        ...parsed.data.options,
+        excluded_ids: mergedExcludedIds,
+      },
+    });
 
     // 課金計上（収益監査ギャップ [P0]）: /dialog/turn は runDialogTurn で LLM 合成・
     // planner・OpenAI 埋め込みを実行するのに、これまで trackUsage を通っておらず
