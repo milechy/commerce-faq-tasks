@@ -862,11 +862,28 @@ describe('INSERT 失敗時のフォールバック条件', () => {
     ['57P01 (管理者による切断)', '57P01'],
     ['23505 (一意制約違反)', '23505'],
     ['53300 (接続数超過)', '53300'],
+    // [A2A-1a]: migration_agent_search_feature.sql が未適用のまま
+    // featureUsed:'agent_search' を書くと、usage_logs_feature_used_check の
+    // CHECK制約(23514=check_violation)でINSERTが落ちる実際のケース。
+    // 42703(列が無い)専用のフォールバックには該当しないため、ここでも
+    // 旧カラムINSERTへは進まない(進むと feature_used 列自体を落とした
+    // INSERTを試みることになり、意味が変わってしまう)。
+    ['23514 (CHECK制約違反 — agent_search migration未適用を再現)', '23514'],
     ['コード無しの汎用エラー', undefined],
   ])('42703 以外(%s)では旧カラムINSERTを試みない', async (_label, code) => {
     const q = poolFailingInsert(code as string | undefined);
     await run(q, `fb-${code ?? 'nocode'}`);
     expect(legacyInserts(q)).toHaveLength(0);
+  });
+
+  // [A2A-1a] 本番未適用の migration_agent_search_feature.sql: CHECK制約違反で
+  // INSERTが失敗しても、_insertUsageLog はエラーをログするだけで例外を投げない
+  // (trackUsage は setImmediate 経由の fire-and-forget なので、ここで投げても
+  // どのみちAPIレスポンスには伝播しないが、呼び出し元が意図せず unhandled
+  // rejection を積み上げないことを固定する)。
+  it('23514(CHECK制約違反)でも例外を投げずに終わる(計上は失われるがAPIを巻き込まない)', async () => {
+    const q = poolFailingInsert('23514');
+    await expect(run(q, 'fb-23514')).resolves.toBeUndefined();
   });
 
   it('42703 のときだけ旧カラムINSERTに1回だけフォールバックする', async () => {
