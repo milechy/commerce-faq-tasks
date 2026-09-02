@@ -12,6 +12,13 @@ export interface AutoTuningCandidate {
   description: string;
   suggestedAction: string;
   data: Record<string, unknown>;
+  /**
+   * 重複通知防止に使う安定識別子。description は件数や集計値を埋め込んだ
+   * 人が読む文面なので同一性判定には使えない(値が動くたびに別物と判定されて
+   * しまう)。rule / experimentId / principle など、提案の元になった対象そのもの
+   * を指すキーをここに入れる。
+   */
+  dedupKey: string;
 }
 
 /**
@@ -45,6 +52,7 @@ export async function detectRepeatedJudgeSuggestions(
       description: `AIが${r.cnt}回同じ提案をしています`,
       suggestedAction: r.rule,
       data: { count: Number(r.cnt), rule: r.rule },
+      dedupKey: `judge_repeated:${r.rule}`,
     }));
   } catch {
     return [];
@@ -89,6 +97,7 @@ export async function detectABWinners(
           description: `A/Bテスト「${e.name}」でVariant ${winner}が勝利`,
           suggestedAction: `Variant ${winner}を適用`,
           data: { experimentId: e.id, rateA, rateB, winner },
+          dedupKey: `ab_winner:${e.id}`,
         };
       });
   } catch {
@@ -124,6 +133,7 @@ export async function detectTopPrinciples(
       description: `「${r.principle}」が${r.total}回のCVに貢献（平均温度感${Math.round(Number(r.avg_temp ?? 0))}）`,
       suggestedAction: `「${r.principle}」をチューニングルールで優先設定`,
       data: { principle: r.principle, count: Number(r.total), avgTemp: Number(r.avg_temp ?? 0) },
+      dedupKey: `effectiveness_top:${r.principle}`,
     }));
   } catch {
     return [];
@@ -146,11 +156,13 @@ export async function runAutoTuningCheck(tenantId: string): Promise<void> {
   const candidates = [...judgeResults, ...abResults, ...principleResults];
 
   for (const candidate of candidates) {
-    // 重複通知防止: type + description の組み合わせ
+    // 重複通知防止: type + dedupKey(rule/experimentId/principle などの安定識別子)
+    // の組み合わせ。description は件数・スコアを埋め込んだ人が読む文面のため、
+    // それをキーにすると値が動くたびに別物と判定されて再通知されてしまう。
     const alreadyExists = await notificationExists(
       'auto_tuning_suggestion',
-      'description',
-      candidate.description,
+      'dedup_key',
+      candidate.dedupKey,
     );
     if (alreadyExists) continue;
 
@@ -163,6 +175,7 @@ export async function runAutoTuningCheck(tenantId: string): Promise<void> {
       link: '/admin/conversion',
       metadata: {
         candidate_type: candidate.type,
+        dedup_key: candidate.dedupKey,
         description: candidate.description,
         suggested_action: candidate.suggestedAction,
         ...candidate.data,

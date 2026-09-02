@@ -58,6 +58,16 @@ describe('detectRepeatedJudgeSuggestions', () => {
     const result = await detectRepeatedJudgeSuggestions('tenant-a');
     expect(result[0]!.description).toContain('3');
   });
+
+  it('cnt が増えて description が変わっても dedupKey は同じ rule を指す(重複通知防止が壊れない)', async () => {
+    mockPool([{ rows: [{ rule: 'ルールX', cnt: 3 }] }]);
+    const first = await detectRepeatedJudgeSuggestions('tenant-a');
+    mockPool([{ rows: [{ rule: 'ルールX', cnt: 9 }] }]);
+    const second = await detectRepeatedJudgeSuggestions('tenant-a');
+
+    expect(first[0]!.description).not.toBe(second[0]!.description);
+    expect(first[0]!.dedupKey).toBe(second[0]!.dedupKey);
+  });
 });
 
 describe('detectABWinners', () => {
