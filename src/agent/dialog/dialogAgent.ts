@@ -18,6 +18,7 @@ import {
 } from "./salesContextStore";
 import type { DialogMessage, DialogTurnInput, DialogTurnResult, ProductCard } from "./types";
 import { pool } from "../../lib/db";
+import { fetchDefaultExcludedIds, mergeExcludedIds } from "../../lib/defaultExcludedIds";
 
 // GID 1216970103691946 (PR-11): SalesFlow の段階(clarify→propose→recommend→close)を
 // 次ターンへ引き継ぐかどうかのテナント単位フラグ。CLAUDE.md 禁止35(会話の振る舞いを
@@ -191,6 +192,14 @@ export async function runDialogTurn(
     });
   }
 
+  // 1.6) Phase69-2 [外1] GID 1218086284362759: agentSearchRoute.ts と同じく、
+  // テナントの default_excluded_ids をリクエスト側の excluded_ids とマージする。
+  const dbDefaultExcludedIds = await fetchDefaultExcludedIds(effectiveTenantId);
+  const mergedExcludedIds = mergeExcludedIds(
+    options?.excluded_ids,
+    dbDefaultExcludedIds
+  );
+
   // 2) Orchestrator に実行を委譲
   const orchestrated = await runDialogOrchestrator({
     plan: multiStepPlan,
@@ -201,6 +210,7 @@ export async function runDialogTurn(
       topK: options?.topK,
       debug: options?.debug,
       visitorId: options?.visitorId,
+      excludedIds: mergedExcludedIds,
     },
   });
 

@@ -41,6 +41,17 @@ jest.mock("./salesContextStore", () => ({
   updateSalesSessionMeta: jest.fn(),
 }));
 
+// Phase69-2 [外1] GID 1218086284362759: fetchDefaultExcludedIds のみ DB 呼び出しを
+// モックし、mergeExcludedIds は実実装をそのまま使う(重複除去等のロジックは
+// src/lib/defaultExcludedIds.test.ts で既に検証済みのため、ここで複製しない)。
+jest.mock("../../lib/defaultExcludedIds", () => {
+  const actual = jest.requireActual("../../lib/defaultExcludedIds");
+  return {
+    ...actual,
+    fetchDefaultExcludedIds: jest.fn(),
+  };
+});
+
 import { runDialogTurn } from "./dialogAgent";
 import { runDialogOrchestrator } from "../flow/dialogOrchestrator";
 import { planMultiStepQuery } from "../flow/multiStepPlanner";
@@ -49,12 +60,14 @@ import { detectSalesIntents } from "../orchestrator/sales/salesIntentDetector";
 import { pool } from "../../lib/db";
 import { getSessionHistory, appendToSessionHistory } from "./contextStore";
 import { getSalesSessionMeta, updateSalesSessionMeta } from "./salesContextStore";
+import { fetchDefaultExcludedIds } from "../../lib/defaultExcludedIds";
 
 const mockOrchestrator = runDialogOrchestrator as jest.MockedFunction<typeof runDialogOrchestrator>;
 const mockPlanner = planMultiStepQuery as jest.MockedFunction<typeof planMultiStepQuery>;
 const mockSalesFlow = runSalesFlowWithLogging as jest.MockedFunction<typeof runSalesFlowWithLogging>;
 const mockDetectIntents = detectSalesIntents as jest.MockedFunction<typeof detectSalesIntents>;
 const mockPool = pool as unknown as { query: jest.Mock };
+const mockFetchDefaultExcludedIds = fetchDefaultExcludedIds as jest.MockedFunction<typeof fetchDefaultExcludedIds>;
 
 /** ベースとなる planner plan の戻り値 */
 const basePlan = {
@@ -90,6 +103,13 @@ beforeEach(() => {
   // 商品メタクエリを検証する場合は、このデフォルトの後に自分の
   // mockResolvedValueOnce を積む(呼び出し順: フラグ読み取り→商品メタ)。
   mockPool.query.mockResolvedValue({ rows: [{ enabled: null }] });
+  // Phase69-2 [外1]: 既定は tenants.default_excluded_ids なし。
+  mockFetchDefaultExcludedIds.mockResolvedValue([]);
+  mockSalesFlow.mockResolvedValue({
+    nextStage: undefined,
+    prompt: undefined,
+    meta: {} as any,
+  });
 });
 
 describe("runDialogTurn — Phase73 productCard", () => {
@@ -434,5 +454,70 @@ describe("runDialogTurn — tenantId の contextStore への伝播", () => {
 
     expect(mockGetHistory).toHaveBeenNthCalledWith(1, "tenant-y", "shared-session-id");
     expect(mockGetHistory).toHaveBeenNthCalledWith(2, "tenant-z", "shared-session-id");
+  });
+});
+
+// Phase69-2 [外1] GID 1218086284362759: /dialog/turn の options.excluded_ids が
+// 黙って捨てられていた事故の再発防止。runDialogTurn がテナントの
+// default_excluded_ids をマージして orchestrator に渡すところまでを検証する
+// (実際の検索フィルタリング自体は src/search/excludedIds.test.ts で検証済み)。
+describe("runDialogTurn — Phase69-2 [外1] excluded_ids 配線", () => {
+  it("options.excluded_ids を runDialogOrchestrator の options.excludedIds として渡す", async () => {
+    await runDialogTurn({
+      sessionId: "test-session-excluded-1",
+      tenantId: "tenant-a",
+      message: "返品ポリシーを教えて",
+      options: { excluded_ids: ["id-1", "id-2"] },
+    });
+
+    expect(mockFetchDefaultExcludedIds).toHaveBeenCalledWith("tenant-a");
+    expect(mockOrchestrator).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.objectContaining({
+          excludedIds: expect.arrayContaining(["id-1", "id-2"]),
+        }),
+      })
+    );
+  });
+
+  it("tenants.default_excluded_ids がある場合、リクエストの excluded_ids とマージして渡す", async () => {
+    mockFetchDefaultExcludedIds.mockResolvedValue(["default-1"]);
+
+    await runDialogTurn({
+      sessionId: "test-session-excluded-2",
+      tenantId: "tenant-a",
+      message: "送料について",
+      options: { excluded_ids: ["req-1"] },
+    });
+
+    const callArgs = mockOrchestrator.mock.calls[0]![0];
+    expect(callArgs.options?.excludedIds).toEqual(
+      expect.arrayContaining(["req-1", "default-1"])
+    );
+    expect(callArgs.options?.excludedIds).toHaveLength(2);
+  });
+
+  it("excluded_ids も default_excluded_ids も無い場合、options.excludedIds は undefined のまま渡る", async () => {
+    await runDialogTurn({
+      sessionId: "test-session-excluded-3",
+      tenantId: "tenant-a",
+      message: "こんにちは",
+    });
+
+    const callArgs = mockOrchestrator.mock.calls[0]![0];
+    expect(callArgs.options?.excludedIds).toBeUndefined();
+  });
+
+  it("excluded_ids 未指定でも default_excluded_ids だけで除外が適用される", async () => {
+    mockFetchDefaultExcludedIds.mockResolvedValue(["default-only"]);
+
+    await runDialogTurn({
+      sessionId: "test-session-excluded-4",
+      tenantId: "tenant-a",
+      message: "こんにちは",
+    });
+
+    const callArgs = mockOrchestrator.mock.calls[0]![0];
+    expect(callArgs.options?.excludedIds).toEqual(["default-only"]);
   });
 });

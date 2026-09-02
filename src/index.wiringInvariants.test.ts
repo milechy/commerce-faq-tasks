@@ -213,4 +213,44 @@ describe("src/index.ts 配線の不変条件（ソース構造検査）", () => 
       expect(source).toMatch(/import\s*\{[^}]*buildChatUsageTracking[^}]*\}\s*from\s*["']\.\/lib\/billing\/chatUsage["']/);
     });
   });
+
+  // [外1] GID 1218086284362759: /dialog/turn の options に excluded_ids が無く、
+  // Zod既定の strip で黙って捨てられていた（AVAS向け仕様書は実装確認済みと誤記）。
+  // 実際の safeParse 挙動は src/index.dialogTurnExcludedIds.test.ts が
+  // schemaIn 定義の生ソースを抽出して直接検証する（index.ts 丸ごと import 不可のため）。
+  // ここでは「そのテストが検査している対象の文字列」が実ソースからズレていないことを
+  // 固定する（抽出テストが古いコピーを検査し続ける事故を防ぐ）。
+  describe("/dialog/turn options.excluded_ids 配線 [外1]", () => {
+    function dialogTurnRouteBlock(): string {
+      const idx = firstIndexOf(/app\.post\(\s*["']\/dialog\/turn["']/);
+      return source.slice(idx, idx + 2500);
+    }
+
+    it("options スキーマに excluded_ids: z.array(z.string()).max(500).optional() を持つ（/agent.search と同一制約）", () => {
+      expect(dialogTurnRouteBlock()).toMatch(
+        /excluded_ids:\s*z\.array\(z\.string\(\)\)\.max\(500\)\.optional\(\)/
+      );
+    });
+
+    it("options が .strict() で未知キーを拒否する", () => {
+      const block = dialogTurnRouteBlock();
+      const optionsIdx = block.indexOf("options: z");
+      expect(optionsIdx).toBeGreaterThanOrEqual(0);
+      // options: z.object({...}).strict().optional() の並びで .strict() が
+      // .object の直後（.optional() より前）に来ていることを確認する。
+      const afterOptions = block.slice(optionsIdx, optionsIdx + 800);
+      expect(afterOptions).toMatch(/\.strict\(\)\s*\n?\s*\.optional\(\)/);
+    });
+
+    it("options 由来の検証エラーは invalid_excluded_ids + Zod flatten() で返す", () => {
+      const block = dialogTurnRouteBlock();
+      expect(block).toMatch(/error:\s*["']invalid_excluded_ids["']/);
+      expect(block).toMatch(/details:\s*parsed\.error\.flatten\(\)/);
+    });
+
+    it("options に無関係な検証エラー（message欠落等）は従来どおり invalid_request のまま", () => {
+      const block = dialogTurnRouteBlock();
+      expect(block).toMatch(/error:\s*["']invalid_request["']/);
+    });
+  });
 });
