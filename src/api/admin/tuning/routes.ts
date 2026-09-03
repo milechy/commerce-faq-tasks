@@ -413,9 +413,19 @@ export function registerTuningRoutes(app: Express): void {
     const sourceFilter: string | string[] | undefined =
       sourceValues.length > 1 ? sourceValues : sourceValues[0];
     const statusFilter = (req.query["status"] as string | undefined) || undefined;
+    // D8-2: 提案の種別。未指定なら listRules 側が 'behavior' に絞る
+    // (営業提案を FAQ チューニング一覧に混ぜない)。
+    // 未知の値は既定へ倒す — 任意文字列をそのまま SQL の等値比較に渡さない。
+    const rawProposalType = req.query["proposal_type"] as string | undefined;
+    const proposalType =
+      rawProposalType === "upsell" || rawProposalType === "all" || rawProposalType === "behavior"
+        ? rawProposalType
+        : undefined;
 
     try {
-      const rules = await listRules(tenantFilter, { source: sourceFilter, status: statusFilter });
+      const rules = await listRules(tenantFilter, {
+        source: sourceFilter, status: statusFilter, proposalType,
+      });
       return res.json({ rules, total: rules.length });
     } catch (err) {
       logger.warn("[GET /v1/admin/tuning-rules]", err);

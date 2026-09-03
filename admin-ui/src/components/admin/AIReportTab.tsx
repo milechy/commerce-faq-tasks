@@ -580,8 +580,18 @@ export default function AIReportTab({ tenantId }: { tenantId: string }) {
         // R6: Hermes提案もJudge提案と同じ棚(tuning_rules)に着地するため、
         // 同一の一覧・同一の承認操作(PUT /v1/admin/tuning/:id/approve|reject)の
         // 対象にする。source はカンマ区切りで複数指定可(listRules 参照)。
+        //
+        // ★D8-2: proposal_type=behavior を明示する★
+        // Hermes は営業提案(proposal_type='upsell')も同じ tuning_rules に
+        // 投稿する。それがこのリストに混ざると:
+        //   1. 営業提案が「トリガー / 提案返答」という FAQ のラベルで描画される
+        //   2. 同じ承認ボタンで承認すると is_active を立てようとして
+        //      DB の CHECK 制約に当たり 23514 で 500 になる
+        // サーバ側 listRules も既定で behavior に絞っているが、この面が
+        // 「応答方針の提案だけを扱う」ことは呼び出し側でも明示しておく
+        // (既定が将来変わってもここは壊れない)。
         const res = await authFetch(
-          `${API_BASE}/v1/admin/tuning-rules?tenant=${tenantId}&source=judge,hermes&status=pending`
+          `${API_BASE}/v1/admin/tuning-rules?tenant=${tenantId}&source=judge,hermes&status=pending&proposal_type=behavior`
         );
         if (res.ok) {
           const data = (await res.json()) as { rules?: TuningRuleApiRow[] };
