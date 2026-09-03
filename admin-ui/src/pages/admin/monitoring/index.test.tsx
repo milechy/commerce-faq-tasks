@@ -657,88 +657,8 @@ describe("MonitoringPage — 固定費クォータ消費率(LemonSlice/LiveKit)"
   }, 1000);
 });
 
-// L0-4(Gate 0): Layer 0 の合否(実テナント10社／月500会話／4往復以上20%)を
-// 人が判定するための計器3つ(面別の会話数・4往復以上率・部品のselfcheck)。
-describe("MonitoringPage — Gate 0 の計器(面別の会話数)", () => {
-  const BASE_HEALTH = {
-    sourceBreakdown: [],
-    emptySessionCount: 0,
-    cvSessionLinkRate: { numerator: 0, denominator: 0, rate: null },
-    outcomeRecordRate: { numerator: 0, denominator: 0, rate: null, autoRecorded: 0 },
-    validUserSessionCount: 0,
-  };
-
-  it("会話0件でも3面＋その他の4バケット全てを0件として表示する(欠落させない。禁止50)", async () => {
-    vi.mocked(authFetch).mockImplementation((url: string) => {
-      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
-      if (url.includes("/measurement-health")) {
-        return mockOk({
-          ...BASE_HEALTH,
-          surfaceBreakdown: [
-            { surface: "widget", count: 0 },
-            { surface: "chat_test", count: 0 },
-            { surface: "demo", count: 0 },
-            { surface: "other", count: 0 },
-          ],
-        });
-      }
-      return mockOk({});
-    });
-
-    renderPage();
-
-    await waitFor(() => {
-      expect(screen.getByText("面別の会話数")).toBeTruthy();
-    });
-    expect(screen.getByText("ウィジェット（実ユーザー）")).toBeTruthy();
-    expect(screen.getByText("テストチャット")).toBeTruthy();
-    expect(screen.getByText("デモページ")).toBeTruthy();
-    expect(screen.getByText("その他（e2e・未分類）")).toBeTruthy();
-  });
-
-  it("面ごとの件数をそのまま表示する", async () => {
-    vi.mocked(authFetch).mockImplementation((url: string) => {
-      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
-      if (url.includes("/measurement-health")) {
-        return mockOk({
-          ...BASE_HEALTH,
-          surfaceBreakdown: [
-            { surface: "widget", count: 13 },
-            { surface: "chat_test", count: 40 },
-            { surface: "demo", count: 7 },
-            { surface: "other", count: 1005 },
-          ],
-        });
-      }
-      return mockOk({});
-    });
-
-    renderPage();
-
-    await waitFor(() => {
-      expect(screen.getByText("13")).toBeTruthy();
-    });
-    expect(screen.getByText("40")).toBeTruthy();
-    expect(screen.getByText("7")).toBeTruthy();
-    expect(screen.getByText("1,005")).toBeTruthy();
-  });
-
-  it("surfaceBreakdownが無い(古いAPI応答)ときでも落ちずプレースホルダを表示する", async () => {
-    vi.mocked(authFetch).mockImplementation((url: string) => {
-      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
-      if (url.includes("/measurement-health")) return mockOk(BASE_HEALTH);
-      return mockOk({});
-    });
-
-    renderPage();
-
-    await waitFor(() => {
-      expect(screen.getByText("面別の会話数")).toBeTruthy();
-    });
-    expect(screen.getAllByText("取得中...").length).toBeGreaterThan(0);
-  });
-});
-
+// L0-4(Gate 0): Layer 0 の合否(実テナント10社／月500会話／4往復以上20%)のうち
+// 「4往復以上20%」を人が判定するための計器。
 describe("MonitoringPage — Gate 0 の計器(4往復以上率)", () => {
   const BASE_HEALTH = {
     sourceBreakdown: [],
@@ -801,55 +721,5 @@ describe("MonitoringPage — Gate 0 の計器(4往復以上率)", () => {
       expect(screen.getByText("20%")).toBeTruthy();
     });
     expect(screen.getByText("(6 / 30件)")).toBeTruthy();
-  });
-});
-
-describe("MonitoringPage — Gate 0 の計器(部品のselfcheck)", () => {
-  const BASE_HEALTH = {
-    sourceBreakdown: [],
-    emptySessionCount: 0,
-    cvSessionLinkRate: { numerator: 0, denominator: 0, rate: null },
-    outcomeRecordRate: { numerator: 0, denominator: 0, rate: null, autoRecorded: 0 },
-    validUserSessionCount: 0,
-  };
-
-  it("super_admin(componentSelfcheckが返る)のとき、未導入と表示する", async () => {
-    vi.mocked(authFetch).mockImplementation((url: string) => {
-      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
-      if (url.includes("/measurement-health")) {
-        return mockOk({
-          ...BASE_HEALTH,
-          componentSelfcheck: [
-            { id: "hermes-dojo", status: "not_installed" },
-            { id: "hermes-vault", status: "not_installed" },
-          ],
-        });
-      }
-      return mockOk({});
-    });
-
-    renderPage();
-
-    await waitFor(() => {
-      expect(screen.getByText("部品の導入状況")).toBeTruthy();
-    });
-    expect(screen.getAllByText("未導入").length).toBe(2);
-    expect(screen.getByText("hermes-dojo")).toBeTruthy();
-    expect(screen.getByText("hermes-vault")).toBeTruthy();
-  });
-
-  it("client_admin(APIがcomponentSelfcheckを返さない)のときカード自体を出さない", async () => {
-    vi.mocked(authFetch).mockImplementation((url: string) => {
-      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
-      if (url.includes("/measurement-health")) return mockOk(BASE_HEALTH);
-      return mockOk({});
-    });
-
-    renderPage();
-
-    await waitFor(() => {
-      expect(screen.getByText("会話完了率")).toBeTruthy();
-    });
-    expect(screen.queryByText("部品の導入状況")).toBeNull();
   });
 });

@@ -16,16 +16,8 @@ interface RateMetric {
   rate: number | null; // null = 母数不足で判定できない(CLAUDE.md 禁止34)
 }
 
-/** L0-4(Gate 0): サーバ側の ConversationSurface 型と対応。未知の値が来ても
- *  画面側は "other" 扱いにフォールバックする(サーバ・クライアントで型が別管理のため)。 */
-type ConversationSurface = "widget" | "chat_test" | "demo" | "other";
-
 interface MeasurementHealth {
   sourceBreakdown: Array<{ source: string; count: number }>;
-  /** L0-4(Gate 0): 面別の会話数(3面＋その他)。sourceBreakdownを固定バケット化したもの。
-   *  サーバは常に返すが、フロント側は他の指標と同じく古いAPI応答形状でも
-   *  落ちないよう optional として扱う。 */
-  surfaceBreakdown?: Array<{ surface: ConversationSurface; count: number }>;
   emptySessionCount: number;
   cvSessionLinkRate: RateMetric;
   outcomeRecordRate: RateMetric & { autoRecorded: number };
@@ -96,9 +88,6 @@ interface MeasurementHealth {
     livekit: FixedCostQuotaLine;
     asOf: string;
   };
-  /** super_admin のときだけ返る。L0-4(Gate 0): hermes-dojo/hermes-vaultの導入状況。
-   *  配線が無い現状は常に "not_installed"。 */
-  componentSelfcheck?: Array<{ id: string; status: "not_installed" | "ok" | "error" }>;
 }
 
 interface FixedCostQuotaLine {
@@ -263,27 +252,6 @@ function DeepConversationRateDisplay({
     </div>
   );
 }
-
-// L0-4(Gate 0): 面別の会話数(3面＋その他)。サーバのConversationSurfaceに1:1対応する
-// 表示ラベルキー。未知の値が来ても"その他"に丸める(サーバ側のtoSurfaceBreakdownが
-// 既に4バケットに固定しているため通常は発生しないが、型不一致時の防御)。
-const SURFACE_LABEL_KEY: Record<ConversationSurface, TranslationKey> = {
-  widget: "monitoring.surface_widget",
-  chat_test: "monitoring.surface_chat_test",
-  demo: "monitoring.surface_demo",
-  other: "monitoring.surface_other",
-};
-
-const COMPONENT_LABEL_KEY: Record<string, TranslationKey> = {
-  "hermes-dojo": "monitoring.component_id_hermes_dojo",
-  "hermes-vault": "monitoring.component_id_hermes_vault",
-};
-
-const COMPONENT_STATUS_LABEL_KEY: Record<string, TranslationKey> = {
-  not_installed: "monitoring.component_status_not_installed",
-  ok: "monitoring.component_status_ok",
-  error: "monitoring.component_status_error",
-};
 
 function FeedbackDisplay({ feedback }: { feedback: { upCount: number; downCount: number } }) {
   const total = feedback.upCount + feedback.downCount;
@@ -684,15 +652,6 @@ export default function MonitoringPage() {
             <p style={{ fontSize: 13, color: "var(--muted-foreground)", marginTop: 0, marginBottom: 16 }}>
               「何を直しても効果を測れない」状態を脱したかを確認する画面です。以降の効果測定の判定母数になります。
             </p>
-
-            {/* L0-4(Gate 0): 面別の会話数・4往復以上率・部品導入状況のカードは、
-                以下の目的で人が読むための計器であることを明示する。自動で合否は出さない。 */}
-            <p style={{ fontSize: 13, fontWeight: 600, color: "var(--foreground)", marginTop: 0, marginBottom: 4 }}>
-              {t("monitoring.gate0_section_title")}
-            </p>
-            <p style={{ fontSize: 12, color: "var(--muted-foreground)", marginTop: 0, marginBottom: 16 }}>
-              {t("monitoring.gate0_section_desc")}
-            </p>
             {healthError ? (
               <div
                 style={{
@@ -768,28 +727,8 @@ export default function MonitoringPage() {
                   {health ? <MetricValue value={health.validUserSessionCount.toLocaleString("ja-JP")} /> : <MetricPlaceholder />}
                 </MeasurementHealthCard>
 
-                {/* L0-4(Gate 0): Layer 0の合否(実テナント10社／月500会話／4往復以上20%)を
-                    人が判定するための計器。ここでは自動判定せず、実数だけ並べる。 */}
-                <MeasurementHealthCard
-                  title={t("monitoring.surface_card_title")}
-                  description={t("monitoring.surface_card_desc")}
-                >
-                  {health?.surfaceBreakdown ? (
-                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                      {health.surfaceBreakdown.map((row) => (
-                        <div key={row.surface} style={{ display: "flex", justifyContent: "space-between", fontSize: 14 }}>
-                          <span style={{ color: "var(--muted-foreground)" }}>{t(SURFACE_LABEL_KEY[row.surface] ?? "monitoring.surface_other")}</span>
-                          <span style={{ fontWeight: 700, color: "var(--foreground)", fontVariantNumeric: "tabular-nums" }}>
-                            {row.count.toLocaleString("ja-JP")}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <MetricPlaceholder />
-                  )}
-                </MeasurementHealthCard>
-
+                {/* L0-4(Gate 0): Layer 0の合否(実テナント10社／月500会話／4往復以上20%)の
+                    うち「4往復以上20%」を人が判定するための計器。自動判定はしない。 */}
                 <MeasurementHealthCard
                   title={t("monitoring.deep_conversation_card_title")}
                   description={t("monitoring.deep_conversation_card_desc")}
@@ -800,26 +739,6 @@ export default function MonitoringPage() {
                     <MetricPlaceholder />
                   )}
                 </MeasurementHealthCard>
-
-                {health?.componentSelfcheck && (
-                  <MeasurementHealthCard
-                    title={t("monitoring.component_selfcheck_title")}
-                    description={t("monitoring.component_selfcheck_desc")}
-                  >
-                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                      {health.componentSelfcheck.map((c) => (
-                        <div key={c.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 14 }}>
-                          <span style={{ color: "var(--muted-foreground)" }}>
-                            {t(COMPONENT_LABEL_KEY[c.id] ?? "monitoring.component_id_hermes_dojo")}
-                          </span>
-                          <span style={{ fontWeight: 700, color: c.status === "ok" ? "#4ade80" : c.status === "error" ? "#f87171" : "var(--muted-foreground)" }}>
-                            {t(COMPONENT_STATUS_LABEL_KEY[c.status] ?? "monitoring.component_status_not_installed")}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </MeasurementHealthCard>
-                )}
 
                 {/* G5: チャットは開かれているのに会話にならない乖離。
                     visitor_id の記録が始まる前のセッションは結合しようがないため、

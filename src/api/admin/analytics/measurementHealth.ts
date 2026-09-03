@@ -31,12 +31,6 @@ export interface RateMetric {
 export interface MeasurementHealthResponse {
   /** metadata.source別セッション数(e2e/null/user等、フィルタしない生の内訳) */
   sourceBreakdown: SourceBreakdownRow[];
-  /**
-   * L0-4(Gate 0): sourceBreakdownを「3面＋その他」に固定バケット化したもの。
-   * 新しいクエリは足さず、sourceBreakdown と同じ行を分類し直すだけ(CLAUDE.md禁止32)。
-   * 実在しないバケットも 0 件として必ず出す(禁止50: 0件を欠落と区別する)。
-   */
-  surfaceBreakdown: SurfaceBreakdownRow[];
   /** message_count=0 の空セッション数(PR-2で根治した不具合の再発検知) */
   emptySessionCount: number;
   /** CVがchat_sessions.idに結合できた率(PR-5で対応) */
@@ -66,14 +60,6 @@ export interface MeasurementHealthResponse {
    * (混同禁止。L0-4タスクで確定した定義)。母数不足(MIN_CONVERSATIONS_FOR_RATE未満)ならnull。
    */
   deepConversationRate: RateMetric;
-}
-
-/** 面別の会話数の固定バケット。ここに無い値は全て "other" に入る。 */
-export type ConversationSurface = "widget" | "chat_test" | "demo" | "other";
-
-export interface SurfaceBreakdownRow {
-  surface: ConversationSurface;
-  count: number;
 }
 
 export interface AnswerFeedbackCounts {
@@ -164,22 +150,6 @@ function toGatedRateMetric(numerator: number, denominator: number, minDenominato
   };
 }
 
-/**
- * L0-4(Gate 0): sourceBreakdownの行を「3面＋その他」の固定バケットに分類し直す。
- * 3面 = ウィジェット(実ユーザー) / テストチャット / デモページ。それ以外(e2e・
- * source未記録の過去データ等)は全て「その他」に入る。存在しないバケットも
- * 0件として必ず返す(GROUP BYの結果に無い値を欠落として画面から消さない)。
- */
-function toSurfaceBreakdown(sourceBreakdown: SourceBreakdownRow[]): SurfaceBreakdownRow[] {
-  const counts: Record<ConversationSurface, number> = { widget: 0, chat_test: 0, demo: 0, other: 0 };
-  for (const row of sourceBreakdown) {
-    const surface: ConversationSurface =
-      row.source === "user" ? "widget" : row.source === "chat_test" ? "chat_test" : row.source === "demo" ? "demo" : "other";
-    counts[surface] += row.count;
-  }
-  return (["widget", "chat_test", "demo", "other"] as const).map((surface) => ({ surface, count: counts[surface] }));
-}
-
 export async function fetchMeasurementHealth(
   db: Db,
   tenantId: string | null,
@@ -202,7 +172,6 @@ export async function fetchMeasurementHealth(
     source: row.source,
     count: parseInt(row.count, 10),
   }));
-  const surfaceBreakdown = toSurfaceBreakdown(sourceBreakdown);
 
   const emptyResult = await db.query<{ count: string }>(
     `SELECT COUNT(*) AS count
@@ -401,7 +370,6 @@ export async function fetchMeasurementHealth(
 
   return {
     sourceBreakdown,
-    surfaceBreakdown,
     emptySessionCount,
     cvSessionLinkRate,
     outcomeRecordRate,

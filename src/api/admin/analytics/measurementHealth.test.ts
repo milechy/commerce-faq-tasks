@@ -162,56 +162,6 @@ describe("fetchMeasurementHealth", () => {
   });
 });
 
-// L0-4(Gate 0): 面別の会話数(3面＋その他)。新しいクエリは足さず、sourceBreakdownの
-// 行を分類し直すだけであることをテキストロックではなく実際の集計結果で固定する。
-describe("fetchMeasurementHealth — surfaceBreakdown", () => {
-  it("user/chat_test/demoをそれぞれ対応する面に、それ以外(e2e・未設定)は全てotherにまとめる", async () => {
-    const db = makeDb([
-      {
-        rows: [
-          { source: "user", count: "13" },
-          { source: "chat_test", count: "40" },
-          { source: "demo", count: "7" },
-          { source: "e2e", count: "407" },
-          { source: "(null)", count: "598" },
-        ],
-      },
-      { rows: [{ count: "0" }] },
-      { rows: [{ linked: "0", total: "0" }] },
-      { rows: [{ recorded: "0", auto_recorded: "0", total: "0" }] },
-      { rows: [{ count: "0", deep_count: "0" }] },
-    ]);
-
-    const result = await fetchMeasurementHealth(db, null, "30d");
-
-    expect(result.surfaceBreakdown).toEqual([
-      { surface: "widget", count: 13 },
-      { surface: "chat_test", count: 40 },
-      { surface: "demo", count: 7 },
-      { surface: "other", count: 407 + 598 },
-    ]);
-  });
-
-  it("会話が0件でも4バケット全てを0件として返す(欠落させない。禁止50)", async () => {
-    const db = makeDb([
-      { rows: [] },
-      { rows: [{ count: "0" }] },
-      { rows: [{ linked: "0", total: "0" }] },
-      { rows: [{ recorded: "0", auto_recorded: "0", total: "0" }] },
-      { rows: [{ count: "0", deep_count: "0" }] },
-    ]);
-
-    const result = await fetchMeasurementHealth(db, null, "30d");
-
-    expect(result.surfaceBreakdown).toEqual([
-      { surface: "widget", count: 0 },
-      { surface: "chat_test", count: 0 },
-      { surface: "demo", count: 0 },
-      { surface: "other", count: 0 },
-    ]);
-  });
-});
-
 // L0-4(Gate 0): 4往復以上率(message_count>=8)。母数(validUserSessionCountと同じ
 // 母集団)がMIN_CONVERSATIONS_FOR_RATE(30)未満なら、denominator=0でなくてもrateはnull
 // (CLAUDE.md禁止34)。既存のvalidUserSessionCountクエリを1本に統合しているため、
