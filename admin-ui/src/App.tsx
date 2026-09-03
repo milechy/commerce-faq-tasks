@@ -16,6 +16,7 @@ import MonitoringPage from "./pages/admin/monitoring/index";
 import TenantsPage from "./pages/admin/tenants/index";
 import TenantDetailPage from "./pages/admin/tenants/[id]";
 import BillingPage from "./pages/admin/billing/index";
+import MarginDashboardPage from "./pages/admin/billing/margin/index";
 import ChatTestPage from "./pages/admin/chat-test/index";
 import ChatHistoryPage from "./pages/admin/chat-history/index";
 import ChatHistorySessionPage from "./pages/admin/chat-history/[sessionId]";
@@ -142,6 +143,15 @@ export const ADMIN_ROUTES = (
 
         {/* 請求・使用量 — super_admin 専用 */}
         <Route path="/admin/billing" element={<AdminRoute><BillingPage /></AdminRoute>} />
+
+        {/* テナント別粗利 — ★親の /admin/billing は AdminRoute(両ロール可)だが、
+            この子は SuperAdminRoute。同じ prefix でロールが違うのは意図的★
+            原価とマージン倍率を同時に描画するため、テナントには見せない
+            (原価開示方針 H-10: src/lib/billing/costCalculator.ts)。 */}
+        <Route
+          path="/admin/billing/margin"
+          element={<SuperAdminRoute><MarginDashboardPage /></SuperAdminRoute>}
+        />
 
         {/* チャットテスト */}
         <Route path="/admin/chat-test" element={<RequireAuth><ChatTestPage /></RequireAuth>} />

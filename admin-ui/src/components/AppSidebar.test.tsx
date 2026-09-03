@@ -421,3 +421,17 @@ describe("AppSidebar / MobileHeader — 通知ベルの3重マウント解消", 
     expect(screen.getAllByTestId("notification-bell")).toHaveLength(1);
   });
 });
+
+describe("テナント別粗利のナビ項目", () => {
+  it("super_admin には表示される", () => {
+    vi.mocked(useAuth).mockReturnValue(baseAuth({ isSuperAdmin: true, isClientAdmin: false }));
+    renderSidebar();
+    expect(screen.getByText("テナント別粗利")).toBeTruthy();
+  });
+
+  it("★client_admin には表示されない（原価が見える画面への導線を出さない）★", () => {
+    vi.mocked(useAuth).mockReturnValue(baseAuth({ isSuperAdmin: false, tenantPlan: "growth" }));
+    renderSidebar();
+    expect(screen.queryByText("テナント別粗利")).toBeNull();
+  });
+});
