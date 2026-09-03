@@ -514,6 +514,7 @@ describe("Flow 4: チューニングルール → synthesizeAnswer → Groq prom
           tenant_id: MOCK_TUNING_RULE.tenant_id,
           status: "active",
           is_active: true,
+          proposal_type: "behavior",
           approved_at: new Date().toISOString(),
           rejected_at: null,
           updated_at: new Date().toISOString(),
@@ -524,7 +525,12 @@ describe("Flow 4: チューニングルール → synthesizeAnswer → Groq prom
     expect(approved).not.toBeNull();
     expect(approved!.is_active).toBe(true);
     const [approveSql] = MOCK_POOL.query.mock.calls[MOCK_POOL.query.mock.calls.length - 1]!;
-    expect(approveSql).toContain("is_active = true");
+    // D8: ★同じ UPDATE の中で is_active を設定していること★ が本テストの守備範囲。
+    // status だけ更新して is_active を放置すると「承認したのに一生本番へ入らない」。
+    // D8-2 で値は定数 true ではなく proposal_type からの導出になった
+    // (upsell=営業提案は承認しても本番プロンプトに入れない)。behavior 行では
+    // この式は true に評価されるため、従来の保証はそのまま維持される。
+    expect(approveSql).toContain("is_active = (proposal_type <> 'upsell')");
 
     // 2) 本番プロンプト注入の唯一の入口。承認直後の状態(is_active=true)を
     //    DBが返す想定で、実際にそのルールが取得できることを確認する。
