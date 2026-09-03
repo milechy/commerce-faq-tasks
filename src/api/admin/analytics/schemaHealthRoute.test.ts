@@ -120,6 +120,7 @@ describe('GET /v1/admin/analytics/measurement-health のスキーマ整合', () 
     expect(res.body.ignitionStatus).toBeUndefined();
     expect(res.body.hermesAcceptanceRate).toBeUndefined();
     expect(res.body.fixedCostQuota).toBeUndefined();
+    expect(res.body.componentSelfcheck).toBeUndefined();
     // テナントに対して余計なクエリを投げない
     expect(mockFetchSchemaHealth).not.toHaveBeenCalled();
     expect(mockFetchIgnitionStatus).not.toHaveBeenCalled();
@@ -127,6 +128,20 @@ describe('GET /v1/admin/analytics/measurement-health のスキーマ整合', () 
     expect(mockFetchFixedCostQuotaStatus).not.toHaveBeenCalled();
     // 既存の計測ヘルス自体は従来どおり返る
     expect(res.body.validUserSessionCount).toBe(0);
+  });
+
+  // L0-4(Gate 0): hermes-dojo/hermes-vaultのselfcheck枠。DBを叩かない純関数
+  // (componentSelfcheck.ts)なので個別にmockせず、実装をそのまま呼ばせる。
+  it('super_admin にはhermes-dojo/hermes-vaultのselfcheckも返す(現状は配線が無いためnot_installed)', async () => {
+    const res = await request(makeApp())
+      .get('/v1/admin/analytics/measurement-health')
+      .set('x-role', 'super_admin');
+
+    expect(res.status).toBe(200);
+    expect(res.body.componentSelfcheck).toEqual([
+      { id: 'hermes-dojo', status: 'not_installed' },
+      { id: 'hermes-vault', status: 'not_installed' },
+    ]);
   });
 
   it('欠落なしのときも missing: [] を返す(「異常なし」を描けるようにする)', async () => {

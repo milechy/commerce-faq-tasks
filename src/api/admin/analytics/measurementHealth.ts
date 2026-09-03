@@ -31,6 +31,12 @@ export interface RateMetric {
 export interface MeasurementHealthResponse {
   /** metadata.source別セッション数(e2e/null/user等、フィルタしない生の内訳) */
   sourceBreakdown: SourceBreakdownRow[];
+  /**
+   * L0-4(Gate 0): sourceBreakdownを「3面＋その他」に固定バケット化したもの。
+   * 新しいクエリは足さず、sourceBreakdown と同じ行を分類し直すだけ(CLAUDE.md禁止32)。
+   * 実在しないバケットも 0 件として必ず出す(禁止50: 0件を欠落と区別する)。
+   */
+  surfaceBreakdown: SurfaceBreakdownRow[];
   /** message_count=0 の空セッション数(PR-2で根治した不具合の再発検知) */
   emptySessionCount: number;
   /** CVがchat_sessions.idに結合できた率(PR-5で対応) */
@@ -53,6 +59,21 @@ export interface MeasurementHealthResponse {
    * 生の件数は誤解を招かないため率ではなくカウントで出す(禁止34は比率の話)。
    */
   answerFeedback: AnswerFeedbackCounts;
+  /**
+   * L0-4(Gate 0): 実ユーザーの会話(validUserSessionCountと同じ母集団)のうち
+   * message_count >= 8(=4往復以上。往復の定義は課金と同じ「2通で1往復」)だった率。
+   * Judge の DEFAULT_MIN_MESSAGE_COUNT(=4, 2往復)とは別の、より高い基準
+   * (混同禁止。L0-4タスクで確定した定義)。母数不足(MIN_CONVERSATIONS_FOR_RATE未満)ならnull。
+   */
+  deepConversationRate: RateMetric;
+}
+
+/** 面別の会話数の固定バケット。ここに無い値は全て "other" に入る。 */
+export type ConversationSurface = "widget" | "chat_test" | "demo" | "other";
+
+export interface SurfaceBreakdownRow {
+  surface: ConversationSurface;
+  count: number;
 }
 
 export interface AnswerFeedbackCounts {
@@ -119,12 +140,44 @@ export interface ChatOpenDropoffByTrigger {
  */
 export const MIN_VISITORS_FOR_RATE = 30;
 
+/**
+ * L0-4(Gate 0): 4往復以上率を出すのに必要な最低会話数。MIN_VISITORS_FOR_RATEと
+ * 同じ考え方(母数不足のときに比率を出さない)だが対象母集団が「訪問者」ではなく
+ * 「会話(validUserSessionCountと同じ母集団)」のため、意味を混同しないよう別定数にする。
+ */
+export const MIN_CONVERSATIONS_FOR_RATE = 30;
+
 function toRateMetric(numerator: number, denominator: number): RateMetric {
   return {
     numerator,
     denominator,
     rate: denominator > 0 ? Math.round((numerator / denominator) * 1000) / 10 : null,
   };
+}
+
+/** toRateMetricに加え、denominatorが最低件数未満のときも(0件ではなくても)nullに倒す。 */
+function toGatedRateMetric(numerator: number, denominator: number, minDenominator: number): RateMetric {
+  return {
+    numerator,
+    denominator,
+    rate: denominator >= minDenominator ? Math.round((numerator / denominator) * 1000) / 10 : null,
+  };
+}
+
+/**
+ * L0-4(Gate 0): sourceBreakdownの行を「3面＋その他」の固定バケットに分類し直す。
+ * 3面 = ウィジェット(実ユーザー) / テストチャット / デモページ。それ以外(e2e・
+ * source未記録の過去データ等)は全て「その他」に入る。存在しないバケットも
+ * 0件として必ず返す(GROUP BYの結果に無い値を欠落として画面から消さない)。
+ */
+function toSurfaceBreakdown(sourceBreakdown: SourceBreakdownRow[]): SurfaceBreakdownRow[] {
+  const counts: Record<ConversationSurface, number> = { widget: 0, chat_test: 0, demo: 0, other: 0 };
+  for (const row of sourceBreakdown) {
+    const surface: ConversationSurface =
+      row.source === "user" ? "widget" : row.source === "chat_test" ? "chat_test" : row.source === "demo" ? "demo" : "other";
+    counts[surface] += row.count;
+  }
+  return (["widget", "chat_test", "demo", "other"] as const).map((surface) => ({ surface, count: counts[surface] }));
 }
 
 export async function fetchMeasurementHealth(
@@ -149,6 +202,7 @@ export async function fetchMeasurementHealth(
     source: row.source,
     count: parseInt(row.count, 10),
   }));
+  const surfaceBreakdown = toSurfaceBreakdown(sourceBreakdown);
 
   const emptyResult = await db.query<{ count: string }>(
     `SELECT COUNT(*) AS count
@@ -192,8 +246,12 @@ export async function fetchMeasurementHealth(
     autoRecorded: parseInt(outcomeRow?.auto_recorded ?? "0", 10),
   };
 
-  const validResult = await db.query<{ count: string }>(
-    `SELECT COUNT(*) AS count
+  // L0-4(Gate 0): 4往復以上(message_count>=8)の件数も同じクエリで一緒に取る
+  // (母集団はvalidUserSessionCountと同一。別クエリにして往復させない)。
+  const validResult = await db.query<{ count: string; deep_count: string }>(
+    `SELECT
+       COUNT(*) AS count,
+       COUNT(*) FILTER (WHERE s.message_count >= 8) AS deep_count
      FROM chat_sessions s
      WHERE s.started_at >= NOW() - $1::interval ${tenantClause}
        AND s.message_count > 0
@@ -201,6 +259,8 @@ export async function fetchMeasurementHealth(
     params,
   );
   const validUserSessionCount = parseInt(validResult.rows[0]?.count ?? "0", 10);
+  const deepConversationCount = parseInt(validResult.rows[0]?.deep_count ?? "0", 10);
+  const deepConversationRate = toGatedRateMetric(deepConversationCount, validUserSessionCount, MIN_CONVERSATIONS_FOR_RATE);
 
   // G5: チャットは開かれているのに会話にならない乖離を説明する。
   // visitor_id は widget の localStorage 由来でテナントを跨いで衝突しうるため、
@@ -341,6 +401,7 @@ export async function fetchMeasurementHealth(
 
   return {
     sourceBreakdown,
+    surfaceBreakdown,
     emptySessionCount,
     cvSessionLinkRate,
     outcomeRecordRate,
@@ -348,5 +409,6 @@ export async function fetchMeasurementHealth(
     chatOpenDropoff,
     knowledgeIndexDrift,
     answerFeedback,
+    deepConversationRate,
   };
 }

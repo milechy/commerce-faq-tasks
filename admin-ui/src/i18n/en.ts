@@ -647,6 +647,28 @@ const en: Record<TranslationKey, string> = {
   // this heading is only for the direct-control section, not the client-view preview path)
   "hermes_consent.super_admin_section_title": "Data-sharing consent (Super Admin control)",
   "hermes_consent.super_admin_section_desc": "Directly changes this tenant's shared learning pool participation on their behalf. It uses the same API as the tenant's own control, so the same terms apply as the regular consent screen.",
+
+  // L0-4(Gate 0): instruments for a human to judge Layer 0 pass/fail
+  // (10 real tenants / 500 conversations per month / 20%+ at 4+ round trips).
+  "monitoring.gate0_section_title": "Gate 0 instruments (10 real tenants / 500 conversations per month / 20%+ at 4+ round trips)",
+  "monitoring.gate0_section_desc": "Raw numbers for a human to judge Layer 0 pass/fail. This screen does not auto-decide pass/fail.",
+  "monitoring.surface_card_title": "Conversations by surface",
+  "monitoring.surface_card_desc": "Recent conversations grouped by the surface they happened on (widget / test chat / demo page / other)",
+  "monitoring.surface_widget": "Widget (real users)",
+  "monitoring.surface_chat_test": "Test chat",
+  "monitoring.surface_demo": "Demo page",
+  "monitoring.surface_other": "Other (e2e / unclassified)",
+  "monitoring.deep_conversation_card_title": "4+ round-trip rate",
+  "monitoring.deep_conversation_card_desc": "Share of real-user conversations that reached 8+ messages (4+ round trips)",
+  "monitoring.deep_conversation_insufficient": "Not enough data to judge",
+  "monitoring.deep_conversation_progress": "Currently {current} / needs {required}",
+  "monitoring.component_selfcheck_title": "Component rollout status",
+  "monitoring.component_selfcheck_desc": "Selfcheck results for hermes-dojo / hermes-vault",
+  "monitoring.component_status_not_installed": "Not installed",
+  "monitoring.component_status_ok": "OK",
+  "monitoring.component_status_error": "Error",
+  "monitoring.component_id_hermes_dojo": "hermes-dojo",
+  "monitoring.component_id_hermes_vault": "hermes-vault",
 };
 
 export default en;

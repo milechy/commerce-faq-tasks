@@ -20,6 +20,28 @@ vi.mock("../../../lib/supabaseClient", () => ({
   },
 }));
 
+// LangProvider は localStorage.getItem に依存し、このテスト環境の Node組み込み
+// localStorage(--localstorage-file 未指定時はundefined)で例外になるため、
+// 実辞書(ja.ts)をそのまま使うt()を返す薄いモックに置き換える
+// ([sessionId].test.tsx / KnowledgeListTab.test.tsx と同じ既存パターン)。
+vi.mock("../../../i18n/LangContext", async () => {
+  const jaModule = await import("../../../i18n/ja");
+  const ja = jaModule.default as Record<string, string>;
+  const stableT = (key: string, vars?: Record<string, string | number>) => {
+    let text = ja[key] ?? key;
+    if (vars) {
+      for (const [k, v] of Object.entries(vars)) {
+        text = text.replace(new RegExp(`\\{${k}\\}`, "g"), String(v));
+      }
+    }
+    return text;
+  };
+  const stableValue = { lang: "ja" as const, setLang: () => {}, t: stableT };
+  return {
+    useLang: () => stableValue,
+  };
+});
+
 const KPIS_OK = {
   completionRate: 90,
   loopRate: 2,
@@ -633,4 +655,201 @@ describe("MonitoringPage — 固定費クォータ消費率(LemonSlice/LiveKit)"
       expect(screen.getByText("会話完了率")).toBeTruthy();
     }, { timeout: 300 });
   }, 1000);
+});
+
+// L0-4(Gate 0): Layer 0 の合否(実テナント10社／月500会話／4往復以上20%)を
+// 人が判定するための計器3つ(面別の会話数・4往復以上率・部品のselfcheck)。
+describe("MonitoringPage — Gate 0 の計器(面別の会話数)", () => {
+  const BASE_HEALTH = {
+    sourceBreakdown: [],
+    emptySessionCount: 0,
+    cvSessionLinkRate: { numerator: 0, denominator: 0, rate: null },
+    outcomeRecordRate: { numerator: 0, denominator: 0, rate: null, autoRecorded: 0 },
+    validUserSessionCount: 0,
+  };
+
+  it("会話0件でも3面＋その他の4バケット全てを0件として表示する(欠落させない。禁止50)", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
+      if (url.includes("/measurement-health")) {
+        return mockOk({
+          ...BASE_HEALTH,
+          surfaceBreakdown: [
+            { surface: "widget", count: 0 },
+            { surface: "chat_test", count: 0 },
+            { surface: "demo", count: 0 },
+            { surface: "other", count: 0 },
+          ],
+        });
+      }
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("面別の会話数")).toBeTruthy();
+    });
+    expect(screen.getByText("ウィジェット（実ユーザー）")).toBeTruthy();
+    expect(screen.getByText("テストチャット")).toBeTruthy();
+    expect(screen.getByText("デモページ")).toBeTruthy();
+    expect(screen.getByText("その他（e2e・未分類）")).toBeTruthy();
+  });
+
+  it("面ごとの件数をそのまま表示する", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
+      if (url.includes("/measurement-health")) {
+        return mockOk({
+          ...BASE_HEALTH,
+          surfaceBreakdown: [
+            { surface: "widget", count: 13 },
+            { surface: "chat_test", count: 40 },
+            { surface: "demo", count: 7 },
+            { surface: "other", count: 1005 },
+          ],
+        });
+      }
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("13")).toBeTruthy();
+    });
+    expect(screen.getByText("40")).toBeTruthy();
+    expect(screen.getByText("7")).toBeTruthy();
+    expect(screen.getByText("1,005")).toBeTruthy();
+  });
+
+  it("surfaceBreakdownが無い(古いAPI応答)ときでも落ちずプレースホルダを表示する", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
+      if (url.includes("/measurement-health")) return mockOk(BASE_HEALTH);
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("面別の会話数")).toBeTruthy();
+    });
+    expect(screen.getAllByText("取得中...").length).toBeGreaterThan(0);
+  });
+});
+
+describe("MonitoringPage — Gate 0 の計器(4往復以上率)", () => {
+  const BASE_HEALTH = {
+    sourceBreakdown: [],
+    emptySessionCount: 0,
+    cvSessionLinkRate: { numerator: 0, denominator: 0, rate: null },
+    outcomeRecordRate: { numerator: 0, denominator: 0, rate: null, autoRecorded: 0 },
+    validUserSessionCount: 0,
+  };
+
+  it("母数0のとき、比率ではなく到達条件(現在0件/必要30件)を表示する", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
+      if (url.includes("/measurement-health")) {
+        return mockOk({ ...BASE_HEALTH, deepConversationRate: { numerator: 0, denominator: 0, rate: null } });
+      }
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("4往復以上率")).toBeTruthy();
+    });
+    expect(screen.getByText("現在 0件 / 必要 30件")).toBeTruthy();
+    expect(screen.queryByText("0%")).toBeNull();
+  });
+
+  it("母数1のとき、分母1でも比率を出さず到達条件を表示する", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
+      if (url.includes("/measurement-health")) {
+        return mockOk({ ...BASE_HEALTH, deepConversationRate: { numerator: 1, denominator: 1, rate: null } });
+      }
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("現在 1件 / 必要 30件")).toBeTruthy();
+    });
+    // 「判定に足りない」旨の表示は本テストの主張(分母1でも到達条件が出る)であり、
+    // 直上の進捗テキストが正確な値(1件/30件)であること自体で検証済み
+    // (他カード(CV結合率等)も母数0で同文言を出すため getAllByText で複数ヒットする)。
+    expect(screen.getAllByText("判定に足りない").length).toBeGreaterThan(0);
+  });
+
+  it("母数が30件以上のとき、割合と実数を表示する", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
+      if (url.includes("/measurement-health")) {
+        return mockOk({ ...BASE_HEALTH, deepConversationRate: { numerator: 6, denominator: 30, rate: 20 } });
+      }
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("20%")).toBeTruthy();
+    });
+    expect(screen.getByText("(6 / 30件)")).toBeTruthy();
+  });
+});
+
+describe("MonitoringPage — Gate 0 の計器(部品のselfcheck)", () => {
+  const BASE_HEALTH = {
+    sourceBreakdown: [],
+    emptySessionCount: 0,
+    cvSessionLinkRate: { numerator: 0, denominator: 0, rate: null },
+    outcomeRecordRate: { numerator: 0, denominator: 0, rate: null, autoRecorded: 0 },
+    validUserSessionCount: 0,
+  };
+
+  it("super_admin(componentSelfcheckが返る)のとき、未導入と表示する", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
+      if (url.includes("/measurement-health")) {
+        return mockOk({
+          ...BASE_HEALTH,
+          componentSelfcheck: [
+            { id: "hermes-dojo", status: "not_installed" },
+            { id: "hermes-vault", status: "not_installed" },
+          ],
+        });
+      }
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("部品の導入状況")).toBeTruthy();
+    });
+    expect(screen.getAllByText("未導入").length).toBe(2);
+    expect(screen.getByText("hermes-dojo")).toBeTruthy();
+    expect(screen.getByText("hermes-vault")).toBeTruthy();
+  });
+
+  it("client_admin(APIがcomponentSelfcheckを返さない)のときカード自体を出さない", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
+      if (url.includes("/measurement-health")) return mockOk(BASE_HEALTH);
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("会話完了率")).toBeTruthy();
+    });
+    expect(screen.queryByText("部品の導入状況")).toBeNull();
+  });
 });

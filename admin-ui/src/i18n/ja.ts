@@ -659,6 +659,28 @@ const ja = {
   // このセクション自体はプレビュー経由ではなく直接操作のための見出し）
   "hermes_consent.super_admin_section_title": "データ共有の同意（Super Admin操作）",
   "hermes_consent.super_admin_section_desc": "このテナントに代わって共有学習プールへの参加設定を直接変更します。テナント自身の操作と同じAPIを使うため、通常の同意画面と同じ内容が適用されます。",
+
+  // L0-4(Gate 0): Layer 0の合否(実テナント10社／月500会話／4往復以上20%)を
+  // 人が判定するための計器群(/admin/monitoring、super_admin運用面にのみ出す)。
+  "monitoring.gate0_section_title": "Gate 0 の計器（実テナント10社／月500会話／4往復以上20%）",
+  "monitoring.gate0_section_desc": "Layer 0 の合否を人が判定するための実数です。ここでは自動で合否を判定しません。",
+  "monitoring.surface_card_title": "面別の会話数",
+  "monitoring.surface_card_desc": "直近の会話を、発生した面（ウィジェット／テストチャット／デモページ／その他）ごとに分類した件数です",
+  "monitoring.surface_widget": "ウィジェット（実ユーザー）",
+  "monitoring.surface_chat_test": "テストチャット",
+  "monitoring.surface_demo": "デモページ",
+  "monitoring.surface_other": "その他（e2e・未分類）",
+  "monitoring.deep_conversation_card_title": "4往復以上率",
+  "monitoring.deep_conversation_card_desc": "実ユーザーの会話のうち、8通（4往復）以上続いた会話の割合です",
+  "monitoring.deep_conversation_insufficient": "判定に足りない",
+  "monitoring.deep_conversation_progress": "現在 {current}件 / 必要 {required}件",
+  "monitoring.component_selfcheck_title": "部品の導入状況",
+  "monitoring.component_selfcheck_desc": "hermes-dojo / hermes-vault の selfcheck 結果です",
+  "monitoring.component_status_not_installed": "未導入",
+  "monitoring.component_status_ok": "正常",
+  "monitoring.component_status_error": "異常",
+  "monitoring.component_id_hermes_dojo": "hermes-dojo",
+  "monitoring.component_id_hermes_vault": "hermes-vault",
 } as const;
 
 export type TranslationKey = keyof typeof ja;

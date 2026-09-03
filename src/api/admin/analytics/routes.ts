@@ -24,6 +24,7 @@ import {
 import { fetchMeasurementHealth } from "./measurementHealth";
 import { fetchSchemaHealth } from "./schemaHealth";
 import { fetchIgnitionStatus } from "./ignitionStatus";
+import { getComponentSelfcheckResults } from "./componentSelfcheck";
 import { fetchFixedCostQuotaStatus } from "../../../lib/billing/billingHealthCheck";
 
 // ---------------------------------------------------------------------------
@@ -225,6 +226,8 @@ export function registerAnalyticsRoutes(app: Express): void {
         // テナント固有ではない)で super_admin にだけ合成する。
         // A2A-0i: 固定費(LemonSlice/LiveKit)クォータの消費率も同じ理由で super_admin にだけ合成する。
         // billingHealthMonitor(Slack通知)が使う計算ロジックと同じ関数を呼ぶ(集計を書き写さない)。
+        // L0-4(Gate 0): hermes-dojo/hermes-vaultのselfcheckも同じ理由(R2C運用の判断材料)で
+        // super_admin にだけ合成する。DBを叩かない純関数なので Promise.all には含めない。
         const [schemaHealth, ignitionStatus, hermesAcceptanceRate, fixedCostQuota] = isSuperAdmin
           ? await Promise.all([
               fetchSchemaHealth(pool),
@@ -233,8 +236,11 @@ export function registerAnalyticsRoutes(app: Express): void {
               fetchFixedCostQuotaStatus(pool, logger),
             ])
           : [undefined, undefined, undefined, undefined];
+        const componentSelfcheck = isSuperAdmin ? getComponentSelfcheckResults() : undefined;
         return res.json(
-          isSuperAdmin ? { ...response, schemaHealth, ignitionStatus, hermesAcceptanceRate, fixedCostQuota } : response,
+          isSuperAdmin
+            ? { ...response, schemaHealth, ignitionStatus, hermesAcceptanceRate, fixedCostQuota, componentSelfcheck }
+            : response,
         );
       } catch (err) {
         logger.warn("[GET /v1/admin/analytics/measurement-health]", err);
