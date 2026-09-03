@@ -9,6 +9,15 @@ import { registerEvaluationRoutes } from "./routes";
 // DB モック
 // ---------------------------------------------------------------------------
 
+// D8-2: 承認時のテナント通知が実際に発火するか(そして behavior では発火しないか)を
+// ルート層で固定する。通知本文の中身は upsellRenderer.test.ts が別途担保する。
+const mockPoolQuery = jest.fn();
+jest.mock("../../../lib/db", () => ({
+  getPool: () => ({ query: (...a: unknown[]) => mockPoolQuery(...a) }),
+}));
+jest.mock("../../../lib/notifications", () => ({ createNotification: jest.fn() }));
+jest.mock("../../../lib/billing/billingApi", () => ({ buildTenantUpsellFigures: jest.fn() }));
+
 jest.mock("./evaluationsRepository", () => ({
   listEvaluations: jest.fn(),
   getDetailedStats: jest.fn(),
@@ -27,6 +36,8 @@ import {
   approveTuningRule,
   rejectTuningRule,
 } from "./evaluationsRepository";
+import { createNotification } from "../../../lib/notifications";
+import { buildTenantUpsellFigures } from "../../../lib/billing/billingApi";
 
 // ---------------------------------------------------------------------------
 // テスト用 Express アプリ生成
@@ -260,5 +271,94 @@ describe("8. PUT /v1/admin/tuning/:id/reject → status='rejected'", () => {
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(res.body.rule.status).toBe("rejected");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// D8-2: アップセル提案を「採用」したときだけテナントへ通知する
+// ---------------------------------------------------------------------------
+describe("D8-2: 承認時のテナント通知", () => {
+  const UPSELL_EVIDENCE = {
+    upsell: { signal: "text_overage", current_plan: "standard", recommended_plan: "growth" },
+  };
+
+  beforeEach(() => {
+    (createNotification as jest.Mock).mockReset().mockResolvedValue(undefined);
+    (buildTenantUpsellFigures as jest.Mock).mockReset().mockResolvedValue({
+      __audience: "tenant",
+      signal: "text_overage",
+      current_plan: "standard",
+      recommended_plan: "growth",
+      current_base_monthly_jpy: 9800,
+      recommended_base_monthly_jpy: 29800,
+      text_included_now: 1000,
+      text_included_after: 3000,
+      avatar_included_minutes_now: 30,
+      avatar_included_minutes_after: 150,
+      text_overage: 500,
+      avatar_overage_minutes: 0,
+      as_of: "2026-09-04T00:00:00.000Z",
+    });
+    mockPoolQuery.mockReset().mockResolvedValue({
+      rows: [{ tenant_id: "tenant-a", evidence: UPSELL_EVIDENCE }],
+    });
+  });
+
+  it("★upsell を承認するとテナントへ通知が飛ぶ★", async () => {
+    (approveTuningRule as jest.Mock).mockResolvedValue({
+      id: 1, tenant_id: "tenant-a", status: "active",
+      is_active: false, proposal_type: "upsell",
+      approved_at: NOW, rejected_at: null, updated_at: NOW,
+    });
+
+    const res = await request(makeApp()).put("/v1/admin/tuning/1/approve");
+    expect(res.status).toBe(200);
+    expect(createNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        recipientRole: "client_admin",
+        recipientTenantId: "tenant-a",
+        link: "/admin/billing",
+      }),
+    );
+  });
+
+  it("★behavior の承認では通知しない（従来の挙動を変えない）★", async () => {
+    (approveTuningRule as jest.Mock).mockResolvedValue({
+      id: 2, tenant_id: "tenant-a", status: "active",
+      is_active: true, proposal_type: "behavior",
+      approved_at: NOW, rejected_at: null, updated_at: NOW,
+    });
+
+    const res = await request(makeApp()).put("/v1/admin/tuning/2/approve");
+    expect(res.status).toBe(200);
+    expect(createNotification).not.toHaveBeenCalled();
+  });
+
+  it("★通知の組み立てが落ちても承認は成功する（通知失敗で承認を落とさない）★", async () => {
+    (approveTuningRule as jest.Mock).mockResolvedValue({
+      id: 3, tenant_id: "tenant-a", status: "active",
+      is_active: false, proposal_type: "upsell",
+      approved_at: NOW, rejected_at: null, updated_at: NOW,
+    });
+    (buildTenantUpsellFigures as jest.Mock).mockRejectedValue(new Error("stripe down"));
+
+    const res = await request(makeApp()).put("/v1/admin/tuning/3/approve");
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+  });
+
+  it("evidence の upsell が壊れていれば通知しない（誤った文面を出すより出さない）", async () => {
+    (approveTuningRule as jest.Mock).mockResolvedValue({
+      id: 4, tenant_id: "tenant-a", status: "active",
+      is_active: false, proposal_type: "upsell",
+      approved_at: NOW, rejected_at: null, updated_at: NOW,
+    });
+    mockPoolQuery.mockResolvedValue({
+      rows: [{ tenant_id: "tenant-a", evidence: { upsell: { signal: "bogus" } } }],
+    });
+
+    const res = await request(makeApp()).put("/v1/admin/tuning/4/approve");
+    expect(res.status).toBe(200);
+    expect(createNotification).not.toHaveBeenCalled();
   });
 });
