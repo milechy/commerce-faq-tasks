@@ -103,6 +103,13 @@ FILES=(
   # このスクリプトの対象外で、CHECK制約違反時のtrackUsage側の挙動は
   # usageTracker.test.ts(モックDBでCHECK違反コード23514を再現)で別途固定する。
   "src/lib/billing/migration_agent_search_feature.sql"
+  # usage_logs.cost_base_cents(マージン前の実原価)。粗利分析(tenantEconomics.ts)が
+  # 読む列で、schemaHealth.ts の REQUIRED_COLUMNS.usage_logs にも登録する。
+  # 未適用のまま配備すると usageTracker の主 INSERT が 42703 になり、
+  # 旧カラム構成のフォールバック経路へ落ちる(記録は継続するが原価が残らない)。
+  # tuning_rules 側の migration_proposal_type.sql は同じPRで追加したが、
+  # tuning_rules は課金テーブルではなく本スクリプトのスコープ外なのでここには入れない。
+  "src/lib/billing/migration_usage_logs_cost_base.sql"
 )
 
 for f in "${FILES[@]}"; do
