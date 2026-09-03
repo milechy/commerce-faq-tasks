@@ -663,6 +663,14 @@ const en: Record<TranslationKey, string> = {
   // this heading is only for the direct-control section, not the client-view preview path)
   "hermes_consent.super_admin_section_title": "Data-sharing consent (Super Admin control)",
   "hermes_consent.super_admin_section_desc": "Directly changes this tenant's shared learning pool participation on their behalf. It uses the same API as the tenant's own control, so the same terms apply as the regular consent screen.",
+
+  // L0-4(Gate 0): instrument for a human to judge the "20%+ at 4+ round trips"
+  // part of Layer 0 pass/fail (10 real tenants / 500 conversations per month /
+  // 20%+ at 4+ round trips).
+  "monitoring.deep_conversation_card_title": "4+ round-trip rate",
+  "monitoring.deep_conversation_card_desc": "Share of real-user conversations that reached 8+ messages (4+ round trips)",
+  "monitoring.deep_conversation_insufficient": "Not enough data to judge",
+  "monitoring.deep_conversation_progress": "Currently {current} / needs {required}",
 };
 
 export default en;

@@ -162,6 +162,86 @@ describe("fetchMeasurementHealth", () => {
   });
 });
 
+// L0-4(Gate 0): 4往復以上率(message_count>=8)。母数(validUserSessionCountと同じ
+// 母集団)がMIN_CONVERSATIONS_FOR_RATE(30)未満なら、denominator=0でなくてもrateはnull
+// (CLAUDE.md禁止34)。既存のvalidUserSessionCountクエリを1本に統合しているため、
+// その値との整合も合わせて固定する。
+describe("fetchMeasurementHealth — deepConversationRate", () => {
+  it("母数0のとき rate は null(0%ではない)", async () => {
+    const db = makeDb([
+      { rows: [] },
+      { rows: [{ count: "0" }] },
+      { rows: [{ linked: "0", total: "0" }] },
+      { rows: [{ recorded: "0", auto_recorded: "0", total: "0" }] },
+      { rows: [{ count: "0", deep_count: "0" }] },
+    ]);
+
+    const result = await fetchMeasurementHealth(db, null, "30d");
+
+    expect(result.deepConversationRate).toEqual({ numerator: 0, denominator: 0, rate: null });
+    expect(result.validUserSessionCount).toBe(0);
+  });
+
+  it("母数1(会話1件のみ)のとき、denominator>0でもrateはnull(分母1でtrendを出さない)", async () => {
+    const db = makeDb([
+      { rows: [] },
+      { rows: [{ count: "0" }] },
+      { rows: [{ linked: "0", total: "0" }] },
+      { rows: [{ recorded: "0", auto_recorded: "0", total: "0" }] },
+      { rows: [{ count: "1", deep_count: "1" }] },
+    ]);
+
+    const result = await fetchMeasurementHealth(db, null, "30d");
+
+    expect(result.deepConversationRate).toEqual({ numerator: 1, denominator: 1, rate: null });
+  });
+
+  it("母数がMIN_CONVERSATIONS_FOR_RATE(30)ちょうどなら率を出す", async () => {
+    const db = makeDb([
+      { rows: [] },
+      { rows: [{ count: "0" }] },
+      { rows: [{ linked: "0", total: "0" }] },
+      { rows: [{ recorded: "0", auto_recorded: "0", total: "0" }] },
+      { rows: [{ count: "30", deep_count: "6" }] },
+    ]);
+
+    const result = await fetchMeasurementHealth(db, null, "30d");
+
+    expect(result.deepConversationRate).toEqual({ numerator: 6, denominator: 30, rate: 20 });
+  });
+
+  it("母数が29(閾値未満)なら率を出さない", async () => {
+    const db = makeDb([
+      { rows: [] },
+      { rows: [{ count: "0" }] },
+      { rows: [{ linked: "0", total: "0" }] },
+      { rows: [{ recorded: "0", auto_recorded: "0", total: "0" }] },
+      { rows: [{ count: "29", deep_count: "29" }] },
+    ]);
+
+    const result = await fetchMeasurementHealth(db, null, "30d");
+
+    expect(result.deepConversationRate.rate).toBeNull();
+    expect(result.deepConversationRate).toEqual({ numerator: 29, denominator: 29, rate: null });
+  });
+
+  it("message_count>=8のクエリは既存のvalidUserSessionCountクエリ(source='user'絞り込み)と同じ1本に同居する(新規クエリを足さない)", async () => {
+    const db = makeDb([
+      { rows: [] },
+      { rows: [{ count: "0" }] },
+      { rows: [{ linked: "0", total: "0" }] },
+      { rows: [{ recorded: "0", auto_recorded: "0", total: "0" }] },
+      { rows: [{ count: "30", deep_count: "6" }] },
+    ]);
+
+    await fetchMeasurementHealth(db, null, "30d");
+
+    const [validSql] = db.query.mock.calls[4] as [string, unknown[]];
+    expect(validSql).toContain("message_count >= 8");
+    expect(validSql).toContain("metadata->>'source' = 'user'");
+  });
+});
+
 // ナレッジ配線是正P14: 消費者の回答評価(👍👎)は率ではなく生の件数で返す
 // (母数が小さくても、生の件数自体は禁止34が問題にする「誤った自信」を生まない)。
 describe("fetchMeasurementHealth — answerFeedback", () => {

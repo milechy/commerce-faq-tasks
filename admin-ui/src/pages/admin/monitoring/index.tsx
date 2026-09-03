@@ -7,6 +7,8 @@ import TenantSlaTable, {
 import { API_BASE, authFetch } from "../../../lib/api";
 import { supabase } from "../../../lib/supabaseClient";
 import { QuotaBar } from "../billing/QuotaSection";
+import { useLang } from "../../../i18n/LangContext";
+import type { TranslationKey } from "../../../i18n/ja";
 
 interface RateMetric {
   numerator: number;
@@ -39,6 +41,10 @@ interface MeasurementHealth {
     upCount: number;
     downCount: number;
   };
+  /** L0-4(Gate 0): 実ユーザーの会話のうちmessage_count>=8(4往復以上)だった率。
+   *  母数不足(30件未満)ならrate:null(禁止34)。サーバは常に返すが、
+   *  古いAPI応答形状でも落ちないよう optional として扱う。 */
+  deepConversationRate?: RateMetric;
   /** super_admin のときだけ返る。コードが要求する列が実行中のDBに存在するか。 */
   schemaHealth?: {
     missing: Array<{ table: string; columns: string[]; tableMissing: boolean }>;
@@ -209,6 +215,44 @@ function RateDisplay({ metric }: { metric: RateMetric }) {
 // 母数が小さいときは比率(誤った自信を生む)を出さず実数のみ出す。
 const MIN_FEEDBACK_FOR_RATE = 30;
 
+// L0-4(Gate 0): MIN_CONVERSATIONS_FOR_RATE(=30, サーバ側 measurementHealth.ts)と
+// 同じ考え方で、4往復以上率も母数が小さいときは比率を出さず到達条件だけ示す。
+const MIN_CONVERSATIONS_FOR_RATE = 30;
+
+function DeepConversationRateDisplay({
+  metric,
+  t,
+}: {
+  metric: RateMetric;
+  t: (key: TranslationKey, vars?: Record<string, string | number>) => string;
+}) {
+  if (metric.rate === null) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+        <span style={{ fontSize: 20, fontWeight: 700, color: "var(--muted-foreground)" }}>
+          {t("monitoring.deep_conversation_insufficient")}
+        </span>
+        <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>
+          {t("monitoring.deep_conversation_progress", {
+            current: metric.denominator,
+            required: MIN_CONVERSATIONS_FOR_RATE,
+          })}
+        </span>
+      </div>
+    );
+  }
+  return (
+    <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+      <span style={{ fontSize: 28, fontWeight: 700, color: "var(--foreground)", fontVariantNumeric: "tabular-nums" }}>
+        {metric.rate}%
+      </span>
+      <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>
+        ({metric.numerator.toLocaleString("ja-JP")} / {metric.denominator.toLocaleString("ja-JP")}件)
+      </span>
+    </div>
+  );
+}
+
 function FeedbackDisplay({ feedback }: { feedback: { upCount: number; downCount: number } }) {
   const total = feedback.upCount + feedback.downCount;
   if (total < MIN_FEEDBACK_FOR_RATE) {
@@ -284,6 +328,7 @@ function FixedCostQuotaRow({
 
 export default function MonitoringPage() {
   const navigate = useNavigate();
+  const { t } = useLang();
   const [data, setData] = useState<MonitoringKpis | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -680,6 +725,19 @@ export default function MonitoringPage() {
                   description="判定に使える母数そのもの（source=userかつメッセージあり）"
                 >
                   {health ? <MetricValue value={health.validUserSessionCount.toLocaleString("ja-JP")} /> : <MetricPlaceholder />}
+                </MeasurementHealthCard>
+
+                {/* L0-4(Gate 0): Layer 0の合否(実テナント10社／月500会話／4往復以上20%)の
+                    うち「4往復以上20%」を人が判定するための計器。自動判定はしない。 */}
+                <MeasurementHealthCard
+                  title={t("monitoring.deep_conversation_card_title")}
+                  description={t("monitoring.deep_conversation_card_desc")}
+                >
+                  {health?.deepConversationRate ? (
+                    <DeepConversationRateDisplay metric={health.deepConversationRate} t={t} />
+                  ) : (
+                    <MetricPlaceholder />
+                  )}
                 </MeasurementHealthCard>
 
                 {/* G5: チャットは開かれているのに会話にならない乖離。

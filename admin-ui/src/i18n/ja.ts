@@ -677,6 +677,13 @@ const ja = {
   // このセクション自体はプレビュー経由ではなく直接操作のための見出し）
   "hermes_consent.super_admin_section_title": "データ共有の同意（Super Admin操作）",
   "hermes_consent.super_admin_section_desc": "このテナントに代わって共有学習プールへの参加設定を直接変更します。テナント自身の操作と同じAPIを使うため、通常の同意画面と同じ内容が適用されます。",
+
+  // L0-4(Gate 0): Layer 0の合否(実テナント10社／月500会話／4往復以上20%)のうち
+  // 「4往復以上20%」を人が判定するための計器(/admin/monitoring)。
+  "monitoring.deep_conversation_card_title": "4往復以上率",
+  "monitoring.deep_conversation_card_desc": "実ユーザーの会話のうち、8通（4往復）以上続いた会話の割合です",
+  "monitoring.deep_conversation_insufficient": "判定に足りない",
+  "monitoring.deep_conversation_progress": "現在 {current}件 / 必要 {required}件",
 } as const;
 
 export type TranslationKey = keyof typeof ja;
