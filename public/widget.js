@@ -42,6 +42,15 @@
   // GET /widget/:tenantSlug.js 生成時に window.__RAJIUCE_TENANT_CFG__ へ注入する
   // （visitor近似のsticky keyでサーバー側決定済み。widget.js側では割当ロジックを持たない）。
   // 静的 /widget.js 埋め込み（data-tenant方式）ではこのグローバルは存在しないため両方 null 安全に。
+  //
+  // CLAUDE.md 絶対にやってはいけないこと 38: ウィジェットの配布経路は①動的
+  // (GET /widget/:tenantSlug.js) ②静的埋め込み(data-tenant方式、このファイル直配信)
+  // ③①がdb===nullのとき②へリダイレクト、の3経路ある。_rajiuceTenantCfg はサーバーが
+  // 注入する設定の唯一の入口であり、②③では常に空オブジェクトに落ちる(fail-open)。
+  // excludedPagePatterns(ページ除外設定)を含め、_rajiuceTenantCfg 由来の値はすべて
+  // ②③では「未設定」として扱われる。既知の制限として tests/widget/pageExclusion.test.ts
+  // で固定している。ここに新しい fetch 経路を足して②③でも取得しようとしない
+  // (「第2の埋め込み経路を作らない」の趣旨に反する。塞ぐなら製品判断が先)。
   var _rajiuceTenantCfg = (typeof window !== 'undefined' && window.__RAJIUCE_TENANT_CFG__) || {};
   var abExperimentId = _rajiuceTenantCfg.abExperimentId || null;
   var abVariant = _rajiuceTenantCfg.abVariant || null;

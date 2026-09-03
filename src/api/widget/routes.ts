@@ -59,6 +59,10 @@ export function registerWidgetRoutes(app: Express, db: Pool | null): void {
 
     if (!db) {
       // No DB — fall back to static widget.js redirect
+      // CLAUDE.md 絶対にやってはいけないこと 38 の③経路。リダイレクト先は
+      // プラン判定を経由しない静的配布物(②)のため、excluded_page_patterns を含む
+      // window.__RAJIUCE_TENANT_CFG__ 由来の設定は一切注入されない(fail-open、
+      // 既知の制限。tests/widget/pageExclusion.test.ts で固定)。
       return res.redirect("/widget.js");
     }
 
