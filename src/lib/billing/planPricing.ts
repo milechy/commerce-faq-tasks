@@ -40,6 +40,27 @@ export const PLAN_MULTIPLIERS: Record<string, number> = {
 };
 
 /**
+ * プランの上下関係（下位→上位）。アップセル提案で「次のプラン」を決める唯一の出どころ。
+ *
+ * プラン名は enum ではなく string で扱われているため、階段の定義がコード内に
+ * 散らばると「Standard の次は Enterprise」のような食い違いが静かに生まれる。
+ * PLAN_MULTIPLIERS のキー順とは独立に、意味としての順序をここで固定する。
+ *
+ * enterprise を含めるのは「Growth の上がある」ことを示すため。ただし enterprise は
+ * 個別契約で自動見積りできない(computeBillingEstimateJpy が null を返す)ので、
+ * 提案する側は金額を出さずに「相談」へ寄せること。
+ */
+export const PLAN_LADDER: readonly string[] = ['free_ad', 'starter', 'standard', 'growth', 'enterprise'];
+
+/** 現プランの1つ上を返す。最上位・未知のプランは null。 */
+export function nextPlanUp(plan: string | null | undefined): string | null {
+  if (!plan) return null;
+  const i = PLAN_LADDER.indexOf(plan);
+  if (i < 0 || i === PLAN_LADDER.length - 1) return null;
+  return PLAN_LADDER[i + 1]!;
+}
+
+/**
  * Starter(純従量 ¥20/会話)の月間請求数量の上限。
  *
  * ★理由は「請求を止める」ことではなく「価格表の見え方」★

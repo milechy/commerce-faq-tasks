@@ -31,16 +31,24 @@ jest.mock("../../lib/db", () => ({
   getPool: () => ({ query: (...args: unknown[]) => mockQuery(...args) }),
 }));
 
+// tenant-economics は売上側の数量を computeExpectedBilling(唯一の出どころ)から取る。
+// ここでの関心は「金額が漏れないこと」なので、数量だけを返すスタブにする。
+jest.mock("../../lib/billing/stripeSync", () => ({
+  computeExpectedBilling: jest.fn(),
+}));
+
 import { isHermesDataConsentGranted, listHermesConsentingTenantIds } from "../../lib/hermesConsent";
 import { searchConversations } from "./hermesMcpRepository";
 import { createNotification } from "../../lib/notifications";
 import { getRuleEffect } from "../admin/analytics/ruleEffect";
+import { computeExpectedBilling } from "../../lib/billing/stripeSync";
 
 const mockIsConsentGranted = isHermesDataConsentGranted as jest.Mock;
 const mockListConsenting = listHermesConsentingTenantIds as jest.Mock;
 const mockSearchConversations = searchConversations as jest.Mock;
 const mockCreateNotification = createNotification as jest.Mock;
 const mockGetRuleEffect = getRuleEffect as jest.Mock;
+const mockComputeExpectedBilling = computeExpectedBilling as jest.Mock;
 
 const API_KEY = "test-hermes-mcp-key";
 
@@ -84,6 +92,10 @@ beforeEach(() => {
   mockCreateNotification.mockReset().mockResolvedValue(undefined);
   mockQuery.mockReset().mockResolvedValue({ rows: [{ id: 1 }] });
   mockGetRuleEffect.mockReset();
+  mockComputeExpectedBilling.mockReset().mockResolvedValue({
+    totalRequests: 0, totalCostCents: 0, billableUnits: 0, unstampedRows: 0,
+    billedQuantity: 0, fallbackMultiplier: 1, textUnits: 0, avatarMinutes: 0,
+  });
 });
 
 afterEach(() => {
@@ -231,6 +243,9 @@ describe("POST /v1/hermes-mcp/proposals", () => {
       "保証訴求を初回応答に含める",
       expect.any(String),
       "tenant:carnation:warranty-pitch",
+      // D8-2: proposal_type を省略した既存 Hermes の投稿は behavior として着地する
+      // (後方互換。既存の投稿側を1行も変えずに新種別を足せていることの確認)。
+      "behavior",
     ]);
 
     expect(mockCreateNotification).toHaveBeenCalledWith(
@@ -583,6 +598,197 @@ describe("GET /v1/hermes-mcp/proposals", () => {
   it("DBエラー時は500", async () => {
     mockQuery.mockRejectedValueOnce(new Error("db down"));
     const res = await authedGet("/v1/hermes-mcp/proposals");
+    expect(res.status).toBe(500);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /v1/hermes-mcp/tenant-economics
+// ---------------------------------------------------------------------------
+describe("GET /v1/hermes-mcp/tenant-economics", () => {
+  const OK_PLAN = { rows: [{ plan: "standard" }] };
+
+  it("Bearerトークンなしは401", async () => {
+    const res = await request(makeApp()).get("/v1/hermes-mcp/tenant-economics?tenant_id=c&period=202609");
+    expect(res.status).toBe(401);
+  });
+
+  it("★未同意は403（存在確認すら与えない）★", async () => {
+    mockIsConsentGranted.mockResolvedValue(false);
+    const res = await authedGet("/v1/hermes-mcp/tenant-economics?tenant_id=carnation&period=202609");
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({ error: "tenant_not_consented" });
+    // 同意チェックが他の何よりも先 = DBに触れていない
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  it("存在しないテナントも403に倒す（存在有無を与えない）", async () => {
+    mockIsConsentGranted.mockResolvedValue(true);
+    mockQuery.mockResolvedValue({ rows: [] });
+    const res = await authedGet("/v1/hermes-mcp/tenant-economics?tenant_id=nope&period=202609");
+    expect(res.status).toBe(403);
+  });
+
+  it("tenant_id 必須", async () => {
+    const res = await authedGet("/v1/hermes-mcp/tenant-economics?period=202609");
+    expect(res.status).toBe(400);
+  });
+
+  it("period の形式を検証する（13月・日付形式を弾く）", async () => {
+    mockIsConsentGranted.mockResolvedValue(true);
+    for (const p of ["202613", "202600", "2026-09", "x"]) {
+      const res = await authedGet(`/v1/hermes-mcp/tenant-economics?tenant_id=c&period=${p}`);
+      expect([p, res.status]).toEqual([p, 400]);
+    }
+  });
+
+  it("★レスポンスに金額を表すキーが1つも無い★（Hermes の生成文に金額を通さない）", async () => {
+    mockIsConsentGranted.mockResolvedValue(true);
+    mockQuery.mockResolvedValue(OK_PLAN);
+    mockComputeExpectedBilling.mockResolvedValue({
+      totalRequests: 0, totalCostCents: 99999, billableUnits: 0, unstampedRows: 0,
+      billedQuantity: 0, fallbackMultiplier: 1, textUnits: 1500, avatarMinutes: 40,
+    });
+
+    const res = await authedGet("/v1/hermes-mcp/tenant-economics?tenant_id=carnation&period=202609");
+    expect(res.status).toBe(200);
+    // 一度赤くしてから通すこと(意図的に cost_total_cents を混ぜても漏れない形か)
+    expect(JSON.stringify(res.body)).not.toMatch(/_jpy|_cents|margin|cost|profit|price|原価|粗利/i);
+  });
+
+  it("数量・率・シグナルを返す（超過を検出できる）", async () => {
+    mockIsConsentGranted.mockResolvedValue(true);
+    mockQuery.mockResolvedValue(OK_PLAN);
+    mockComputeExpectedBilling.mockResolvedValue({
+      totalRequests: 0, totalCostCents: 0, billableUnits: 0, unstampedRows: 0,
+      billedQuantity: 0, fallbackMultiplier: 1, textUnits: 1500, avatarMinutes: 40,
+    });
+
+    const res = await authedGet("/v1/hermes-mcp/tenant-economics?tenant_id=carnation&period=202609");
+    expect(res.status).toBe(200);
+    expect(res.body.plan).toBe("standard");
+    expect(res.body.usage.text_conversations).toBe(1500);
+    expect(res.body.usage.text_overage).toBe(500);
+    expect(res.body.signals).toContain("text_overage");
+    expect(res.body.next_plan_candidate).toBe("growth");
+    expect(res.body.boundary).toBe("jst_calendar_month");
+    expect(res.body.period_from).toBe("2026-08-31T15:00:00.000Z");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /v1/hermes-mcp/proposals — D8-2 アップセル提案
+// ---------------------------------------------------------------------------
+describe("POST /v1/hermes-mcp/proposals（アップセル）", () => {
+  const UPSELL = {
+    ...VALID_TENANT_PROPOSAL,
+    dedup_key: "tenant:carnation:upsell:202609",
+    proposal_type: "upsell",
+    upsell: {
+      signal: "text_overage",
+      current_plan: "standard",
+      recommended_plan: "growth",
+      period_yyyymm: "202609",
+    },
+  };
+
+  beforeEach(() => {
+    mockIsConsentGranted.mockResolvedValue(true);
+    // 1回目: プラン突合 / 2回目: INSERT
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ plan: "standard" }] })
+      .mockResolvedValue({ rows: [{ id: 7 }] });
+  });
+
+  it("★global scope のアップセルは400（全テナントへ営業提案が出るのを防ぐ）★", async () => {
+    const res = await authedPost("/v1/hermes-mcp/proposals", {
+      ...VALID_GLOBAL_PROPOSAL, proposal_type: "upsell",
+      upsell: UPSELL.upsell,
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("upsell_requires_tenant_scope");
+  });
+
+  it("未知の proposal_type は400", async () => {
+    const res = await authedPost("/v1/hermes-mcp/proposals", { ...VALID_TENANT_PROPOSAL, proposal_type: "sales" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_proposal_type");
+  });
+
+  it("upsell 本体が無ければ400", async () => {
+    const res = await authedPost("/v1/hermes-mcp/proposals", { ...VALID_TENANT_PROPOSAL, proposal_type: "upsell" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("upsell_required");
+  });
+
+  it("未知のシグナルは400（Hermes からの任意文字列を通さない）", async () => {
+    const res = await authedPost("/v1/hermes-mcp/proposals", {
+      ...UPSELL, upsell: { ...UPSELL.upsell, signal: "make_them_pay" },
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_upsell_signal");
+  });
+
+  it("未知のプラン名は400", async () => {
+    const res = await authedPost("/v1/hermes-mcp/proposals", {
+      ...UPSELL, upsell: { ...UPSELL.upsell, recommended_plan: "platinum" },
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_plan");
+  });
+
+  it("★現プランと食い違う提案は409（Hermes の古いスナップショットを弾く）★", async () => {
+    mockQuery.mockReset().mockResolvedValueOnce({ rows: [{ plan: "growth" }] });
+    const res = await authedPost("/v1/hermes-mcp/proposals", UPSELL);
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe("plan_mismatch");
+    expect(res.body.actual_plan).toBe("growth");
+  });
+
+  it("正常系: proposal_type='upsell' で is_active=false のまま保存する", async () => {
+    const res = await authedPost("/v1/hermes-mcp/proposals", UPSELL);
+    expect(res.status).toBe(201);
+
+    const insertCall = mockQuery.mock.calls.find((c) => String(c[0]).includes("INSERT INTO tuning_rules"))!;
+    const [sql, args] = insertCall;
+    expect(sql).toContain("false");
+    expect(args[5]).toBe("upsell");
+  });
+
+  it("★trigger_pattern はサーバが決定的に組み立てる（UNIQUE 衝突を構造的に防ぐ）★", async () => {
+    const res = await authedPost("/v1/hermes-mcp/proposals", UPSELL);
+    expect(res.status).toBe(201);
+
+    const insertCall = mockQuery.mock.calls.find((c) => String(c[0]).includes("INSERT INTO tuning_rules"))!;
+    const args = insertCall[1] as unknown[];
+    // Hermes の title をそのまま使わない（毎月同じ文言で衝突するため）
+    expect(args[1]).toBe("upsell:202609:text_overage");
+    expect(args[1]).not.toBe(UPSELL.title);
+    // title は evidence 側に保存する（失わない）
+    expect(String(args[3])).toContain("hermes_title");
+  });
+
+  it("★投稿時の通知はテナントに送らない（未承認の営業提案を届けない）★", async () => {
+    await authedPost("/v1/hermes-mcp/proposals", UPSELL);
+    expect(mockCreateNotification).toHaveBeenCalledWith(
+      expect.objectContaining({ recipientRole: "super_admin", recipientTenantId: undefined }),
+    );
+  });
+
+  it("trigger_pattern の UNIQUE 衝突(23505)は duplicate として返す（成功を装わない）", async () => {
+    mockQuery.mockReset()
+      .mockResolvedValueOnce({ rows: [{ plan: "standard" }] })
+      .mockRejectedValueOnce(Object.assign(new Error("dup"), { code: "23505" }));
+    const res = await authedPost("/v1/hermes-mcp/proposals", UPSELL);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ duplicate: true });
+  });
+
+  it("23505 以外の例外は500のまま（本当の失敗を duplicate に丸めない）", async () => {
+    mockQuery.mockReset()
+      .mockResolvedValueOnce({ rows: [{ plan: "standard" }] })
+      .mockRejectedValueOnce(Object.assign(new Error("boom"), { code: "42703" }));
+    const res = await authedPost("/v1/hermes-mcp/proposals", UPSELL);
     expect(res.status).toBe(500);
   });
 });

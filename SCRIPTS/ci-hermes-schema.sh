@@ -57,6 +57,23 @@ FILES=(
   "src/api/admin/evaluations/migration_kpi_outcome.sql"
   # tuning_rules.dedup_key(Hermes提案の冪等キー。GET /proposals が読む)
   "src/api/hermes-mcp/migration_hermes_dedup_key.sql"
+  # tuning_rules.approved_responses / original_text・edited_by・edited_at。
+  # 単体では hermes-mcp の検証に不要だが、直後の phase75(重複行の DELETE)が
+  # これらの列を ORDER BY に使うため、先に存在させる必要がある。
+  "src/api/admin/tuning/migration_approved_responses.sql"
+  "src/api/admin/tuning/migration_add_edit_tracking.sql"
+  # uniq_tuning_rules_tenant_trigger (tenant_id, trigger_pattern)。
+  # ★アップセル提案の 23505 経路がここでしか実証できない★ — POST /proposals の
+  # ON CONFLICT は (tenant_id, dedup_key) しか見ないため、dedup_key が違って
+  # trigger_pattern が同じだと一意制約違反が投げっぱなしになる。
+  # モックDBでは「code:'23505' を投げたら duplicate を返す」までしか確認できず、
+  # 実際にこの制約が張られているかは検証できない。
+  "src/migrations/phase75_tuning_rules_unique.sql"
+  # tuning_rules.proposal_type + D8-2 の CHECK 制約(upsell は is_active を立てられない)。
+  # ★アップセル提案が本番プロンプトへ混入しないことの唯一の砦★
+  # コード側3箇所(approve/reject/updateRule)の分岐が漏れても、この制約が
+  # 23514 で弾く。その効き目は実 Postgres でしか確認できない。
+  "src/api/admin/tuning/migration_proposal_type.sql"
   # chat_sessions / chat_messages(searchConversationsの候補セッション取得。
   # ci-billing-schema.sh で既に作成済みだが、本スクリプト単体実行時にも
   # 動く冪等な安全網として明示する)

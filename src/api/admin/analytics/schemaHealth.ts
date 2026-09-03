@@ -86,7 +86,11 @@ export const REQUIRED_COLUMNS: Record<string, readonly string[]> = {
   // SELECT が 42703 で例外になり、セルフサービス決済導線が全件500になる。
   tenants: ["id", "is_active", "name", "plan", "tenant_contact_email"],
   trigger_rules: ["is_active", "message_template", "priority", "tenant_id", "trigger_config", "trigger_type"],
-  tuning_rules: ["approved_at", "created_by", "dedup_key", "edited_at", "edited_by", "evidence", "expected_behavior", "is_active", "original_text", "priority", "source", "source_message_id", "status", "suggested_at", "tenant_id", "trigger_pattern"],
+  // proposal_type は migration_proposal_type.sql で追加(D8-2)。
+  // 未適用のまま配備すると POST /v1/hermes-mcp/proposals と承認経路が 42703 で落ちる。
+  // ★getActiveRulesForTenant はこの列を読まない★ので、未適用でも回答経路は生き残る
+  // (ホットパスに列を足さないという設計判断の効果がここに出る)。
+  tuning_rules: ["approved_at", "created_by", "dedup_key", "edited_at", "edited_by", "evidence", "expected_behavior", "is_active", "original_text", "priority", "proposal_type", "source", "source_message_id", "status", "suggested_at", "tenant_id", "trigger_pattern"],
   // plan / plan_multiplier は migration_usage_logs_plan_snapshot.sql で、
   // session_id は migration_usage_logs_session_id.sql で追加。
   // 未適用のまま配備すると usage_logs への INSERT が全滅する（= 利用記録も請求も止まる）ため、

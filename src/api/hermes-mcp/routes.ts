@@ -22,6 +22,10 @@ import { getRuleEffect } from "../admin/analytics/ruleEffect";
 import { getPool } from "../../lib/db";
 import { createNotification } from "../../lib/notifications";
 import { logger } from "../../lib/logger";
+import { periodToJstRangeIso } from "../../lib/billing/tenantEconomics";
+import { computeExpectedBilling } from "../../lib/billing/stripeSync";
+import { computeUpsellSignals, isValidUpsellSignal } from "../../lib/billing/upsellSignals";
+import { PLAN_LADDER } from "../../lib/billing/planPricing";
 
 const MAX_QUERY_LEN = 200;
 const MAX_TEXT_LEN = 2000;
@@ -51,11 +55,18 @@ const PROPOSALS_EFFECT_LIMIT = 10;
 // 両方 null にすると Hermes が「効果ゼロ」と誤読しうるため、意図的に別の形にする。
 interface ProposalEffectNotComputed {
   status: "not_computed";
-  reason: "effect_limit_exceeded";
+  // upsell_not_measurable: D8-2 の営業提案は承認しても is_active が立たず
+  // 本番プロンプトに入らないため、before/after の DiD が原理的に成立しない。
+  // 「効果ゼロ」ではなく「測れない」ことを Hermes に伝える。
+  reason: "effect_limit_exceeded" | "upsell_not_measurable";
 }
 
 type HermesProposalScope = "global" | "tenant";
 const VALID_PROPOSAL_SCOPES: readonly HermesProposalScope[] = ["global", "tenant"];
+
+// D8-2: 提案の種別。省略時は従来どおり behavior(応答方針)。
+type HermesProposalType = "behavior" | "upsell";
+const VALID_PROPOSAL_TYPES: readonly HermesProposalType[] = ["behavior", "upsell"];
 
 export function registerHermesMcpRoutes(app: Express): void {
   app.use("/v1/hermes-mcp", hermesMcpAuthMiddleware);
@@ -137,9 +148,81 @@ export function registerHermesMcpRoutes(app: Express): void {
   // Hermes Agent(外部)がCVR改善提案を投稿するためのエンドポイント。
   // system_prompt等は一切自動書き換えしない(提案→人間承認ゲート)。
   // ----------------------------------------------------------------
+  // ----------------------------------------------------------------
+  // GET /v1/hermes-mcp/tenant-economics
+  //
+  // ★このレスポンスに金額を1つも載せない★
+  // 返すのは数量・率・enum だけで、*_jpy / *_cents / margin / cost / profit という
+  // キーは存在しない。Hermes は外部VPSのLLMエージェントであり、その出力は
+  // テナントにも届く。渡さなければ漏れる経路が物理的に存在しない
+  // (src/api/admin/CLAUDE.md「金額・件数を LLM の生成文に通さない」)。
+  // 金額は承認後に upsellRenderer が決定的コードでレンダリングする。
+  // この不変条件は routes.test.ts が正規表現で固定している。
+  // ----------------------------------------------------------------
+  app.get("/v1/hermes-mcp/tenant-economics", async (req: Request, res: Response) => {
+    const tenantId = req.query["tenant_id"];
+    if (!tenantId || typeof tenantId !== "string") {
+      return res.status(400).json({ error: "tenant_id required" });
+    }
+
+    // 同意チェックを最優先(他の何よりも先)。未同意には存在確認すら与えない。
+    const consented = await isHermesDataConsentGranted(tenantId);
+    if (!consented) {
+      return res.status(403).json({ error: "tenant_not_consented" });
+    }
+
+    const rawPeriod = req.query["period"];
+    if (typeof rawPeriod !== "string" || !/^\d{4}(0[1-9]|1[0-2])$/.test(rawPeriod)) {
+      return res.status(400).json({ error: "invalid_period" });
+    }
+
+    try {
+      const { from, to } = periodToJstRangeIso(rawPeriod);
+      const pool = getPool();
+      const planRow = await pool.query<{ plan: string | null }>(
+        `SELECT plan FROM tenants WHERE id = $1`,
+        [tenantId],
+      );
+      if (planRow.rows.length === 0) {
+        // 未同意と同じく「不存在」に倒す(テナントの存在有無を与えない)。
+        return res.status(403).json({ error: "tenant_not_consented" });
+      }
+      const plan = planRow.rows[0]!.plan ?? null;
+
+      const { textUnits, avatarMinutes } = await computeExpectedBilling(pool, tenantId, from, to, plan);
+      const s = computeUpsellSignals({ plan, textUnits, avatarMinutes });
+
+      return res.json({
+        tenant_id: tenantId,
+        period_yyyymm: rawPeriod,
+        period_from: from,
+        period_to: to,
+        boundary: "jst_calendar_month",
+        plan,
+        usage: {
+          text_conversations: textUnits,
+          avatar_minutes: avatarMinutes,
+          text_overage: s.overage.textConversations,
+          avatar_overage_minutes: s.overage.avatarMinutes,
+        },
+        // 込み枠の無いプランは null。0% と混同させない。
+        utilization_pct: s.utilizationPct,
+        next_plan_candidate: s.nextPlanCandidate,
+        utilization_pct_on_next_plan: s.utilizationPctOnNextPlan,
+        signals: s.signals,
+      });
+    } catch (err) {
+      logger.warn({ err }, "[hermes-mcp] tenant economics failed");
+      return res.status(500).json({ error: "internal_error" });
+    }
+  });
+
   app.post("/v1/hermes-mcp/proposals", async (req: Request, res: Response) => {
     const body = req.body ?? {};
-    const { scope, tenant_id, title, rationale, suggested_action, evidence, dedup_key } = body as {
+    const {
+      scope, tenant_id, title, rationale, suggested_action, evidence, dedup_key,
+      proposal_type, upsell,
+    } = body as {
       scope?: unknown;
       tenant_id?: unknown;
       title?: unknown;
@@ -147,6 +230,8 @@ export function registerHermesMcpRoutes(app: Express): void {
       suggested_action?: unknown;
       evidence?: unknown;
       dedup_key?: unknown;
+      proposal_type?: unknown;
+      upsell?: unknown;
     };
 
     if (typeof scope !== "string" || !VALID_PROPOSAL_SCOPES.includes(scope as HermesProposalScope)) {
@@ -174,12 +259,68 @@ export function registerHermesMcpRoutes(app: Express): void {
       return res.status(400).json({ error: "invalid_evidence" });
     }
 
+    // D8-2: 種別。省略時は従来どおり behavior(既存 Hermes の後方互換)。
+    const proposalType: HermesProposalType =
+      proposal_type === undefined ? "behavior" : (proposal_type as HermesProposalType);
+    if (!VALID_PROPOSAL_TYPES.includes(proposalType)) {
+      return res.status(400).json({ error: "invalid_proposal_type" });
+    }
+
+    // アップセルは必ず特定テナント宛。global に紛れ込むと全テナントへ営業提案が出る。
+    if (proposalType === "upsell" && scope !== "tenant") {
+      return res.status(400).json({ error: "upsell_requires_tenant_scope" });
+    }
+
+    let upsellPayload: { signal: string; current_plan: string; recommended_plan: string; period_yyyymm: string } | null = null;
+    if (proposalType === "upsell") {
+      if (typeof upsell !== "object" || upsell === null || Array.isArray(upsell)) {
+        return res.status(400).json({ error: "upsell_required" });
+      }
+      const u = upsell as Record<string, unknown>;
+      if (!isValidUpsellSignal(u["signal"])) {
+        return res.status(400).json({ error: "invalid_upsell_signal" });
+      }
+      if (typeof u["current_plan"] !== "string" || !PLAN_LADDER.includes(u["current_plan"])) {
+        return res.status(400).json({ error: "invalid_plan" });
+      }
+      if (typeof u["recommended_plan"] !== "string" || !PLAN_LADDER.includes(u["recommended_plan"])) {
+        return res.status(400).json({ error: "invalid_plan" });
+      }
+      if (typeof u["period_yyyymm"] !== "string" || !/^\d{4}(0[1-9]|1[0-2])$/.test(u["period_yyyymm"])) {
+        return res.status(400).json({ error: "invalid_period" });
+      }
+      upsellPayload = {
+        signal: u["signal"] as string,
+        current_plan: u["current_plan"] as string,
+        recommended_plan: u["recommended_plan"] as string,
+        period_yyyymm: u["period_yyyymm"] as string,
+      };
+    }
+
     // 同意チェック(defense in depth): search_conversationsは既に同意済みテナントしか
     // 返さないが、Hermes側の実装ミス・改ざんに備えてここでも必ず再検証する。
     if (scope === "tenant") {
       const consented = await isHermesDataConsentGranted(tenant_id as string);
       if (!consented) {
         return res.status(403).json({ error: "tenant_not_consented" });
+      }
+    }
+
+    // Hermes が古いスナップショットを元に提案してくることがある。
+    // 「Starter → Standard」の提案が届いた時点で既に Growth だった、という
+    // 誤提案をテナントに見せないよう、現プランと突き合わせて弾く。
+    if (upsellPayload) {
+      const cur = await getPool().query<{ plan: string | null }>(
+        `SELECT plan FROM tenants WHERE id = $1`,
+        [tenant_id as string],
+      );
+      const actualPlan = cur.rows[0]?.plan ?? null;
+      if (actualPlan !== upsellPayload.current_plan) {
+        return res.status(409).json({
+          error: "plan_mismatch",
+          // 実プラン名は同意済みテナントにのみ返る情報なので開示してよい。
+          actual_plan: actualPlan,
+        });
       }
     }
 
@@ -199,9 +340,34 @@ export function registerHermesMcpRoutes(app: Express): void {
     // 合わせる(getActiveRulesForTenant が tenant_id=$1 OR tenant_id='global'
     // で読む)。
     const tenantIdValue = scope === "tenant" ? (tenant_id as string) : "global";
+
+    // ★upsell の trigger_pattern はサーバが決定的に組み立てる★
+    // uniq_tuning_rules_tenant_trigger (tenant_id, trigger_pattern) が効いており、
+    // 現行の ON CONFLICT は (tenant_id, dedup_key) しか見ない。アップセルは
+    // 「毎月同じ文言を同じテナントへ」が構造的に起きるため、Hermes の title を
+    // そのまま使うと dedup_key 違い × trigger_pattern 同じ で 23505 が頻発する。
+    // 月とシグナルを含めた決定的なキーにすれば、別月は別行・同月同シグナルは
+    // dedup_key 側で弾かれる、と衝突が構造的に起きない。
+    //
+    // trigger_pattern は本来キーワード一致(matchesTriggerPattern)用の列だが、
+    // upsell 行は DB 制約 tuning_rules_upsell_never_active_check により
+    // is_active=true になれず、getActiveRulesForTenant に載らないため
+    // マッチング経路に到達しない。Hermes の title は evidence 側に保存する。
+    const triggerPattern = upsellPayload
+      ? `upsell:${upsellPayload.period_yyyymm}:${upsellPayload.signal}`
+      : (title as string);
+
     const evidenceJson = JSON.stringify({
       ...(evidence as Record<string, unknown> | undefined),
       rationale,
+      ...(upsellPayload
+        ? {
+            // 金額は保存しない。価格改定で保存済みの金額が嘘になるため、
+            // 表示のたびに upsellRenderer が単価から組み立てる。
+            upsell: upsellPayload,
+            hermes_title: title,
+          }
+        : {}),
     });
 
     try {
@@ -209,11 +375,11 @@ export function registerHermesMcpRoutes(app: Express): void {
       const result = await pool.query<{ id: number }>(
         `INSERT INTO tuning_rules
            (tenant_id, trigger_pattern, expected_behavior, priority, is_active,
-            source, status, evidence, dedup_key)
-         VALUES ($1, $2, $3, 0, false, 'hermes', 'pending', $4::jsonb, $5)
+            source, status, evidence, dedup_key, proposal_type)
+         VALUES ($1, $2, $3, 0, false, 'hermes', 'pending', $4::jsonb, $5, $6)
          ON CONFLICT (tenant_id, dedup_key) WHERE dedup_key IS NOT NULL DO NOTHING
          RETURNING id`,
-        [tenantIdValue, title, suggested_action, evidenceJson, dedup_key],
+        [tenantIdValue, triggerPattern, suggested_action, evidenceJson, dedup_key, proposalType],
       );
 
       const insertedId = result.rows[0]?.id ?? null;
@@ -223,8 +389,14 @@ export function registerHermesMcpRoutes(app: Express): void {
 
       try {
         await createNotification({
-          recipientRole: scope === "global" ? "super_admin" : "client_admin",
-          recipientTenantId: scope === "tenant" ? (tenant_id as string) : undefined,
+          // ★upsell は投稿時にテナントへ送らない★
+          // 未承認の営業提案がテナントに届くのを防ぐ(運営が採否を決めてから、
+          // 承認経路側で client_admin へ通知する)。
+          // 既存の「scope で宛先を分ける」形からの意図的な逸脱。
+          recipientRole:
+            proposalType === "upsell" || scope === "global" ? "super_admin" : "client_admin",
+          recipientTenantId:
+            proposalType !== "upsell" && scope === "tenant" ? (tenant_id as string) : undefined,
           type: "hermes_proposal",
           title,
           message: rationale,
@@ -241,6 +413,14 @@ export function registerHermesMcpRoutes(app: Express): void {
 
       return res.status(201).json({ proposal_id: String(insertedId), duplicate: false });
     } catch (err) {
+      // uniq_tuning_rules_tenant_trigger (tenant_id, trigger_pattern) との衝突。
+      // ON CONFLICT は (tenant_id, dedup_key) しか見ないため、dedup_key が違って
+      // trigger_pattern が同じだとここへ落ちる。重複時に成功を装わないよう、
+      // 既存の重複表現({duplicate:true})に揃える。
+      // ★23505 のときだけ★ — 他の例外まで duplicate に丸めると本当の失敗が消える。
+      if ((err as { code?: string })?.code === "23505") {
+        return res.json({ duplicate: true });
+      }
       logger.warn({ err }, "[hermes-mcp] insert proposal failed");
       return res.status(500).json({ error: "internal_error" });
     }
@@ -283,8 +463,9 @@ export function registerHermesMcpRoutes(app: Express): void {
         approved_at: string | null;
         rejected_at: string | null;
         created_at: string;
+        proposal_type: string;
       }>(
-        `SELECT id, tenant_id, trigger_pattern, status, dedup_key, approved_at, rejected_at, created_at
+        `SELECT id, tenant_id, trigger_pattern, status, dedup_key, approved_at, rejected_at, created_at, proposal_type
            FROM tuning_rules tr
           WHERE tr.source = 'hermes'
             AND (
@@ -312,6 +493,7 @@ export function registerHermesMcpRoutes(app: Express): void {
       const proposals: Array<{
         proposal_id: string;
         scope: HermesProposalScope;
+        proposal_type: string;
         tenant_id: string | undefined;
         title: string;
         status: string;
@@ -326,7 +508,11 @@ export function registerHermesMcpRoutes(app: Express): void {
         const scope: HermesProposalScope = row.tenant_id === "global" ? "global" : "tenant";
 
         let effect: Awaited<ReturnType<typeof getRuleEffect>> | ProposalEffectNotComputed | null = null;
-        if (row.status === "active") {
+        if (row.proposal_type === "upsell") {
+          // 承認されても本番プロンプトに入らないので after 区間が存在しない。
+          // getRuleEffect(最大5000セッション走査)を回すのは完全な無駄。
+          effect = { status: "not_computed", reason: "upsell_not_measurable" };
+        } else if (row.status === "active") {
           if (effectComputedCount < PROPOSALS_EFFECT_LIMIT) {
             effect = await getRuleEffect(pool, row.id);
             effectComputedCount += 1;
@@ -337,6 +523,7 @@ export function registerHermesMcpRoutes(app: Express): void {
 
         proposals.push({
           proposal_id: String(row.id),
+          proposal_type: row.proposal_type,
           scope,
           tenant_id: scope === "tenant" ? row.tenant_id : undefined,
           title: row.trigger_pattern,

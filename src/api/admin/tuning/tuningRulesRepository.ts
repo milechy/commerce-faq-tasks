@@ -42,6 +42,8 @@ export interface TuningRule {
   /** GID 1217752900578379 (R4): before/after の分岐点。updateRule では初回承認時のみ NOW() を入れる(再承認で上書きしない)。 */
   approved_at?: string | null;
   rejected_at?: string | null;
+  /** D8-2: 'behavior'(応答方針・従来) | 'upsell'(営業提案。承認しても is_active は立たない)。 */
+  proposal_type?: string;
   /** DBの列ではない。updateRule が status 指定の呼び出しで「既にその状態だった(冪等な繰り返し)」
    *  ことを呼び出し側(actionExecutor)へ伝えるためだけのフラグ。他のcaseでは常にundefined。 */
   alreadyApplied?: boolean;
@@ -157,7 +159,7 @@ export async function listRules(tenantId?: string, filters?: ListRulesFilters): 
     const result = await pool.query<TuningRule>(
       `SELECT id, tenant_id, trigger_pattern, expected_behavior,
               priority, is_active, created_by, source_message_id,
-              created_at, updated_at, source, status, evidence
+              created_at, updated_at, source, status, evidence, proposal_type
        FROM tuning_rules
        ${whereClause}
        ORDER BY
@@ -172,7 +174,7 @@ export async function listRules(tenantId?: string, filters?: ListRulesFilters): 
   const result = await pool.query<TuningRule>(
     `SELECT id, tenant_id, trigger_pattern, expected_behavior,
             priority, is_active, created_by, source_message_id,
-            created_at, updated_at, source, status, evidence
+            created_at, updated_at, source, status, evidence, proposal_type
      FROM tuning_rules
      ${whereClause}
      ORDER BY
@@ -194,6 +196,14 @@ export async function getActiveRulesForTenant(
 ): Promise<TuningRule[]> {
   const pool = getPool();
 
+  // ★D8-2: ここに proposal_type を足さない(SELECT にも WHERE にも)★
+  // アップセル提案(proposal_type='upsell')の混入防止は、DB の CHECK 制約
+  // tuning_rules_upsell_never_active_check が「is_active=true になれるのは
+  // behavior だけ」を保証することで既に成立している。
+  // このクエリは全テナントの全回答が通るホットパスであり、ここに列を1つ足すと
+  // migration 未適用のままデプロイした瞬間に 42703 で回答経路が全滅する
+  // (usage_logs の plan_multiplier / session_id で2回起きた事故と同型)。
+  // 防御は DB 制約と承認側の分岐に置き、ここは1文字も変えない。
   const result = await pool.query<TuningRule>(
     `SELECT id, tenant_id, trigger_pattern, expected_behavior,
             priority, is_active, created_by, source_message_id,
@@ -254,8 +264,10 @@ export async function updateRule(
 
   // 存在 + 所有権確認。status も合わせて読み、承認/却下の冪等な繰り返し
   // (「もう一度承認して」に対して「すでに反映済みです」を返す)を判定する。
-  const check = await pool.query<{ id: number; tenant_id: string; status: string | null }>(
-    `SELECT id, tenant_id, status FROM tuning_rules WHERE id = $1`,
+  const check = await pool.query<{
+    id: number; tenant_id: string; status: string | null; proposal_type: string | null;
+  }>(
+    `SELECT id, tenant_id, status, proposal_type FROM tuning_rules WHERE id = $1`,
     [id],
   );
   if (check.rows.length === 0) return null;
@@ -272,8 +284,15 @@ export async function updateRule(
   // is_active を導出し、呼び出し側(actionExecutor / LLMプロンプト)が
   // is_active を渡し忘れても不整合が起きないようにする。
   // status 未指定時は従来通り params.is_active(通常のON/OFF切替)を使う。
-  const derivedIsActive =
-    params.status === "active"
+  //
+  // D8-2: proposal_type='upsell'(営業提案)は「採用」しても本番プロンプトへ入れない。
+  // status='active' でも is_active は false のままにする。手動のON/OFF切替
+  // (params.is_active)でも true にしない — upsell に「有効化」という状態は無い。
+  // 漏れた場合は DB の CHECK 制約が 23514 で弾く(コードが唯一の砦ではない)。
+  const isUpsell = check.rows[0]!.proposal_type === "upsell";
+  const derivedIsActive = isUpsell
+    ? false
+    : params.status === "active"
       ? true
       : params.status === "rejected"
         ? false
