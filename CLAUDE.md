@@ -222,12 +222,16 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
 
 **既知の破れ（是正前に触るなら前提を確認する）**: 自動生成ルールの無断有効化 / 採用済み返答が回答生成に未到達 /
 一致判定が半角カンマ区切りの部分一致のみ / ツール結果500字打ち切りによる一覧欠落 /
-**`approved_at` を書くのは `approveTuningRule`・`rejectTuningRule`（`evaluationsRepository.ts`）のみで、
-チャット経由の `updateRule` は書かない。** 前者のエンドポイント自体は `super_admin` / `client_admin`
-双方に開いているが（`evaluations/routes.ts` の `ALLOWED_EVALUATION_ROLES`）、呼び出す旧UI
-（`AIReportTab.tsx` / `SuggestedRulesCard.tsx`）が super_admin 限定のため、店主が実際に使える唯一の
-承認経路（チャット）だけが承認時刻を残さない。`approved_at` を before/after の境界に使う効果測定
-（`analytics/ruleEffect.ts`）は、チャット承認したルールを永久に「未承認」として扱う。
+**★2026-09-03 訂正: `approved_at` はチャット経由でも記録される（この項の旧記述は失効）。**
+`tuningRulesRepository.ts` の `updateRule` が GID 1217752900578379 (R4) で
+`approved_at = CASE WHEN status='active' THEN COALESCE(approved_at, NOW()) WHEN status='rejected' THEN NULL ELSE approved_at END`
+（`rejected_at` も対称）を実装済みで、`approveTuningRule` / `rejectTuningRule`
+（`evaluationsRepository.ts`）と対称に記録される。初回承認で固定し再承認では上書きしない
+（観測期間の起点をずらさないため）。効果測定（`analytics/ruleEffect.ts`）の before/after 境界も機能する。
+**「チャット承認は承認時刻を残さない」を前提にしたタスクを新規に起こさないこと**（実際に起票して差し戻した）。
+テナント向けの承認 UI も既にある（`copilot-preview/index.tsx` の rulesList カードに
+「有効にする」「却下する」。旧UI の `AIReportTab.tsx` / `SuggestedRulesCard.tsx` が super_admin 限定なのは事実だが、
+店主の経路が無いわけではない）。
 詳細と受け入れ条件: `docs/TUNING_RULE_CHAT_REQUIREMENTS.md`
 
 ## 学習ループの不変ルール
