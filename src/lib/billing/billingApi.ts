@@ -14,6 +14,10 @@ import {
   computeQuotaOverage,
   FREE_AD_MONTHLY_CONVERSATION_LIMIT,
 } from './planQuota';
+import {
+  fetchTenantEconomics, fetchTenantEconomicsDetail,
+  type TenantBillingSnapshot, type PeriodInvoice,
+} from './tenantEconomics';
 
 const usageQuerySchema = z.object({
   tenantId: z.string().min(1).optional(),
@@ -30,6 +34,17 @@ const breakdownQuerySchema = z.object({
 
 const invoicesQuerySchema = z.object({
   tenantId: z.string().min(1).optional(),
+});
+
+// 粗利分析。任意の from/to を受けず period(YYYYMM)のみを受ける。
+// 基本料・込み枠が絡む売上推計は暦月でしか意味を持たず、任意期間を許すと
+// 「日割りされていない基本料 ÷ 任意期間」という無意味な粗利が出るため。
+const economicsQuerySchema = z.object({
+  period: z.string().regex(/^\d{4}(0[1-9]|1[0-2])$/),
+});
+const economicsDetailQuerySchema = economicsQuerySchema.extend({
+  /** 'stripe' のときだけ Stripe を叩いて実請求と突合する。既定は推計のみ。 */
+  reconcile: z.enum(['stripe']).optional(),
 });
 
 /** tenantId をJWT（client_admin）またはクエリ（super_admin）から解決する */
@@ -215,6 +230,58 @@ export async function computeBillingEstimateJpy(
   if (unitAmountJpy === null) return null;
 
   return textUnits * unitAmountJpy;
+}
+
+/**
+ * 粗利分析へ渡す売上側のスナップショット。
+ *
+ * tenantEconomics.ts はこれを注入されて使う(循環 import を避けるため)。
+ * ★集計SQLを書き写さない★ — 数量も金額も computeExpectedBilling /
+ * computeBillingEstimateJpy という既存の唯一の出どころから取る。
+ */
+export async function fetchTenantBillingSnapshot(
+  db: any, tenantId: string, from: string, to: string,
+): Promise<TenantBillingSnapshot> {
+  const tenantResult = await db.query(`SELECT plan FROM tenants WHERE id = $1`, [tenantId]);
+  const plan = (tenantResult.rows[0]?.plan as string | null) ?? null;
+  const [{ textUnits, avatarMinutes }, revenueEstimateJpy] = await Promise.all([
+    computeExpectedBilling(db, tenantId, from, to, plan),
+    computeBillingEstimateJpy(db, tenantId, from, to),
+  ]);
+  return { plan, textUnits, avatarMinutes, revenueEstimateJpy };
+}
+
+/**
+ * 突合用に請求書だけを取る。
+ *
+ * fetchBillingInvoices を使い回さないのは、あちらが Billing Portal セッションを
+ * 毎回作る(Stripe への書き込み)ためで、参照だけの突合で副作用を起こしたくない。
+ * null は「Stripe から取得できない(未契約 / キー未設定)」、空配列は
+ * 「取得できたが該当なし」。★この2つを同じ値で表現しない★
+ */
+export async function fetchPeriodInvoices(db: any, tenantId: string): Promise<PeriodInvoice[] | null> {
+  const subResult = await db.query(
+    `SELECT stripe_customer_id FROM stripe_subscriptions
+      WHERE tenant_id = $1 AND is_active = true LIMIT 1`,
+    [tenantId],
+  );
+  if (subResult.rows.length === 0) return null;
+
+  const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
+  if (!stripeSecretKey) return null;
+
+  const stripe = getStripe(stripeSecretKey);
+  const invoices = await stripe.invoices.list({ customer: subResult.rows[0].stripe_customer_id, limit: 24 });
+  return invoices.data.map((inv: any) => ({
+    id: inv.id,
+    status: inv.status,
+    amount_due: inv.amount_due,
+    amount_paid: inv.amount_paid,
+    currency: inv.currency,
+    period_start: inv.period_start,
+    period_end: inv.period_end,
+    hosted_invoice_url: inv.hosted_invoice_url ?? null,
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -809,6 +876,66 @@ export function registerBillingAdminRoutes(
         res.json(response);
       } catch (err) {
         logger.error({ err, tenantId }, '[billingApi] cost-breakdown query failed');
+        res.status(500).json({ error: 'internal_error' });
+      }
+    }
+  );
+
+  // ──────────────────────────────────────────────────────────────
+  // GET /v1/admin/billing/economics?period=YYYYMM
+  //   テナント横断の採算一覧(売上推計 − API原価)。★super_admin 限定★
+  //   原価とマージン倍率が同時に見えるため、テナントには絶対に出さない。
+  // ──────────────────────────────────────────────────────────────
+  app.get(
+    '/v1/admin/billing/economics',
+    ...saMw,
+    async (req: Request, res: Response): Promise<void> => {
+      const parsed = economicsQuerySchema.safeParse(req.query);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'invalid_request', details: parsed.error.issues });
+        return;
+      }
+      try {
+        const response = await fetchTenantEconomics(db, parsed.data.period, fetchTenantBillingSnapshot);
+        res.json(response);
+      } catch (err) {
+        logger.error({ err, period: parsed.data.period }, '[billingApi] economics query failed');
+        res.status(500).json({ error: 'internal_error' });
+      }
+    }
+  );
+
+  // ──────────────────────────────────────────────────────────────
+  // GET /v1/admin/billing/economics/:tenantId?period=YYYYMM&reconcile=stripe
+  //   1テナントの内訳。reconcile=stripe のときだけ実請求と突合する
+  //   (一覧では叩かない — テナント数ぶん Stripe を往復することになるため)。
+  // ──────────────────────────────────────────────────────────────
+  app.get(
+    '/v1/admin/billing/economics/:tenantId',
+    ...saMw,
+    async (req: Request, res: Response): Promise<void> => {
+      const parsed = economicsDetailQuerySchema.safeParse(req.query);
+      if (!parsed.success) {
+        res.status(400).json({ error: 'invalid_request', details: parsed.error.issues });
+        return;
+      }
+      const tenantId = req.params.tenantId;
+      if (!tenantId) {
+        res.status(400).json({ error: 'invalid_request', message: 'tenantId required' });
+        return;
+      }
+      try {
+        const response = await fetchTenantEconomicsDetail(
+          db, tenantId, parsed.data.period, fetchTenantBillingSnapshot,
+          parsed.data.reconcile === 'stripe' ? fetchPeriodInvoices : null,
+        );
+        if (!response) {
+          res.status(404).json({ error: 'tenant_not_found' });
+          return;
+        }
+        res.json(response);
+      } catch (err) {
+        logger.error({ err, tenantId }, '[billingApi] economics detail query failed');
         res.status(500).json({ error: 'internal_error' });
       }
     }
