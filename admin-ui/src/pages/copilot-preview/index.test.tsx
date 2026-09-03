@@ -2557,10 +2557,12 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
   });
 
   // hermes由来のevidence(src/api/hermes-mcp/routes.ts)はjudge由来と形が違い
-  // ({ pattern, rationale, ... }。session_idsのような内部識別子はそのまま出さない)。
+  // ({ pattern, rationale, session_ids, ... }。session_idsはHermes(外部)が渡す
+  // 未検証の文字列で、このテナントの実在する会話に解決できる保証が無いため、
+  // クリックで辿れるリンクにはせず件数だけ示す(生のIDはそのまま出さない)。
   // judge専用のフィールド(avgScore等)しか見ていないと、rationaleが実在するのに
   // 無言で消える(L0-3で発見した欠落)。ここではその形が描画されることを固定する。
-  it("get_tuning_rules: hermes由来のevidence(pattern/rationale)が根拠として表示される", async () => {
+  it("get_tuning_rules: hermes由来のevidence(pattern/rationale/session_ids件数)が根拠として表示される", async () => {
     mockAgent({
       reply: "指示ルールの状況をお伝えしました。",
       actions: [
@@ -2579,7 +2581,7 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
                 isActive: false,
                 source: "hermes",
                 status: "pending",
-                evidence: { pattern: "保証期間を聞かれて離脱", rationale: "即答できないと離脱率が上がる傾向", session_ids: ["abc123"] },
+                evidence: { pattern: "保証期間を聞かれて離脱", rationale: "即答できないと離脱率が上がる傾向", session_ids: ["abc123", "def456"] },
               },
             ],
           },
@@ -2591,8 +2593,10 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
 
     expect(await screen.findByText(/パターン: 保証期間を聞かれて離脱/)).toBeTruthy();
     expect(screen.getByText(/即答できないと離脱率が上がる傾向/)).toBeTruthy();
-    // 内部識別子(session_ids)はそのまま出さない
+    // 件数(2件)は示すが、内部識別子そのものは出さない
+    expect(screen.getByText(/元になった会話: 2件/)).toBeTruthy();
     expect(screen.queryByText(/abc123/)).toBeNull();
+    expect(screen.queryByText(/def456/)).toBeNull();
   });
 
   // 壊れやすいポイント: evidenceがオブジェクトではなく文字列で来る場合(admin/tuning

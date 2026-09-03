@@ -684,6 +684,13 @@ function renderTuningRuleEvidence(evidence: unknown): React.ReactNode {
   if (typeof rationale === "string" && rationale.trim()) {
     lines.push(<div key="rationale">{rationale}</div>);
   }
+  // session_idsはHermes(外部)が渡す未検証の文字列で、このテナントの実在する会話に
+  // 解決できる保証が無い(admin/tuning/EvidenceDisplayのようにボタン化してresolveSessionByShortId
+  // に渡すと、一致しない場合「押しても無意味なボタン」になりうる)。辿れる形では出さず、件数だけ示す。
+  const sessionIds = evidence["session_ids"];
+  if (Array.isArray(sessionIds) && sessionIds.length > 0) {
+    lines.push(<div key="sessions">元になった会話: {sessionIds.length}件</div>);
+  }
 
   if (lines.length === 0) return null;
   return <>{lines}</>;
