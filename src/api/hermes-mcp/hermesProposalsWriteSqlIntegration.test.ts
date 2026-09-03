@@ -138,3 +138,161 @@ d("POST /v1/hermes-mcp/proposals — 書き込みの実DB検証", () => {
     ]);
   });
 });
+
+/**
+ * D8-2: アップセル提案が本番プロンプトへ混入しないことを、端から端まで実DBで固定する。
+ *
+ * ★ステータス列の更新だけを見ない★
+ * 「承認したら status='active' になった」ことを確認しても、本番に効くかどうかは
+ * is_active しか決めない(D8)。ここでは実際に getActiveRulesForTenant を呼び、
+ * アップセル提案が返らないことまで確認する。
+ *
+ * 併せて、コード側の分岐が全部漏れた場合の最後の砦である
+ * CHECK 制約 tuning_rules_upsell_never_active_check が実際に効くことも確認する。
+ * これはモックDBでは原理的に検証できない。
+ */
+d("D8-2: アップセル提案は承認しても本番プロンプトに入らない（実DB）", () => {
+  beforeAll(() => {
+    db = new Pool({ connectionString: DB_URL, options: "-c timezone=UTC" });
+  });
+
+  afterAll(async () => {
+    await db.end();
+  });
+
+  beforeEach(async () => {
+    await db.query("TRUNCATE tuning_rules RESTART IDENTITY CASCADE");
+    await db.query("TRUNCATE tenants CASCADE");
+    await db.query(
+      `INSERT INTO tenants (id, name, plan, features) VALUES ('carnation', 'carnation', 'standard', $1::jsonb)`,
+      [JSON.stringify({ learning: { learn: true, share: true } })],
+    );
+    process.env.HERMES_MCP_API_KEY = API_KEY;
+  });
+
+  afterEach(() => {
+    delete process.env.HERMES_MCP_API_KEY;
+  });
+
+  const UPSELL = {
+    scope: "tenant",
+    tenant_id: "carnation",
+    title: "会話が込み枠を超えています",
+    rationale: "9月は込み枠1000会話に対して1500会話",
+    suggested_action: "Growthプランへの変更を提案する",
+    dedup_key: "tenant:carnation:upsell:202609",
+    proposal_type: "upsell",
+    upsell: {
+      signal: "text_overage",
+      current_plan: "standard",
+      recommended_plan: "growth",
+      period_yyyymm: "202609",
+    },
+  };
+
+  it("★端から端まで: 投稿 → 承認 → getActiveRulesForTenant に載らない★", async () => {
+    const { approveTuningRule } = await import("../admin/evaluations/evaluationsRepository");
+    const { getActiveRulesForTenant, buildTuningPromptSection } =
+      await import("../admin/tuning/tuningRulesRepository");
+
+    // 1) 投稿: is_active=false / proposal_type='upsell' で着地する
+    const post = await authedPost("/v1/hermes-mcp/proposals", UPSELL);
+    expect(post.status).toBe(201);
+    const id = Number(post.body.proposal_id);
+
+    const before = await db.query(
+      `SELECT is_active, status, proposal_type, trigger_pattern FROM tuning_rules WHERE id = $1`, [id]);
+    expect(before.rows[0]).toMatchObject({
+      is_active: false, status: "pending", proposal_type: "upsell",
+      trigger_pattern: "upsell:202609:text_overage",
+    });
+
+    // 2) 承認: status は active になるが is_active は false のまま
+    const approved = await approveTuningRule(id, "carnation");
+    expect(approved).not.toBeNull();
+    expect(approved!.status).toBe("active");
+    expect(approved!.is_active).toBe(false);
+
+    // 3) ★本番の読み出し経路に載らない★（ステータスだけ見て満足しない）
+    const activeRules = await getActiveRulesForTenant("carnation");
+    expect(activeRules.map((r) => r.id)).not.toContain(id);
+
+    // 4) プロンプト文字列にも現れない（最終形で確認する）
+    const prompt = buildTuningPromptSection(activeRules);
+    expect(prompt).not.toContain("Growth");
+    expect(prompt).not.toContain("upsell");
+  });
+
+  it("★CHECK 制約が最後の砦として効く（コード側の分岐が全部漏れても止まる）★", async () => {
+    const post = await authedPost("/v1/hermes-mcp/proposals", UPSELL);
+    const id = Number(post.body.proposal_id);
+
+    await expect(
+      db.query(`UPDATE tuning_rules SET is_active = true WHERE id = $1`, [id])
+    ).rejects.toThrow(/tuning_rules_upsell_never_active_check|check constraint/i);
+  });
+
+  it("behavior 提案は従来どおり承認で本番プロンプトに入る（巻き添えにしない）", async () => {
+    const { approveTuningRule } = await import("../admin/evaluations/evaluationsRepository");
+    const { getActiveRulesForTenant } = await import("../admin/tuning/tuningRulesRepository");
+
+    // 従来型(proposal_type 省略)。別 describe の定数を跨いで使わず、ここで定義する。
+    const post = await authedPost("/v1/hermes-mcp/proposals", {
+      scope: "tenant",
+      tenant_id: "carnation",
+      title: "保証訴求の改善",
+      rationale: "会話ログから保証質問への回答が購入に繋がるパターンを確認",
+      suggested_action: "保証訴求を初回応答に含める",
+      dedup_key: "tenant:carnation:warranty-pitch",
+    });
+    const id = Number(post.body.proposal_id);
+
+    const approved = await approveTuningRule(id, "carnation");
+    expect(approved!.is_active).toBe(true);
+    expect(approved!.proposal_type).toBe("behavior");
+
+    const activeRules = await getActiveRulesForTenant("carnation");
+    expect(activeRules.map((r) => r.id)).toContain(id);
+  });
+
+  it("★同月・同シグナルの再投稿は trigger_pattern の UNIQUE で弾かれ duplicate になる★", async () => {
+    const first = await authedPost("/v1/hermes-mcp/proposals", UPSELL);
+    expect(first.status).toBe(201);
+
+    // dedup_key を変えても trigger_pattern が同じなら 23505。
+    // ON CONFLICT は (tenant_id, dedup_key) しか見ないため、ここを握らないと500になる。
+    const second = await authedPost("/v1/hermes-mcp/proposals", {
+      ...UPSELL, dedup_key: "tenant:carnation:upsell:202609:retry",
+    });
+    expect(second.status).toBe(200);
+    expect(second.body).toEqual({ duplicate: true });
+
+    const { rows } = await db.query(`SELECT count(*)::int AS n FROM tuning_rules WHERE proposal_type = 'upsell'`);
+    expect(rows[0].n).toBe(1);
+  });
+
+  it("別月なら別提案として保存される（毎月の提案が潰し合わない）", async () => {
+    await authedPost("/v1/hermes-mcp/proposals", UPSELL);
+    const oct = await authedPost("/v1/hermes-mcp/proposals", {
+      ...UPSELL,
+      dedup_key: "tenant:carnation:upsell:202610",
+      upsell: { ...UPSELL.upsell, period_yyyymm: "202610" },
+    });
+    expect(oct.status).toBe(201);
+
+    const { rows } = await db.query(
+      `SELECT trigger_pattern FROM tuning_rules WHERE proposal_type='upsell' ORDER BY trigger_pattern`);
+    expect(rows.map((r) => r.trigger_pattern)).toEqual([
+      "upsell:202609:text_overage", "upsell:202610:text_overage",
+    ]);
+  });
+
+  it("現プランと食い違う提案は409で保存されない", async () => {
+    await db.query(`UPDATE tenants SET plan = 'growth' WHERE id = 'carnation'`);
+    const res = await authedPost("/v1/hermes-mcp/proposals", UPSELL);
+    expect(res.status).toBe(409);
+
+    const { rows } = await db.query(`SELECT count(*)::int AS n FROM tuning_rules`);
+    expect(rows[0].n).toBe(0);
+  });
+});

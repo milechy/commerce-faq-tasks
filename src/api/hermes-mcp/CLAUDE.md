@@ -24,8 +24,11 @@
 - fail-safe の向き: `learn` は既定 true（外に出ない）、`share` は既定 false（外に出る）。
   DB 障害・壊れた形は必ず `{learn:true, share:false}` に倒す。**判定不能を共有側に倒さない。**
 - 「出す（share）」と「読む（共有プール参照）」は 1 つの同意に統合する。別フラグにしない。
-- **`/v1/hermes-mcp/*` は静的キー 1 本だけで守られており、nginx の IP allowlist が無い**（`location /` に落ちている・未是正）。
-  この配下にエンドポイントを足すときは、allowlist の追加を同じ PR に含める。
+- `/v1/hermes-mcp/*` は静的キー 1 本（`HERMES_MCP_API_KEY`）と nginx の IP allowlist の2段で守られている。
+  allowlist は `nginx-rajiuce.new` の `location /v1/hermes-mcp/ { allow 135.181.194.34; deny all; }` として
+  api.r2c.biz / r2c.biz の**両方の server ブロック**に入っている（H-2 / PR #1085 で導入、#1114 で本番同期）。
+  プレフィックス location なので、この配下にエンドポイントを足せば自動的に保護される。
+  ★server ブロックを増やすときは allowlist もその中に入れること★ — 片方だけだと素通しになる。
 - 未同意テナントには存在確認すら与えない（403 で統一）。テナント越境は権限エラーではなく**不存在**。
 - 同意チェックは他の何よりも先に実行する。`proposals` 側の再検証（defense in depth）を外さない。
 

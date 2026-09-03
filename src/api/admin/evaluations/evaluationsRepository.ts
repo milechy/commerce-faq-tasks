@@ -457,6 +457,8 @@ export interface TuningRuleWithStatus {
   tenant_id: string;
   status: string;
   is_active: boolean;
+  /** D8-2: 'behavior'(応答方針) | 'upsell'(営業提案)。upsell は承認しても is_active を立てない。 */
+  proposal_type: string;
   approved_at: string | null;
   rejected_at: string | null;
   updated_at: string;
@@ -467,6 +469,13 @@ export interface TuningRuleWithStatus {
  * 承認は status='active' と is_active=true を同一UPDATEで設定する。
  * これを分けると「承認したのに本番のプロンプトへ入らない」事故になる
  * (getActiveRulesForTenant は is_active しか見ない)。
+ *
+ * D8-2: ただし proposal_type='upsell'(営業提案)は承認しても is_active を立てない。
+ * 「営業案として採った」だけで、AI の応答方針には一切入らないため。
+ * ★呼び出し側に分岐を持たせず、唯一の承認実装であるここで SQL 内から導出する★
+ * (D8 と同じ理由。分岐が2箇所に増えると片方が漏れる)。
+ * 漏れた場合は DB の CHECK 制約 tuning_rules_upsell_never_active_check が
+ * 23514 で弾くので、静かに本番プロンプトへ入ることはない。
  */
 export async function approveTuningRule(
   id: number,
@@ -484,12 +493,12 @@ export async function approveTuningRule(
   const result = await pool.query<TuningRuleWithStatus>(
     `UPDATE tuning_rules
      SET status = 'active',
-         is_active = true,
+         is_active = (proposal_type <> 'upsell'),
          approved_at = NOW(),
          rejected_at = NULL,
          updated_at = NOW()
      ${where}
-     RETURNING id, tenant_id, status, is_active, approved_at, rejected_at, updated_at`,
+     RETURNING id, tenant_id, status, is_active, proposal_type, approved_at, rejected_at, updated_at`,
     args,
   );
   return result.rows[0] ?? null;
@@ -521,7 +530,7 @@ export async function rejectTuningRule(
          approved_at = NULL,
          updated_at = NOW()
      ${where}
-     RETURNING id, tenant_id, status, is_active, approved_at, rejected_at, updated_at`,
+     RETURNING id, tenant_id, status, is_active, proposal_type, approved_at, rejected_at, updated_at`,
     args,
   );
   return result.rows[0] ?? null;
