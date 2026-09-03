@@ -27,6 +27,8 @@ import { findMissingColumns, REQUIRED_COLUMNS } from "../../api/admin/analytics/
 import { countFreeAdBillableConversations, countFreeAdBillableRequests } from "../../api/chat/route";
 import { initUsageTracker, trackUsage } from "./usageTracker";
 import { calculateBaseCostCents, calculateBillingAmountCents } from "./costCalculator";
+import { MARGIN_MULTIPLIER } from "./costCalculator";
+import { fetchTenantEconomics, _clearEconomicsCache, type BillingSnapshotFn } from "./tenantEconomics";
 
 const DB_URL = process.env.BILLING_SQL_TEST_DATABASE_URL;
 
@@ -1178,5 +1180,148 @@ d("trackUsage の INSERT（実 Postgres・cost_base_cents の記録）", () => {
         model: "llama-3.1-8b-instant", inputTokens: 100_000, outputTokens: 50_000, featureUsed: "admin_tuning",
       })
     );
+  });
+});
+
+/**
+ * 原価導出SQL(BASE_COST_EXPR)を実 Postgres で検証する。
+ *
+ * この式は CASE / GREATEST / CEIL / FILTER を組み合わせており、
+ * TypeScript のユニットテストでは一行も実行されない。
+ * ここが間違っていると粗利が黙って MARGIN_MULTIPLIER 倍ずれる。
+ */
+d("tenantEconomics の原価導出（実 Postgres）", () => {
+  let db: Pool;
+
+  // 売上側は本テストの対象外なので固定値を返すスタブを注入する
+  // （売上の正しさは computeExpectedBilling 側のテストで担保済み）。
+  const stubSnapshot: BillingSnapshotFn = async () => ({
+    plan: "growth", textUnits: 0, avatarMinutes: 0, revenueEstimateJpy: 100_000,
+  });
+
+  beforeAll(() => {
+    db = new Pool({ connectionString: DB_URL, options: "-c timezone=UTC" });
+  });
+
+  afterAll(async () => {
+    await db.end();
+  });
+
+  beforeEach(async () => {
+    _clearEconomicsCache();
+    await db.query("TRUNCATE usage_logs CASCADE");
+    await db.query("TRUNCATE tenants CASCADE");
+    await db.query(`INSERT INTO tenants (id, name, plan) VALUES ('t1','t1','growth')`);
+  });
+
+  /** 2026-09 の JST 暦月に確実に入る時刻。 */
+  const IN_SEPT = "2026-09-15T00:00:00Z";
+
+  const insertRow = (o: {
+    id: string; feature: string | null; total: number; llm: number;
+    base: number | null; billable?: boolean;
+  }) =>
+    db.query(
+      `INSERT INTO usage_logs
+         (tenant_id, request_id, feature_used, cost_total_cents, cost_llm_cents,
+          cost_base_cents, billable, created_at)
+       VALUES ('t1', $1, $2, $3, $4, $5, $6, $7::timestamptz)`,
+      [o.id, o.feature, o.total, o.llm, o.base, o.billable ?? true, IN_SEPT]
+    );
+
+  const baseCostOf = async () => {
+    const res = await fetchTenantEconomics(db, "202609", stubSnapshot);
+    return res.tenants[0]!;
+  };
+
+  it("①記録済み: cost_base_cents をそのまま使う（逆算しない）", async () => {
+    // total=5000 だが base=777 が実測されているので 777 を採るべき
+    await insertRow({ id: "r1", feature: "chat", total: 5000, llm: 100, base: 777 });
+    const row = await baseCostOf();
+    expect(row.cost_base_usd_cents).toBe(777);
+    expect(row.estimation_method).toBe("recorded");
+  });
+
+  it("②未記録 + end-user機能: cost_total_cents をマージンで割り戻す", async () => {
+    const total = 1000;
+    await insertRow({ id: "r2", feature: "chat", total, llm: 10, base: null });
+    const row = await baseCostOf();
+    expect(row.cost_base_usd_cents).toBe(Math.ceil(total / MARGIN_MULTIPLIER));
+    expect(row.estimation_method).toBe("derived");
+  });
+
+  it("③未記録 + 管理系機能: margin=1 で記録されているので割り戻さない", async () => {
+    // admin_tuning は NON_BILLABLE かつ margin=1。割り戻すと原価を 1/margin に過小評価する。
+    await insertRow({ id: "r3", feature: "admin_tuning", total: 1000, llm: 10, base: null, billable: false });
+    const row = await baseCostOf();
+    expect(row.cost_nonbillable_usd_cents).toBe(1000);
+  });
+
+  it("★④未記録 + marginOverride:1 の行: cost_llm_cents の下限クランプが救う★", async () => {
+    // marginOverride:1 で書かれた end-user 機能の行。total は原価そのもの(margin=1)。
+    // 素朴に割り戻すと total/margin まで落ちるが、cost_llm_cents はマージン非適用の
+    // 実原価なので「真の原価の厳密な下限」として GREATEST が拾い上げる。
+    const total = 1000;
+    const llm = 900;
+    await insertRow({ id: "r4", feature: "chat", total, llm, base: null });
+    const row = await baseCostOf();
+    const naive = Math.ceil(total / MARGIN_MULTIPLIER);
+    expect(naive).toBeLessThan(llm);              // 素朴な割り戻しは過小
+    expect(row.cost_base_usd_cents).toBe(llm);    // クランプが効いている
+  });
+
+  it("★feature_used は NOT NULL（原価導出に NULL 分岐を置かない根拠）★", async () => {
+    // calculateBillingAmountCents は featureUsed === undefined を end-user 扱いするが、
+    // DB 側は NOT NULL なのでその分岐は到達しない。BASE_COST_EXPR から
+    // NULL 分岐を外している根拠がこれ。制約が外れたらこのテストが落ちて気づける。
+    await expect(
+      insertRow({ id: "r5", feature: null, total: 1000, llm: 0, base: null })
+    ).rejects.toThrow(/not-null|null value/i);
+
+    const { rows } = await db.query(
+      `SELECT is_nullable FROM information_schema.columns
+        WHERE table_name = 'usage_logs' AND column_name = 'feature_used'`
+    );
+    expect(rows[0].is_nullable).toBe("NO");
+  });
+
+  it("billable=false の原価は粗利の分子から外れ、別枠で出る", async () => {
+    await insertRow({ id: "r6", feature: "chat", total: 500, llm: 0, base: 500 });
+    await insertRow({ id: "r7", feature: "sai_agent", total: 300, llm: 0, base: 300, billable: false });
+    const row = await baseCostOf();
+    expect(row.cost_base_usd_cents).toBe(500);
+    expect(row.cost_nonbillable_usd_cents).toBe(300);
+  });
+
+  it("記録済みと未記録が混在すると mixed になる（移行期を隠さない）", async () => {
+    await insertRow({ id: "r8", feature: "chat", total: 1000, llm: 0, base: 200 });
+    await insertRow({ id: "r9", feature: "chat", total: 1000, llm: 0, base: null });
+    const row = await baseCostOf();
+    expect(row.estimation_method).toBe("mixed");
+    expect(row.recorded_row_ratio).toBe(0.5);
+    expect(row.cost_base_usd_cents).toBe(200 + Math.ceil(1000 / MARGIN_MULTIPLIER));
+  });
+
+  it("★JST 暦月の境界: 9/1 00:00 JST の直前直後で月が分かれる★", async () => {
+    // 2026-08-31 23:59 JST = 2026-08-31T14:59Z → 8月扱い
+    // 2026-09-01 00:01 JST = 2026-08-31T15:01Z → 9月扱い
+    await db.query(
+      `INSERT INTO usage_logs (tenant_id, request_id, feature_used, cost_total_cents, cost_base_cents, billable, created_at)
+       VALUES ('t1','aug','chat',9999,111,true,'2026-08-31T14:59:00Z'::timestamptz),
+              ('t1','sep','chat',9999,222,true,'2026-08-31T15:01:00Z'::timestamptz)`
+    );
+    const sep = await baseCostOf();
+    expect(sep.cost_base_usd_cents).toBe(222);   // 8月の行は入らない
+
+    _clearEconomicsCache();
+    const augRes = await fetchTenantEconomics(db, "202608", stubSnapshot);
+    expect(augRes.tenants[0]!.cost_base_usd_cents).toBe(111);
+  });
+
+  it("利用が無いテナントは一覧に出ない（Stripe への無駄な往復を作らない）", async () => {
+    await db.query(`INSERT INTO tenants (id, name, plan) VALUES ('idle','idle','starter')`);
+    await insertRow({ id: "r10", feature: "chat", total: 100, llm: 0, base: 100 });
+    const res = await fetchTenantEconomics(db, "202609", stubSnapshot);
+    expect(res.tenants.map((t) => t.tenant_id)).toEqual(["t1"]);
   });
 });
