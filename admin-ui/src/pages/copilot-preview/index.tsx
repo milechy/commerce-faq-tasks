@@ -188,12 +188,11 @@ type Card =
         // P4-1: 古い(このフィールドが無い)キャッシュ済み会話との後方互換のため任意。
         source?: string | null;
         status?: string | null;
-        evidence?: {
-          evaluationIds?: number[];
-          effectivePrinciples?: string[];
-          failedPrinciples?: string[];
-          avgScore?: number;
-        } | null;
+        // judge由来(avgScore/effectivePrinciples/failedPrinciples)とhermes由来
+        // ({...呼び出し元の任意オブジェクト, rationale}、src/api/hermes-mcp/routes.ts)
+        // の2形式が同じ列に入る。将来のドリフトにも備え、実行時に形を判定する
+        // (renderTuningRuleEvidence)。ここでは unknown で受けて型で嘘をつかない。
+        evidence?: unknown;
       }>;
       totalCount: number;
     }
@@ -641,6 +640,71 @@ function describeAvatarAppearance(card: Extract<Card, { kind: "avatarAdopted" }>
 
 const AVATAR_VOICE_DESIGN_GENERIC_ERROR = "声を作成できませんでした。少し時間をおいてもう一度お試しください。";
 const AVATAR_VOICE_DESIGN_EMPTY_ERROR = "声を作成できませんでした。もう一度お試しください。";
+
+// ─── 指示ルールの根拠(evidence)表示 ─────────────────────────────────────────
+// tuning_rules.evidence はJSONBで書き込み元によって形が違う:
+//   judge由来(src/agent/judge/evaluationAnalyzer.ts) = { avgScore, effectivePrinciples, failedPrinciples }
+//   hermes由来(src/api/hermes-mcp/routes.ts)         = { ...外部呼び出し元の任意オブジェクト, rationale }
+// hermes側はrationale以外は呼び出し元(外部Hermes Agent)が自由に決めるため形の保証が無い。
+// 未知の形やstringが来ても落ちない(React error #31 = objectを直接childに渡すのを避ける)よう、
+// 既知のキーだけをピンポイントで読み、それ以外は無言で無視する
+// (admin/tuning/index.tsx の EvidenceDisplay と同じ防御方針。評価IDやセッションIDのような
+// 内部識別子は店主向けのこの画面には出さない)。
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function renderTuningRuleEvidence(evidence: unknown): React.ReactNode {
+  if (evidence === null || evidence === undefined) return null;
+
+  if (typeof evidence === "string") {
+    return evidence.trim() ? <div>{evidence}</div> : null;
+  }
+
+  if (!isPlainObject(evidence)) return null;
+
+  const lines: React.ReactNode[] = [];
+  // 元になった会話の件数(L0-3レビュー、GID 1218136117850235)。1件の会話から出た
+  // 提案と20件から出た提案では店主が下すべき判断の重みが違うため、件数は必ず示す。
+  // judge由来はevaluationIds、hermes由来はsession_idsに入る(どちらも内部識別子の配列)。
+  // IDそのものは出さない: judge/manualのevaluationIdsは店主に意味のある識別子ではなく、
+  // hermesのsession_idsは外部Hermes Agentが渡す未検証の文字列でこのテナントの実在する
+  // 会話に解決できる保証が無い(resolveSessionByShortIdへ渡しても不一致なら
+  // 「押しても無意味なボタン」になりうる)。
+  const evaluationIds = evidence["evaluationIds"];
+  const sessionIds = evidence["session_ids"];
+  const conversationCount = Array.isArray(sessionIds)
+    ? sessionIds.length
+    : Array.isArray(evaluationIds)
+      ? evaluationIds.length
+      : undefined;
+  if (conversationCount) {
+    lines.push(<div key="count">{conversationCount}件の会話をもとにしています</div>);
+  }
+  const avgScore = evidence["avgScore"];
+  if (typeof avgScore === "number") {
+    lines.push(<div key="avgScore">もとになった会話の対応の質: 目安{avgScore}点</div>);
+  }
+  const effectivePrinciples = evidence["effectivePrinciples"];
+  if (Array.isArray(effectivePrinciples) && effectivePrinciples.length > 0) {
+    lines.push(<div key="effective">効果があった対応: {effectivePrinciples.join("、")}</div>);
+  }
+  const failedPrinciples = evidence["failedPrinciples"];
+  if (Array.isArray(failedPrinciples) && failedPrinciples.length > 0) {
+    lines.push(<div key="failed">うまくいかなかった対応: {failedPrinciples.join("、")}</div>);
+  }
+  const pattern = evidence["pattern"];
+  if (typeof pattern === "string" && pattern.trim()) {
+    lines.push(<div key="pattern">パターン: {pattern}</div>);
+  }
+  const rationale = evidence["rationale"];
+  if (typeof rationale === "string" && rationale.trim()) {
+    lines.push(<div key="rationale">{rationale}</div>);
+  }
+
+  if (lines.length === 0) return null;
+  return <>{lines}</>;
+}
 
 // ─── 進行中テキストを少しずつ流し込む（体感の良さ重視の演出。本物の
 //     トークンストリーミングではなく、確定済みの応答文字列をクライアント側で
@@ -2744,6 +2808,7 @@ function CardView({
             const isAiProposal = isJudgeProposal || isHermesProposal;
             const isPendingApproval = isAiProposal && !r.isActive && r.status !== "rejected";
             const isRejected = isAiProposal && r.status === "rejected";
+            const evidenceNode = renderTuningRuleEvidence(r.evidence);
             return (
               <div
                 key={r.id}
@@ -2762,18 +2827,12 @@ function CardView({
                 <div style={{ fontSize: 14.5, color: "var(--foreground)" }}>
                   <strong>{r.triggerPattern}</strong> → {r.expectedBehavior}
                 </div>
-                {/* 根拠は評価IDなどの内部識別子をそのまま出さず、店主の言葉に言い換える */}
-                {r.evidence && (
+                {/* 根拠は評価IDなどの内部識別子をそのまま出さず、店主の言葉に言い換える。
+                    judge/hermesで形が違い、hermes側は呼び出し元(外部)が自由に決めるため
+                    未知の形もありうる → renderTuningRuleEvidence が防御的に描画する。 */}
+                {evidenceNode && (
                   <div style={{ fontSize: 12.5, color: "var(--muted-foreground)", display: "flex", flexDirection: "column", gap: 2 }}>
-                    {r.evidence.avgScore !== undefined && (
-                      <div>もとになった会話の対応の質: 目安{r.evidence.avgScore}点</div>
-                    )}
-                    {r.evidence.effectivePrinciples && r.evidence.effectivePrinciples.length > 0 && (
-                      <div>効果があった対応: {r.evidence.effectivePrinciples.join("、")}</div>
-                    )}
-                    {r.evidence.failedPrinciples && r.evidence.failedPrinciples.length > 0 && (
-                      <div>うまくいかなかった対応: {r.evidence.failedPrinciples.join("、")}</div>
-                    )}
+                    {evidenceNode}
                   </div>
                 )}
                 {/* D5: 旧UIの3段階(低/普通/高)と同じ語彙でチャットからも優先度を変えられるようにする。

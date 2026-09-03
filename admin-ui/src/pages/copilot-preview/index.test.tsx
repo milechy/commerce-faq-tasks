@@ -2556,6 +2556,141 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     expect(screen.queryByText(/うまくいかなかった対応/)).toBeNull();
   });
 
+  // hermes由来のevidence(src/api/hermes-mcp/routes.ts)はjudge由来と形が違い
+  // ({ pattern, rationale, session_ids, ... }。session_idsはHermes(外部)が渡す
+  // 未検証の文字列で、このテナントの実在する会話に解決できる保証が無いため、
+  // クリックで辿れるリンクにはせず件数だけ示す(生のIDはそのまま出さない)。
+  // judge専用のフィールド(avgScore等)しか見ていないと、rationaleが実在するのに
+  // 無言で消える(L0-3で発見した欠落)。ここではその形が描画されることを固定する。
+  it("get_tuning_rules: hermes由来のevidence(pattern/rationale/session_ids件数)が根拠として表示される", async () => {
+    mockAgent({
+      reply: "指示ルールの状況をお伝えしました。",
+      actions: [
+        {
+          tool: "get_tuning_rules",
+          result: "指示ルール一覧（1件、うち有効0件・無効1件）です。詳しい内容は一覧でご確認いただけます。",
+          card: {
+            kind: "tuning_rules_list",
+            totalCount: 1,
+            rules: [
+              {
+                id: 55,
+                triggerPattern: "保証期間",
+                expectedBehavior: "3ヶ月と即答する",
+                priority: 5,
+                isActive: false,
+                source: "hermes",
+                status: "pending",
+                evidence: { pattern: "保証期間を聞かれて離脱", rationale: "即答できないと離脱率が上がる傾向", session_ids: ["abc123", "def456"] },
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    await send("指示ルールの状況を教えて");
+
+    expect(await screen.findByText(/パターン: 保証期間を聞かれて離脱/)).toBeTruthy();
+    expect(screen.getByText(/即答できないと離脱率が上がる傾向/)).toBeTruthy();
+    // 件数(2件)は示すが、内部識別子そのものは出さない
+    expect(screen.getByText(/2件の会話をもとにしています/)).toBeTruthy();
+    expect(screen.queryByText(/abc123/)).toBeNull();
+    expect(screen.queryByText(/def456/)).toBeNull();
+  });
+
+  // L0-3レビュー(GID 1218136117850235): 提案の重み(1件の会話由来か20件の会話由来か)は
+  // 承認判断そのものを変えるため、件数は必ず示す。IDは画面に現れないことを両立させる。
+  it("get_tuning_rules: hermes由来のevidenceでsession_idsが3件なら「3件の会話をもとにしています」と出て、IDは画面に現れない", async () => {
+    mockAgent({
+      reply: "指示ルールの状況をお伝えしました。",
+      actions: [
+        {
+          tool: "get_tuning_rules",
+          result: "指示ルール一覧（1件、うち有効0件・無効1件）です。詳しい内容は一覧でご確認いただけます。",
+          card: {
+            kind: "tuning_rules_list",
+            totalCount: 1,
+            rules: [
+              {
+                id: 56,
+                triggerPattern: "在庫",
+                expectedBehavior: "取り寄せ可否を案内",
+                priority: 5,
+                isActive: false,
+                source: "hermes",
+                status: "pending",
+                evidence: { rationale: "在庫確認で離脱する会話が続いている", session_ids: ["s-1111", "s-2222", "s-3333"] },
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    await send("指示ルールの状況を教えて");
+
+    expect(await screen.findByText(/3件の会話をもとにしています/)).toBeTruthy();
+    expect(screen.queryByText(/s-1111/)).toBeNull();
+    expect(screen.queryByText(/s-2222/)).toBeNull();
+    expect(screen.queryByText(/s-3333/)).toBeNull();
+  });
+
+  // 壊れやすいポイント: evidenceがオブジェクトではなく文字列で来る場合(admin/tuning
+  // 側のEvidenceDisplayが前提とする形式)。クラッシュせずそのまま表示できることを固定する。
+  it("get_tuning_rules: evidenceが文字列でもクラッシュせずそのまま表示される", async () => {
+    mockAgent({
+      reply: "指示ルールの状況をお伝えしました。",
+      actions: [
+        {
+          tool: "get_tuning_rules",
+          result: "指示ルール一覧（1件、うち有効0件・無効1件）です。詳しい内容は一覧でご確認いただけます。",
+          card: {
+            kind: "tuning_rules_list",
+            totalCount: 1,
+            rules: [
+              { id: 60, triggerPattern: "返品", expectedBehavior: "30日以内", priority: 5, isActive: false, source: "manual", status: null, evidence: "店主が過去の対応履歴をもとに手入力した根拠テキスト" },
+            ],
+          },
+        },
+      ],
+    });
+
+    await send("指示ルールの状況を教えて");
+
+    expect(await screen.findByText("店主が過去の対応履歴をもとに手入力した根拠テキスト")).toBeTruthy();
+  });
+
+  // 壊れやすいポイント: evidenceが将来のドリフトで完全に未知の形(既知キーを1つも
+  // 持たないオブジェクトや配列)になった場合。クラッシュせず(React error #31 =
+  // objectを直接childへ渡すのを避ける)、何も表示しないことを固定する。
+  it("get_tuning_rules: evidenceが未知の形(配列・見知らぬキー)でもクラッシュしない", async () => {
+    mockAgent({
+      reply: "指示ルールの状況をお伝えしました。",
+      actions: [
+        {
+          tool: "get_tuning_rules",
+          result: "指示ルール一覧（2件、うち有効0件・無効2件）です。詳しい内容は一覧でご確認いただけます。",
+          card: {
+            kind: "tuning_rules_list",
+            totalCount: 2,
+            rules: [
+              { id: 70, triggerPattern: "送料", expectedBehavior: "一律500円", priority: 5, isActive: false, source: "hermes", status: "pending", evidence: ["予期しない配列形式"] },
+              { id: 71, triggerPattern: "在庫", expectedBehavior: "取り寄せ可否を案内", priority: 5, isActive: false, source: "hermes", status: "pending", evidence: { unknownField: "future schema" } },
+            ],
+          },
+        },
+      ],
+    });
+
+    await send("指示ルールの状況を教えて");
+
+    expect(await screen.findByText("送料")).toBeTruthy();
+    expect(screen.getByText("在庫")).toBeTruthy();
+    expect(screen.queryByText(/予期しない配列形式/)).toBeNull();
+    expect(screen.queryByText(/future schema/)).toBeNull();
+  });
+
   // 壊れやすいポイント: is_active=true(=承認され本番に反映済み)なのに
   // statusがpending/nullのまま(LLMがstatusの同時指定を忘れた等で発生しうる
   // 不整合状態)。承認判定はis_activeを唯一の権威とするため、この場合でも

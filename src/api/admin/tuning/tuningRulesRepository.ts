@@ -42,6 +42,9 @@ export interface TuningRule {
   /** GID 1217752900578379 (R4): before/after の分岐点。updateRule では初回承認時のみ NOW() を入れる(再承認で上書きしない)。 */
   approved_at?: string | null;
   rejected_at?: string | null;
+  /** DBの列ではない。updateRule が status 指定の呼び出しで「既にその状態だった(冪等な繰り返し)」
+   *  ことを呼び出し側(actionExecutor)へ伝えるためだけのフラグ。他のcaseでは常にundefined。 */
+  alreadyApplied?: boolean;
 }
 
 export interface ListRulesFilters {
@@ -249,13 +252,16 @@ export async function updateRule(
 ): Promise<TuningRule | null> {
   const pool = getPool();
 
-  // 存在 + 所有権確認
-  const check = await pool.query<{ id: number; tenant_id: string }>(
-    `SELECT id, tenant_id FROM tuning_rules WHERE id = $1`,
+  // 存在 + 所有権確認。status も合わせて読み、承認/却下の冪等な繰り返し
+  // (「もう一度承認して」に対して「すでに反映済みです」を返す)を判定する。
+  const check = await pool.query<{ id: number; tenant_id: string; status: string | null }>(
+    `SELECT id, tenant_id, status FROM tuning_rules WHERE id = $1`,
     [id],
   );
   if (check.rows.length === 0) return null;
   if (tenantId && check.rows[0]!.tenant_id !== tenantId) return null;
+  const alreadyApplied =
+    params.status !== undefined && check.rows[0]!.status === params.status;
 
   const approvedJson =
     params.approved_responses !== undefined
@@ -310,7 +316,11 @@ export async function updateRule(
     ],
   );
 
-  return result.rows[0] ?? null;
+  const updated = result.rows[0];
+  if (updated && alreadyApplied) {
+    updated.alreadyApplied = true;
+  }
+  return updated ?? null;
 }
 
 /**

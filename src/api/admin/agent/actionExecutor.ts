@@ -451,7 +451,11 @@ export type TuningRulesListCardPayload = {
     // pending(既定) / active(承認済み) / rejected(却下済み)。is_active だけでは
     // pending と rejected が区別できない(どちらも is_active=false)ため必要。
     status: string | null;
-    evidence: RuleEvidence | null;
+    // judge由来はRuleEvidence形だが、hermes由来(src/api/hermes-mcp/routes.ts)は
+    // 外部Hermes Agentが渡す任意オブジェクト+rationaleで、RuleEvidenceの型と一致しない
+    // (DBはJSONBで形を強制しない)。フロント側が実行時に形を判定して描画する前提で、
+    // ここでは型で嘘をつかず素通しする。
+    evidence: RuleEvidence | Record<string, unknown> | string | null;
   }>;
   totalCount: number;
 };
@@ -2850,6 +2854,13 @@ export async function executeToolCall(
         );
         if (!updated) {
           return truncate(`指示ルール（ID: ${id}）が見つからないかアクセス権限がありません`);
+        }
+        // 同じ提案を二度承認/却下しても、2回目はその旨を伝える(冪等)。
+        // approved_at/rejected_atは初回のみ記録され上書きされないため、実害は無いが
+        // 「押しても何も起きなかった」と誤解されないようにする。
+        if (updated.alreadyApplied) {
+          const already = status === 'active' ? '承認済み' : '却下済み';
+          return truncate(`指示ルール（ID: ${id}）はすでに${already}です: 「${updated.trigger_pattern}」`);
         }
         if (status === 'active') {
           return truncate(`指示ルール（ID: ${id}）を承認し、有効にしました: 「${updated.trigger_pattern}」`);

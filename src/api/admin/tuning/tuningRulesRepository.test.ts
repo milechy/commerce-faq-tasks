@@ -302,6 +302,42 @@ describe('updateRule', () => {
       expect(updateArgs).toHaveLength(7);
     });
   });
+
+  // L0-3: 同じ提案を2回承認/却下しても実害は無い(approved_atはCOALESCEで
+  // 1回目のみ)が、呼び出し側(actionExecutor)が「すでに反映済み」と案内できるよう、
+  // 所有権確認SELECTで読んだ更新前のstatusと今回のstatus指定が一致する場合に
+  // alreadyApplied=true を返す。
+  describe('alreadyApplied(冪等な承認/却下の検知)', () => {
+    it('更新前からstatus="active"だった行にstatus="active"を指定すると、alreadyApplied=trueが返る', async () => {
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ id: 1, tenant_id: 'tenant-abc', status: 'active' }] }) // 所有権確認SELECT
+        .mockResolvedValueOnce({ rows: [{ id: 1, tenant_id: 'tenant-abc', status: 'active' }] }); // UPDATE
+
+      const result = await updateRule(1, { status: 'active' }, 'tenant-abc');
+
+      expect(result?.alreadyApplied).toBe(true);
+    });
+
+    it('更新前がstatus="pending"の行にstatus="active"を指定した場合(初回承認)は、alreadyAppliedがtrueにならない', async () => {
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ id: 1, tenant_id: 'tenant-abc', status: 'pending' }] })
+        .mockResolvedValueOnce({ rows: [{ id: 1, tenant_id: 'tenant-abc', status: 'active' }] });
+
+      const result = await updateRule(1, { status: 'active' }, 'tenant-abc');
+
+      expect(result?.alreadyApplied).toBeFalsy();
+    });
+
+    it('status未指定の通常編集では、alreadyAppliedはtrueにならない', async () => {
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ id: 1, tenant_id: 'tenant-abc', status: 'active' }] })
+        .mockResolvedValueOnce({ rows: [{ id: 1, tenant_id: 'tenant-abc', status: 'active' }] });
+
+      const result = await updateRule(1, { is_active: true }, 'tenant-abc');
+
+      expect(result?.alreadyApplied).toBeFalsy();
+    });
+  });
 });
 
 // D7: 採用済み返答(approved_responses)が回答生成経路(getActiveRulesForTenant →
