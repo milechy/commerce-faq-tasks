@@ -274,7 +274,16 @@ describe('usageTracker', () => {
       expect(params[2]).toBe('llama-3.1-8b-instant'); // model は $3 のまま
       expect(params[5]).toBe('chat');
       expect(params[BILLABLE_PARAM_INDEX]).toBe(true);
-      expect(params).toHaveLength(16);
+      // cost_base_cents($17, migration_usage_logs_cost_base.sql)を末尾に追加したため 17。
+      // ★この数を増やすときは、必ず「末尾に足したから増えた」ことを確認すること★
+      // 途中に差し込むと以降の $n が全てずれ、位置で検証している上の expect が
+      // 別の列を見に行っても気づけなくなる（この自己検査の存在意義）。
+      expect(params).toHaveLength(17);
+      // cost_base_cents($17)はマージン前なので、常に cost_total_cents($8)以下。
+      // 具体値を焼き付けないのは、LLM_COSTS の単価改定でこのテストが
+      // 「列の順序」とは無関係の理由で落ちるのを避けるため。
+      expect(typeof params[16]).toBe('number');
+      expect(params[16] as number).toBeLessThanOrEqual(params[7] as number);
     });
   });
 

@@ -329,17 +329,6 @@ export function calculateAvatarCostCents(credits: number): number {
   return Math.ceil(credits * LEMONSLICE_COST_PER_CREDIT_USD * 100);
 }
 
-/**
- * 1リクエストの課金金額をセント単位（整数）で返す。
- *
- * - エンドユーザー向け機能（chat/avatar/voice）: MARGIN_MULTIPLIER 適用
- * - 管理者・運用向け機能: × 1（原価のみ）
- * - featureUsed 未指定時は後方互換のため MARGIN_MULTIPLIER を適用
- *
- * 中間丸めを避けるため USD のまま合算してから最後に変換する。
- *
- * @throws inputTokens / outputTokens が負の場合
- */
 // GID: totalUSDの計算式に加算されるフィールド群（マイナス値は「請求額を減らす」
 // 攻撃・不具合の経路になりうる）。現状の全呼び出し元(fishTtsRoutes/fishAsrRoutes/
 // generationRoutes/usageRoutes)は非負値しか渡さないため実害は無いが、将来別の
@@ -351,7 +340,17 @@ const NEGATIVE_GUARD_FIELDS: ReadonlyArray<keyof UsageRecord> = [
   'lemonsliceRegistrationCount', 'voiceDesignRequestCount',
 ];
 
-export function calculateBillingAmountCents(usage: UsageRecord): number {
+/**
+ * 1リクエストの実原価を USD で返す（マージン適用前）。
+ *
+ * calculateBillingAmountCents（マージン後）と calculateBaseCostCents（マージン前）の
+ * 唯一の計算元。★原価の式をこの関数の外にもう1本書かないこと★ —
+ * 2本になると、新しい原価項目（外部APIの追加など）を片方にだけ足したときに
+ * 「請求はされているのに粗利には出ない」原価が静かに生まれる。
+ *
+ * @throws inputTokens / outputTokens / NEGATIVE_GUARD_FIELDS が負の場合
+ */
+function _computeTotalCostUsd(usage: UsageRecord): number {
   if (usage.inputTokens < 0 || usage.outputTokens < 0) {
     throw new Error(
       `Invalid token counts: input=${usage.inputTokens}, output=${usage.outputTokens}`
@@ -364,8 +363,6 @@ export function calculateBillingAmountCents(usage: UsageRecord): number {
     }
   }
 
-  const isEndUser = usage.featureUsed === undefined || END_USER_FEATURES.has(usage.featureUsed);
-  const margin   = usage.marginOverride ?? (isEndUser ? MARGIN_MULTIPLIER : 1);
   // 本行の LLM コスト + 同一リクエスト内の追加 LLM 呼び出し（planner 等）をモデル別実レートで合算。
   const llmUSD   = _calculateLLMCostUSD(usage) + _sumExtraLlmUsd(usage.extraLlmUsages);
   const ttsUSD   = (usage.ttsTextBytes  ?? 0) * fishTtsCostPerByteUsd(usage.ttsModel);
@@ -386,7 +383,39 @@ export function calculateBillingAmountCents(usage: UsageRecord): number {
   const fluxUSD      = (usage.fluxImageCount ?? 0) * FLUX_PRO_COST_PER_IMAGE_USD;
   const lemonRegUSD  = (usage.lemonsliceRegistrationCount ?? 0) * LEMONSLICE_AVATAR_REGISTRATION_COST_USD;
   const voiceDesignUSD = (usage.voiceDesignRequestCount ?? 0) * VOICE_DESIGN_COST_PER_REQUEST_USD;
-  const totalUSD = llmUSD + SERVER_COST_PER_REQUEST_USD + ttsUSD + avtrUSD + imgUSD + anamUSD + saiUSD
+  return llmUSD + SERVER_COST_PER_REQUEST_USD + ttsUSD + avtrUSD + imgUSD + anamUSD + saiUSD
     + ocrUSD + asrUSD + magnificUSD + fluxUSD + lemonRegUSD + voiceDesignUSD;
-  return Math.ceil(totalUSD * margin * 100);
+}
+
+/**
+ * 1リクエストの課金金額をセント単位（整数）で返す。
+ *
+ * - エンドユーザー向け機能（chat/avatar/voice）: MARGIN_MULTIPLIER 適用
+ * - 管理者・運用向け機能: × 1（原価のみ）
+ * - featureUsed 未指定時は後方互換のため MARGIN_MULTIPLIER を適用
+ *
+ * 中間丸めを避けるため USD のまま合算してから最後に変換する
+ * （合算は _computeTotalCostUsd が行う）。
+ *
+ * @throws inputTokens / outputTokens が負の場合
+ */
+export function calculateBillingAmountCents(usage: UsageRecord): number {
+  const isEndUser = usage.featureUsed === undefined || END_USER_FEATURES.has(usage.featureUsed);
+  const margin    = usage.marginOverride ?? (isEndUser ? MARGIN_MULTIPLIER : 1);
+  return Math.ceil(_computeTotalCostUsd(usage) * margin * 100);
+}
+
+/**
+ * 1リクエストの実原価をセント単位（整数）で返す。マージンを一切適用しない。
+ *
+ * usage_logs.cost_base_cents に記録され、テナント別粗利（売上 − API原価）の
+ * 原価側になる。cost_total_cents（マージン後）との違いは margin だけ。
+ *
+ * ★cost_base_cents * margin === cost_total_cents にはならない★
+ * Math.ceil が両方に別々に効くため、最大で margin セントぶんずれる。
+ * cost_total_cents は既存の請求突合に使われている値なので、こちらに合わせて
+ * 丸め方を変えたりはしない（請求側の数値を動かさないことを優先する）。
+ */
+export function calculateBaseCostCents(usage: UsageRecord): number {
+  return Math.ceil(_computeTotalCostUsd(usage) * 100);
 }

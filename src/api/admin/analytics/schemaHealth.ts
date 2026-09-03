@@ -93,7 +93,10 @@ export const REQUIRED_COLUMNS: Record<string, readonly string[]> = {
   // 計測ヘルスで欠落を検知できるようレジストリに載せる。
   // session_id 欠落は特に静かな事故で、usageTracker の 42703 フォールバックが旧カラムで
   // 記録を続けるため利用記録は残るが、会話単位の請求だけがリクエスト単位に戻る。
-  usage_logs: ["anam_session_seconds", "avatar_credits", "avatar_session_ms", "billable", "cost_llm_cents", "cost_total_cents", "feature_used", "input_tokens", "model", "output_tokens", "plan", "plan_multiplier", "request_id", "session_id", "tenant_id", "tts_text_bytes"],
+  // cost_base_cents は migration_usage_logs_cost_base.sql で追加（マージン前の実原価）。
+  // 未適用のまま配備すると主 INSERT が 42703 になり、旧カラム構成のフォールバックへ落ちる。
+  // 記録自体は継続するが原価が一切残らず、粗利は永久に derived（推計）のままになる。
+  usage_logs: ["anam_session_seconds", "avatar_credits", "avatar_session_ms", "billable", "cost_base_cents", "cost_llm_cents", "cost_total_cents", "feature_used", "input_tokens", "model", "output_tokens", "plan", "plan_multiplier", "request_id", "session_id", "tenant_id", "tts_text_bytes"],
 };
 
 export interface MissingColumn {

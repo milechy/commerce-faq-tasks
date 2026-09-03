@@ -6,6 +6,7 @@ import { logger } from "../../../lib/logger";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 import { userSourceClause, userSourceExists } from "../analytics/summaryQueries";
 import { planHasFeature, queryTenantPlanOrThrow } from "../../../lib/billing/planFeatures";
+import { usdToJpy } from "../../../lib/billing/fx";
 
 const PERIOD_DAYS: Record<string, number> = {
   last_7d: 7,
@@ -194,7 +195,10 @@ export function registerAnalyticsSummaryRoutes(app: Express, db: Pool): void {
           llm_usage: llmUsage
             ? {
                 tokens: llmUsage.totalInputTokens + llmUsage.totalOutputTokens,
-                cost_jpy: Math.round(llmUsage.estimatedCostUsd * 150),
+                // レートは fx.ts が唯一の出どころ（以前はここに 150 が直書きされており、
+                // それがリポジトリ内で唯一の USD→JPY 換算だった）。
+                // 算出不可のときは 0 ではなく null を返す（禁止20）。
+                cost_jpy: usdToJpy(llmUsage.estimatedCostUsd),
                 generations: llmUsage.totalGenerations,
               }
             : null,

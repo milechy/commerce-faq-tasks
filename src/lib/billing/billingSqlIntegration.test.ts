@@ -25,6 +25,8 @@ import { Pool } from "pg";
 import { computeExpectedBilling } from "./stripeSync";
 import { findMissingColumns, REQUIRED_COLUMNS } from "../../api/admin/analytics/schemaHealth";
 import { countFreeAdBillableConversations, countFreeAdBillableRequests } from "../../api/chat/route";
+import { initUsageTracker, trackUsage } from "./usageTracker";
+import { calculateBaseCostCents, calculateBillingAmountCents } from "./costCalculator";
 
 const DB_URL = process.env.BILLING_SQL_TEST_DATABASE_URL;
 
@@ -1059,5 +1061,122 @@ d("stripe_subscriptions INSERT（checkout.session.completed の実SQL回帰）",
     await expect(
       db.query(UPSERT_SQL, ["t1", "cus_1", "sub_1", null])
     ).rejects.toThrow(/null value in column "stripe_price_id"/);
+  });
+});
+
+/**
+ * trackUsage の INSERT を実スキーマに対して実行する。
+ *
+ * usageTracker.test.ts はDBをモックして「SQL文字列と引数」だけを見ているため、
+ * 列が実在するか・プレースホルダ数が合っているかを一切検証できない。
+ * この種の食い違いは 42703 でフォールバック経路に落ち、
+ * 「記録は続くが原価だけ永久に NULL」という静かな事故になる
+ * （migration 未適用による同型事故がこのリポジトリで既に2回起きている）。
+ */
+d("trackUsage の INSERT（実 Postgres・cost_base_cents の記録）", () => {
+  let db: Pool;
+  const silentLogger = {
+    warn: () => {}, error: () => {}, debug: () => {}, info: () => {},
+  } as never;
+
+  /**
+   * trackUsage は fire-and-forget かつ内部でプラン解決のDB往復を挟むため、
+   * 固定回数の setImmediate では着地を待ちきれずフレークになる
+   * （実際に3件目だけ落ちるのを観測した）。行が現れるまでポーリングする。
+   */
+  const waitForRow = async (requestId: string) => {
+    for (let i = 0; i < 100; i++) {
+      const { rows } = await db.query(
+        "SELECT 1 FROM usage_logs WHERE request_id = $1", [requestId]
+      );
+      if (rows.length > 0) return;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    throw new Error(`usage_logs に ${requestId} が現れなかった（INSERT が落ちている可能性）`);
+  };
+
+  beforeAll(() => {
+    db = new Pool({ connectionString: DB_URL, options: "-c timezone=UTC" });
+    initUsageTracker(db, silentLogger);
+  });
+
+  afterAll(async () => {
+    await db.end();
+  });
+
+  beforeEach(async () => {
+    await db.query("TRUNCATE usage_logs CASCADE");
+    await db.query("TRUNCATE tenants CASCADE");
+    await db.query(`INSERT INTO tenants (id, name, plan) VALUES ('t1', 't1', 'growth')`);
+  });
+
+  it("★フォールバックに落ちず主 INSERT が通り、cost_base_cents が実際に入る★", async () => {
+    trackUsage({
+      tenantId: "t1",
+      requestId: "req-base-cost-1",
+      model: "llama-3.1-8b-instant",
+      inputTokens: 100_000,
+      outputTokens: 50_000,
+      featureUsed: "chat",
+    });
+    await waitForRow("req-base-cost-1");
+
+    const { rows } = await db.query(
+      `SELECT cost_base_cents, cost_total_cents, plan, plan_multiplier
+         FROM usage_logs WHERE request_id = 'req-base-cost-1'`
+    );
+    expect(rows).toHaveLength(1);
+
+    // NULL なら「列はあるがフォールバック経路で書かれた」ことを意味する。
+    expect(rows[0].cost_base_cents).not.toBeNull();
+    // plan/plan_multiplier も入っている = 主 INSERT が通った証拠
+    // （42703 フォールバックはこの2列を書かない）。
+    expect(rows[0].plan).toBe("growth");
+
+    const expectedBase = calculateBaseCostCents({
+      model: "llama-3.1-8b-instant", inputTokens: 100_000, outputTokens: 50_000, featureUsed: "chat",
+    });
+    expect(rows[0].cost_base_cents).toBe(expectedBase);
+  });
+
+  it("マージン前なので cost_total_cents 以下になる（粗利が原価割れしない）", async () => {
+    trackUsage({
+      tenantId: "t1",
+      requestId: "req-base-cost-2",
+      model: "llama-3.1-8b-instant",
+      inputTokens: 200_000,
+      outputTokens: 100_000,
+      featureUsed: "chat",
+    });
+    await waitForRow("req-base-cost-2");
+
+    const { rows } = await db.query(
+      `SELECT cost_base_cents, cost_total_cents FROM usage_logs WHERE request_id = 'req-base-cost-2'`
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].cost_base_cents).toBeLessThanOrEqual(rows[0].cost_total_cents);
+  });
+
+  it("管理系機能(margin=1)では原価と請求額が一致する", async () => {
+    trackUsage({
+      tenantId: "t1",
+      requestId: "req-base-cost-3",
+      model: "llama-3.1-8b-instant",
+      inputTokens: 100_000,
+      outputTokens: 50_000,
+      featureUsed: "admin_tuning",
+    });
+    await waitForRow("req-base-cost-3");
+
+    const { rows } = await db.query(
+      `SELECT cost_base_cents, cost_total_cents FROM usage_logs WHERE request_id = 'req-base-cost-3'`
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].cost_base_cents).toBe(rows[0].cost_total_cents);
+    expect(rows[0].cost_total_cents).toBe(
+      calculateBillingAmountCents({
+        model: "llama-3.1-8b-instant", inputTokens: 100_000, outputTokens: 50_000, featureUsed: "admin_tuning",
+      })
+    );
   });
 });

@@ -4,6 +4,7 @@
 import {
   calculateLLMCostCents,
   calculateBillingAmountCents,
+  calculateBaseCostCents,
   calculateTTSCostCents,
   calculateAvatarCostCents,
   fishTtsCostPerByteUsd,
@@ -1042,5 +1043,57 @@ describe('定数', () => {
     expect(MAGNIFIC_UPSCALE_COST_USD).toBeGreaterThanOrEqual(0);
     expect(FLUX_PRO_COST_PER_IMAGE_USD).toBeGreaterThanOrEqual(0);
     expect(LEMONSLICE_AVATAR_REGISTRATION_COST_USD).toBeGreaterThanOrEqual(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// calculateBaseCostCents（usage_logs.cost_base_cents の記録元）
+//
+// この関数が守るべき性質は「マージンを一切適用しない」こと。
+// ここが崩れると粗利（売上 − 原価）が MARGIN_MULTIPLIER 倍ずれる。
+// ---------------------------------------------------------------------------
+describe('calculateBaseCostCents', () => {
+  const base = { model: 'llama-3.1-8b-instant', inputTokens: 100_000, outputTokens: 50_000 };
+
+  it('★マージンを適用しない★ — end-user 機能でも原価そのものを返す', () => {
+    const withMargin = calculateBillingAmountCents({ ...base, featureUsed: 'chat' });
+    const withoutMargin = calculateBaseCostCents({ ...base, featureUsed: 'chat' });
+
+    expect(withoutMargin).toBeLessThan(withMargin);
+    // Math.ceil が base と total で別々に効くため厳密な整数倍にはならない。
+    // ずれは高々 margin セント（切り上げ1回ぶん × margin）。
+    expect(Math.abs(withoutMargin * MARGIN_MULTIPLIER - withMargin))
+      .toBeLessThanOrEqual(MARGIN_MULTIPLIER);
+  });
+
+  it('管理系機能(margin=1)では cost_total_cents と一致する', () => {
+    const adminFeature = 'admin_tuning';
+    expect(END_USER_FEATURES.has(adminFeature)).toBe(false);
+    expect(calculateBaseCostCents({ ...base, featureUsed: adminFeature }))
+      .toBe(calculateBillingAmountCents({ ...base, featureUsed: adminFeature }));
+  });
+
+  it('marginOverride は原価に影響しない（倍率にしか効かない列だから）', () => {
+    const withOverride = calculateBaseCostCents({ ...base, featureUsed: 'chat', marginOverride: 1 });
+    const withoutOverride = calculateBaseCostCents({ ...base, featureUsed: 'chat' });
+    expect(withOverride).toBe(withoutOverride);
+  });
+
+  it('LLM 以外の原価も含む（cost_llm_cents との違い）', () => {
+    const llmOnly = calculateLLMCostCents(base);
+    const withTts = calculateBaseCostCents({ ...base, featureUsed: 'voice', ttsTextBytes: 100_000 });
+    // cost_llm_cents は LLM 分のみ。cost_base_cents は TTS/server cost も含むので必ず大きい。
+    expect(withTts).toBeGreaterThan(llmOnly);
+  });
+
+  it('負値ガードは calculateBillingAmountCents と同じく効く', () => {
+    expect(() => calculateBaseCostCents({ ...base, inputTokens: -1 })).toThrow();
+    expect(() => calculateBaseCostCents({ ...base, ttsTextBytes: -1 })).toThrow();
+  });
+
+  it('利用ゼロでも server cost があるため 0 にはならない', () => {
+    const zero = calculateBaseCostCents({ model: 'llama-3.1-8b-instant', inputTokens: 0, outputTokens: 0 });
+    expect(zero).toBeGreaterThan(0);
+    expect(zero).toBe(Math.ceil(SERVER_COST_PER_REQUEST_USD * 100));
   });
 });
