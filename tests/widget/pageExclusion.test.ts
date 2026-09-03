@@ -16,7 +16,7 @@ function matchPathnameGlob(pathname: string, pattern: string): boolean {
       .replace(/@@R2C_DBLSTAR@@/g, '.*');
     const regex = new RegExp('^' + regexStr + '$');
     return regex.test(pathname);
-  } catch (_e) {
+  } catch {
     return false;
   }
 }
