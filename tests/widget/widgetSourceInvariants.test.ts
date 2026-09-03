@@ -518,3 +518,42 @@ describe('public/widget.js — S6 開示バナーのfail-open是正', () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// 埋め込みページ側の不変条件（2026-09-03 の本番障害を受けて追加）
+//
+// widget.js:28 は tenantId を data-tenant 属性からしか読まない（`__RAJIUCE_TENANT_CFG__`
+// には設定は載るが tenantId は載らない）。:102 で tenantId が無ければ warn して return
+// するため、data-tenant を落とすとウィジェットは黙って何も描画しない。
+// 実際に data-tenant を外して本番デプロイし、スモークが会話不成立で落ちた。
+// 動的配信 `/widget/<tenant>.js` に切り替えても data-tenant は依然として必要である。
+// ---------------------------------------------------------------------------
+describe('デモページの埋め込み不変条件', () => {
+  const DEMO_DIR = path.resolve(__dirname, '../../public/carnation-demo');
+  const pages = fs
+    .readdirSync(DEMO_DIR)
+    .filter((f) => f.endsWith('.html'))
+    .map((f) => [f, fs.readFileSync(path.join(DEMO_DIR, f), 'utf8')] as const);
+
+  it('検査対象のページが存在する（0件で緑になる空振りを防ぐ）', () => {
+    expect(pages.length).toBeGreaterThan(0);
+  });
+
+  it.each(pages.map(([name]) => name))(
+    '%s: widget を読み込むなら data-tenant を必ず持つ',
+    (name) => {
+      const src = pages.find(([n]) => n === name)![1];
+      if (!/src="\/widget[^"]*\.js"/.test(src)) return; // ウィジェットを載せないページは対象外
+      expect(src).toMatch(/data-tenant="[^"]+"/);
+    }
+  );
+
+  it.each(pages.map(([name]) => name))(
+    '%s: 公開HTMLに API キー文字列を直書きしない',
+    (name) => {
+      const src = pages.find(([n]) => n === name)![1];
+      expect(src).not.toMatch(/data-api-key=/);
+      expect(src).not.toMatch(/rjc_[0-9a-f]{16}/);
+    }
+  );
+});
