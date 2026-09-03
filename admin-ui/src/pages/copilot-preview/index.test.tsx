@@ -2594,9 +2594,46 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     expect(await screen.findByText(/パターン: 保証期間を聞かれて離脱/)).toBeTruthy();
     expect(screen.getByText(/即答できないと離脱率が上がる傾向/)).toBeTruthy();
     // 件数(2件)は示すが、内部識別子そのものは出さない
-    expect(screen.getByText(/元になった会話: 2件/)).toBeTruthy();
+    expect(screen.getByText(/2件の会話をもとにしています/)).toBeTruthy();
     expect(screen.queryByText(/abc123/)).toBeNull();
     expect(screen.queryByText(/def456/)).toBeNull();
+  });
+
+  // L0-3レビュー(GID 1218136117850235): 提案の重み(1件の会話由来か20件の会話由来か)は
+  // 承認判断そのものを変えるため、件数は必ず示す。IDは画面に現れないことを両立させる。
+  it("get_tuning_rules: hermes由来のevidenceでsession_idsが3件なら「3件の会話をもとにしています」と出て、IDは画面に現れない", async () => {
+    mockAgent({
+      reply: "指示ルールの状況をお伝えしました。",
+      actions: [
+        {
+          tool: "get_tuning_rules",
+          result: "指示ルール一覧（1件、うち有効0件・無効1件）です。詳しい内容は一覧でご確認いただけます。",
+          card: {
+            kind: "tuning_rules_list",
+            totalCount: 1,
+            rules: [
+              {
+                id: 56,
+                triggerPattern: "在庫",
+                expectedBehavior: "取り寄せ可否を案内",
+                priority: 5,
+                isActive: false,
+                source: "hermes",
+                status: "pending",
+                evidence: { rationale: "在庫確認で離脱する会話が続いている", session_ids: ["s-1111", "s-2222", "s-3333"] },
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    await send("指示ルールの状況を教えて");
+
+    expect(await screen.findByText(/3件の会話をもとにしています/)).toBeTruthy();
+    expect(screen.queryByText(/s-1111/)).toBeNull();
+    expect(screen.queryByText(/s-2222/)).toBeNull();
+    expect(screen.queryByText(/s-3333/)).toBeNull();
   });
 
   // 壊れやすいポイント: evidenceがオブジェクトではなく文字列で来る場合(admin/tuning

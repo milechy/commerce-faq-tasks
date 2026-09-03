@@ -664,6 +664,23 @@ function renderTuningRuleEvidence(evidence: unknown): React.ReactNode {
   if (!isPlainObject(evidence)) return null;
 
   const lines: React.ReactNode[] = [];
+  // 元になった会話の件数(L0-3レビュー、GID 1218136117850235)。1件の会話から出た
+  // 提案と20件から出た提案では店主が下すべき判断の重みが違うため、件数は必ず示す。
+  // judge由来はevaluationIds、hermes由来はsession_idsに入る(どちらも内部識別子の配列)。
+  // IDそのものは出さない: judge/manualのevaluationIdsは店主に意味のある識別子ではなく、
+  // hermesのsession_idsは外部Hermes Agentが渡す未検証の文字列でこのテナントの実在する
+  // 会話に解決できる保証が無い(resolveSessionByShortIdへ渡しても不一致なら
+  // 「押しても無意味なボタン」になりうる)。
+  const evaluationIds = evidence["evaluationIds"];
+  const sessionIds = evidence["session_ids"];
+  const conversationCount = Array.isArray(sessionIds)
+    ? sessionIds.length
+    : Array.isArray(evaluationIds)
+      ? evaluationIds.length
+      : undefined;
+  if (conversationCount) {
+    lines.push(<div key="count">{conversationCount}件の会話をもとにしています</div>);
+  }
   const avgScore = evidence["avgScore"];
   if (typeof avgScore === "number") {
     lines.push(<div key="avgScore">もとになった会話の対応の質: 目安{avgScore}点</div>);
@@ -683,13 +700,6 @@ function renderTuningRuleEvidence(evidence: unknown): React.ReactNode {
   const rationale = evidence["rationale"];
   if (typeof rationale === "string" && rationale.trim()) {
     lines.push(<div key="rationale">{rationale}</div>);
-  }
-  // session_idsはHermes(外部)が渡す未検証の文字列で、このテナントの実在する会話に
-  // 解決できる保証が無い(admin/tuning/EvidenceDisplayのようにボタン化してresolveSessionByShortId
-  // に渡すと、一致しない場合「押しても無意味なボタン」になりうる)。辿れる形では出さず、件数だけ示す。
-  const sessionIds = evidence["session_ids"];
-  if (Array.isArray(sessionIds) && sessionIds.length > 0) {
-    lines.push(<div key="sessions">元になった会話: {sessionIds.length}件</div>);
   }
 
   if (lines.length === 0) return null;
