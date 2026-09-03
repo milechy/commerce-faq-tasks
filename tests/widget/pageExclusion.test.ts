@@ -104,6 +104,15 @@ describe('禁止38: ②静的埋め込み・③db===nullリダイレクト経路
   // (第2の埋め込み経路を新設して②③でも取得しに行く、という解決はしない —
   // 「第2の埋め込み経路を作らない」に反するため)。
 
+  // ③(GET /widget/:tenantSlug.js が db===null で /widget.js へリダイレクトする経路)は
+  // 個別のテストケースを持たない。リダイレクト自体(302 → /widget.js)の実挙動は
+  // src/api/widget/routes.test.ts の
+  // '②db===nullのとき /widget.js へフォールバックし、バッジ制御ロジックを経由しない(fail-open)'
+  // が既に固定しており、リダイレクト先は②と同一の静的配布物であるため、
+  // 下記②のfail-open検証(excludedPagePatternsが常に空配列になる)がそのまま適用される。
+  // ここに ③ 専用のテストを足すと `expect(true).toBe(true)` のような実質チェックの
+  // 無いケースになり、緑であることが嘘になる(挙動が変わっても検知できない)ため作らない。
+
   it('②静的 /widget.js + data-tenant 埋め込みでは window.__RAJIUCE_TENANT_CFG__ が存在せず、excludedPagePatterns は常に空配列になる', () => {
     // public/widget.js:45 付近の `_rajiuceTenantCfg = window.__RAJIUCE_TENANT_CFG__ || {}` を模す。
     // このグローバルは①の動的ルートのみが注入するため、静的埋め込みでは常に {} になる。
@@ -114,15 +123,5 @@ describe('禁止38: ②静的埋め込み・③db===nullリダイレクト経路
     // テナントが管理画面で '/cart' を除外設定していても、静的埋め込みの訪問者には
     // その設定が一切届かず、常に表示されてしまう。
     expect(isExcludedPage('/cart', excludedPagePatterns)).toBe(false);
-  });
-
-  it('③GET /widget/:tenantSlug.js が db===null で /widget.js へリダイレクトする経路も、②と同じ静的配布物のため除外設定が効かない', () => {
-    // リダイレクト自体(src/api/widget/routes.ts)と302の実挙動は
-    // src/api/widget/routes.test.ts の
-    // '②db===nullのとき /widget.js へフォールバックし、バッジ制御ロジックを経由しない(fail-open)'
-    // が既に固定している。リダイレクト先は②と同一の静的配布物であるため、
-    // 上記②のfail-open検証(excludedPagePatternsが常に空配列になる)がそのまま
-    // この経路にも適用される。ここでは経路の対応関係を明記するのみ(実行不要)。
-    expect(true).toBe(true);
   });
 });
