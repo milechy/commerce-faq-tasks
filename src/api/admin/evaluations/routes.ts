@@ -20,6 +20,69 @@ import {
   insertTuningRuleFromSuggestion,
 } from "./evaluationsRepository";
 import { logger } from '../../../lib/logger';
+import { getPool } from "../../../lib/db";
+import { createNotification } from "../../../lib/notifications";
+import { buildTenantUpsellFigures } from "../../../lib/billing/billingApi";
+import { renderUpsellForTenant } from "../../../lib/billing/upsellRenderer";
+import { isValidUpsellSignal } from "../../../lib/billing/upsellSignals";
+
+/**
+ * D8-2: アップセル提案が「採用」されたときだけ、テナントへ通知する。
+ *
+ * ★投稿時ではなく承認時に送る★
+ * 未承認の営業提案がテナントに届くのを防ぐため、POST /v1/hermes-mcp/proposals は
+ * super_admin にしか通知しない。運営が採否を決めた後にここでテナントへ届ける。
+ *
+ * ★金額は保存された値ではなく、その場でレンダリングする★
+ * 保存すると価格改定で嘘になる。evidence にはシグナルとプラン名しか入っておらず、
+ * 金額は Stripe price から都度組み立てる(upsellRenderer.ts)。
+ *
+ * ★失敗しても承認は落とさない★
+ * createNotification 自体が例外を握り潰す fire-and-forget だが、
+ * figures の組み立て(Stripe到達)で落ちる可能性があるのでここでも包む。
+ * 「通知が出なかった」より「承認が 500 になった」方が損害が大きい。
+ */
+async function notifyTenantOfApprovedUpsell(ruleId: number): Promise<void> {
+  try {
+    const pool = getPool();
+    const { rows } = await pool.query<{ tenant_id: string; evidence: unknown }>(
+      `SELECT tenant_id, evidence FROM tuning_rules WHERE id = $1`,
+      [ruleId],
+    );
+    const row = rows[0];
+    if (!row) return;
+
+    const upsell = (row.evidence as { upsell?: Record<string, unknown> } | null)?.upsell;
+    if (!upsell) return;
+
+    const signal = upsell["signal"];
+    const currentPlan = upsell["current_plan"];
+    const recommendedPlan = upsell["recommended_plan"];
+    // 保存済み evidence が壊れていたら黙って何もしない(誤った文面を出すより出さない)。
+    if (!isValidUpsellSignal(signal) || typeof currentPlan !== "string" || typeof recommendedPlan !== "string") {
+      return;
+    }
+
+    const figures = await buildTenantUpsellFigures(
+      pool, row.tenant_id, signal, currentPlan, recommendedPlan,
+    );
+    const rendered = renderUpsellForTenant(figures);
+
+    await createNotification({
+      recipientRole: "client_admin",
+      recipientTenantId: row.tenant_id,
+      type: "hermes_proposal",
+      title: rendered.headline,
+      message: rendered.lines.join("\n"),
+      // 提案を見た人がその場でプランを変えられる面へ送る
+      // (「気づける場所と直せる場所を分けない」)。
+      link: "/admin/billing",
+      metadata: { tuning_rule_id: ruleId, proposal_type: "upsell", signal },
+    });
+  } catch (err) {
+    logger.warn({ err, ruleId }, "[upsell] 承認時のテナント通知に失敗(非致命)");
+  }
+}
 
 // ---------------------------------------------------------------------------
 // ALLOWED_ROLES whitelist (Phase69-1.5 PR-C4 v2)
@@ -425,6 +488,12 @@ export function registerEvaluationRoutes(app: Express): void {
       const updated = await approveTuningRule(id, tenantId);
       if (!updated) {
         return res.status(404).json({ error: "チューニングルールが見つかりません" });
+      }
+      // D8-2: 営業提案を採用したときだけテナントへ届ける。
+      // await するのは、通知の成否をログに残しきってからレスポンスを返すため
+      // (fire-and-forget にするとテスト側で着地を待てず、失敗も観測できない)。
+      if (updated.proposal_type === "upsell") {
+        await notifyTenantOfApprovedUpsell(id);
       }
       return res.json({ ok: true, rule: updated });
     } catch (err) {

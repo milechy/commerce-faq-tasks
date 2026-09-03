@@ -18,6 +18,8 @@ import {
   fetchTenantEconomics, fetchTenantEconomicsDetail,
   type TenantBillingSnapshot, type PeriodInvoice,
 } from './tenantEconomics';
+import type { TenantUpsellFigures } from './upsellRenderer';
+import type { UpsellSignal } from './upsellSignals';
 
 const usageQuerySchema = z.object({
   tenantId: z.string().min(1).optional(),
@@ -230,6 +232,76 @@ export async function computeBillingEstimateJpy(
   if (unitAmountJpy === null) return null;
 
   return textUnits * unitAmountJpy;
+}
+
+/**
+ * プランの月額基本料(円)を返す。算出不可は null。
+ *
+ * starter は基本料が無い純従量プランなので 0 ではなく null を返す
+ * (「基本料0円」と「基本料という概念が無い」を同じ値にしない)。
+ * enterprise / free_ad は getSubscriptionItemPrices が plan_not_self_serve を
+ * 返すため自然に null に落ちる(個別契約を自動算出しない既存方針どおり)。
+ */
+async function planBaseMonthlyJpy(stripe: any, plan: string): Promise<number | null> {
+  const priceResult = getSubscriptionItemPrices(plan, 'monthly');
+  if (!priceResult.ok || !priceResult.prices.base) return null;
+  return getPriceUnitAmountJpy(stripe, priceResult.prices.base);
+}
+
+/**
+ * アップセル文面に必要な数字を組み立てる（テナント向け）。
+ *
+ * ★戻り値の型に原価・マージン・粗利のフィールドを足さないこと★
+ * TenantUpsellFigures はテナントに描画される型で、判別子 __audience により
+ * 運営向けの型と取り違えられないようにしてある(upsellRenderer.ts 参照)。
+ *
+ * 金額は Stripe price が唯一の出どころ。コードに単価を焼き付けない
+ * (planQuota.ts の「超過単価はコードに置かない」方針を継承)。
+ */
+export async function buildTenantUpsellFigures(
+  db: any,
+  tenantId: string,
+  signal: UpsellSignal,
+  currentPlan: string,
+  recommendedPlan: string,
+): Promise<TenantUpsellFigures> {
+  const { monthStart, monthEnd } = getMonthRangeJst(new Date());
+  const from = monthStart.toISOString();
+  const to = monthEnd.toISOString();
+
+  const { textUnits, avatarMinutes } = await computeExpectedBilling(db, tenantId, from, to, currentPlan);
+  const overage = computeQuotaOverage(currentPlan, textUnits, avatarMinutes);
+
+  const includedNow = includedQuotaForPlan(currentPlan);
+  const includedAfter = includedQuotaForPlan(recommendedPlan);
+
+  const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
+  let currentBase: number | null = null;
+  let recommendedBase: number | null = null;
+  if (stripeSecretKey) {
+    const stripe = getStripe(stripeSecretKey);
+    // 直列にしない理由は無い(2件だけ・price はキャッシュ済みのことが多い)。
+    [currentBase, recommendedBase] = await Promise.all([
+      planBaseMonthlyJpy(stripe, currentPlan),
+      planBaseMonthlyJpy(stripe, recommendedPlan),
+    ]);
+  }
+
+  return {
+    __audience: 'tenant',
+    signal,
+    current_plan: currentPlan,
+    recommended_plan: recommendedPlan,
+    current_base_monthly_jpy: currentBase,
+    recommended_base_monthly_jpy: recommendedBase,
+    text_included_now: includedNow?.textConversations ?? null,
+    text_included_after: includedAfter?.textConversations ?? null,
+    avatar_included_minutes_now: includedNow?.avatarMinutes ?? null,
+    avatar_included_minutes_after: includedAfter?.avatarMinutes ?? null,
+    text_overage: overage?.textConversations ?? 0,
+    avatar_overage_minutes: overage?.avatarMinutes ?? 0,
+    as_of: new Date().toISOString(),
+  };
 }
 
 /**
