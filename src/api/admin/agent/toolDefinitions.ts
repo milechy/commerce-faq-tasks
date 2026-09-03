@@ -53,7 +53,7 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
     type: 'function',
     function: {
       name: 'get_tenant_settings',
-      description: 'テナントの現在の設定（GA4 Measurement ID、PostHog ホスト、ウィジェットテーマ、Widget埋め込みを許可するドメイン、FAQ登録フォームの入力例）を取得する',
+      description: 'テナントの現在の設定（GA4 Measurement ID、PostHog ホスト、ウィジェットテーマ、Widget埋め込みを許可するドメイン、ウィジェットを表示しないページのパスパターン、FAQ登録フォームの入力例）を取得する',
       parameters: {
         type: 'object',
         properties: {},
@@ -128,6 +128,40 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
           confirmed: { type: 'boolean', description: '確認フラグ（true でのみ実行される）' },
         },
         required: ['action', 'origin', 'confirmed'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'update_excluded_page_patterns',
+      description:
+        '許可ドメイン内でも、特定ページではWidgetを表示したくない、というテナント自己設定を' +
+        '1件追加・削除する読み書きツール。構文: /cart は完全一致、/products/* は1階層下まで、' +
+        '/blog/** は配下すべてに一致する。未登録(0件)は「すべてのページで表示する」既定の' +
+        '安全な状態であり、allowed_origins(空欄=保護なし)とは逆に危険な状態ではない。' +
+        '変更の反映には最大5分かかる(ブラウザ側のキャッシュのため)ことをユーザーに伝えること。' +
+        '/** のような広すぎるパターンを登録すると、そのテナントの全ページでWidgetが表示' +
+        'されなくなるため、そのようなパターンを登録する前は特に意図を確認すること。' +
+        '必ず先に get_tenant_settings で現在の登録状況を確認し、変更後にどうなるかを' +
+        'ユーザーに提示して、明確な同意を得たターンでのみ confirmed=true で呼び出すこと。',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['add', 'remove'],
+            description: '追加するか削除するか',
+          },
+          pattern: {
+            type: 'string',
+            description:
+              '対象のパスパターン。/ から始まる形で指定する' +
+              '（例: /cart、1階層下まで許すなら /products/*、配下すべてなら /blog/**）',
+          },
+          confirmed: { type: 'boolean', description: '確認フラグ（true でのみ実行される）' },
+        },
+        required: ['action', 'pattern', 'confirmed'],
       },
     },
   },

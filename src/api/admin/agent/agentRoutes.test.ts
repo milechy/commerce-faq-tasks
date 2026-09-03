@@ -4663,6 +4663,176 @@ describe('POST /v1/admin/agent/chat', () => {
   });
 
   // -------------------------------------------------------------------------
+  // #17: update_excluded_page_patterns(docs/COPILOT_UI_PARITY.md §3.1 #17)
+  describe('update_excluded_page_patterns', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    it('未登録の状態に1件追加できる', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-uep-1', 'update_excluded_page_patterns', {
+          action: 'add', pattern: '/cart', confirmed: true,
+        }))
+        .mockResolvedValueOnce(makeGroqResponse('追加しました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ excluded_page_patterns: null }] }) // SELECT
+        .mockResolvedValueOnce({ rows: [] }); // UPDATE
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '/cart ではWidgetを表示しないようにして', sessionId: 'sess-uep-01' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining('UPDATE tenants SET excluded_page_patterns = $1'),
+        [['/cart'], 'tenant-abc'],
+      );
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('追加しました');
+      expect(result).toContain('/cart');
+      expect(result).not.toContain('確認が必要');
+    });
+
+    it('確認(confirmed)なしでは実行されずDBが無変更', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-uep-2', 'update_excluded_page_patterns', {
+          action: 'add', pattern: '/cart', confirmed: false,
+        }))
+        .mockResolvedValueOnce(makeGroqResponse('確認しました。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '/cart を除外して', sessionId: 'sess-uep-02' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('確認が必要');
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    it('先頭スラッシュの無いパターンを拒否しDBに到達しない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-uep-3', 'update_excluded_page_patterns', {
+          action: 'add', pattern: 'cart', confirmed: true,
+        }))
+        .mockResolvedValueOnce(makeGroqResponse('確認しました。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'cart を除外して', sessionId: 'sess-uep-03' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('登録できない形式');
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    it('既に登録済みのパターンを追加しようとすると案内しUPDATEに到達しない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-uep-4', 'update_excluded_page_patterns', {
+          action: 'add', pattern: '/cart', confirmed: true,
+        }))
+        .mockResolvedValueOnce(makeGroqResponse('確認しました。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ excluded_page_patterns: ['/cart'] }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '/cart を除外して', sessionId: 'sess-uep-04' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('既に登録されています');
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+    });
+
+    it('複数登録済みのうち1件を削除できる(残り件数を提示)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-uep-5', 'update_excluded_page_patterns', {
+          action: 'remove', pattern: '/checkout/**', confirmed: true,
+        }))
+        .mockResolvedValueOnce(makeGroqResponse('削除しました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ excluded_page_patterns: ['/checkout/**', '/cart'] }] })
+        .mockResolvedValueOnce({ rows: [] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '/checkout/** の除外を解除して', sessionId: 'sess-uep-05' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining('UPDATE tenants SET excluded_page_patterns = $1'),
+        [['/cart'], 'tenant-abc'],
+      );
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('削除しました');
+      expect(result).toContain('現在の登録(1件)');
+    });
+
+    // allowed_originsのR3(fail-open警告)とは非対称: 0件は「除外なし・全ページ表示」という
+    // 安全な既定状態であり、危険な状態への遷移ではないため「許可されています」のような
+    // 警告文言は出ない。
+    it('最後の1件を削除しても危険な状態への遷移を示す文言は出ない(allowed_originsとの非対称)', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-uep-6', 'update_excluded_page_patterns', {
+          action: 'remove', pattern: '/cart', confirmed: true,
+        }))
+        .mockResolvedValueOnce(makeGroqResponse('削除しました。'));
+
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ excluded_page_patterns: ['/cart'] }] })
+        .mockResolvedValueOnce({ rows: [] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '/cart の除外を解除して', sessionId: 'sess-uep-06' });
+
+      expect(res.status).toBe(200);
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining('UPDATE tenants SET excluded_page_patterns = $1'),
+        [[], 'tenant-abc'],
+      );
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('削除しました');
+      expect(result).toContain('すべてのページで表示');
+      expect(result).not.toContain('許可されています');
+    });
+
+    it('登録されていないパターンの削除を試みるとDBに到達しない', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-uep-7', 'update_excluded_page_patterns', {
+          action: 'remove', pattern: '/notfound', confirmed: true,
+        }))
+        .mockResolvedValueOnce(makeGroqResponse('確認しました。'));
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ excluded_page_patterns: ['/cart'] }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '/notfound の除外を解除して', sessionId: 'sess-uep-07' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('登録されていません');
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // W1-3: set_faq_hints(docs/COPILOT_UI_PARITY.md §3.1 #3)
   describe('set_faq_hints', () => {
     function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {

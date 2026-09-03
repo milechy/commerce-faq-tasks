@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import KnowledgeFaqEditModal, { type KnowledgeFaqItem } from "../KnowledgeFaqEditModal";
 import FaqHintSettings from "./FaqHintSettings";
 import AllowedOriginsSettings from "./AllowedOriginsSettings";
+import ExcludedPagesSettings from "./ExcludedPagesSettings";
 import FaqSearchBar from "./FaqSearchBar";
 import BulkActionBar from "./BulkActionBar";
 import { Pagination } from "../common/Pagination";
@@ -298,6 +299,10 @@ export default function KnowledgeListTab({ tenantId }: { tenantId: string }) {
           super_adminは/admin/tenants/:idのSettingsTab（ワイルドカード対応）で管理するため、
           ここではclient_adminのみに表示する（二重UI防止）。 */}
       {!isSuperAdmin && <AllowedOriginsSettings tenantId={tenantId} />}
+
+      {/* 許可ドメイン内でも特定ページではWidgetを出したくない、というテナント自己設定。
+          super_adminはこのタブに直接アクセスしないため、AllowedOriginsSettingsと同じ条件。 */}
+      {!isSuperAdmin && <ExcludedPagesSettings tenantId={tenantId} />}
 
       {/* 新規追加ボタン */}
       <button

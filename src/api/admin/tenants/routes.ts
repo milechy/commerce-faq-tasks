@@ -20,6 +20,7 @@ import { syncSubscriptionForTenant, needsBillingAttention, type SubscriptionSync
 import { changeTenantPlan, computeFeatureRevocationOnDowngrade } from "../../../lib/billing/changeTenantPlan";
 import { deriveOnboardingStage, type OnboardingStageStatus } from "../agent/onboardingStage";
 import { isValidOriginPattern } from "../../middleware/originCheck";
+import { isValidExcludedPagePattern } from "../../../lib/excludedPagePattern";
 import { purgeTenantChatData } from "../chat-history/retentionRepository";
 
 // free_ad(starterより下の最下段。広告原資の無料プラン)と
@@ -120,6 +121,22 @@ const allowedOriginsSchema = z
   .max(20)
   .optional();
 
+// 許可ドメイン内でも特定ページではウィジェットを出したくない、というテナント自己設定。
+// allowedOriginsSchema と同じ理由(super_admin用とclient_admin自己申告用で片方だけ緩い
+// 状態を作らない)で単一インスタンスを共有する。判定本体は isValidExcludedPagePattern
+// (src/lib/excludedPagePattern.ts)に置き、チャットツール側(actionExecutor.ts)とも
+// 同じ定義を使う(allowed_originsのisValidOriginPatternと同じパターン)。
+const excludedPagePatternsSchema = z
+  .array(
+    z
+      .string()
+      .refine(isValidExcludedPagePattern, {
+        message: "パスは / から始め、?や#を含まない200文字以内の形式で指定してください（例: /cart, /products/*, /blog/**）",
+      })
+  )
+  .max(20)
+  .optional();
+
 // S2: 共有学習プールの参加モデル。同意を「1フラグ」から独立した2軸に分ける。
 // - learn : 自社内学習。自テナントの会話から自テナント用に学習する(データは外に出ない)。
 // - share : 共有プール参加。R2C共有プールに「出し、かつ読む」(外部Hermes VPSへ出る)。
@@ -204,6 +221,7 @@ const updateTenantSchema = z.object({
   plan: z.enum(planValues).optional(),
   is_active: z.boolean().optional(),
   allowed_origins: allowedOriginsSchema,
+  excluded_page_patterns: excludedPagePatternsSchema,
   // Phase38 Step6: テナント固有システムプロンプト（空文字でリセット可）
   system_prompt: z.string().max(5000).optional(),
   // Phase39: 課金管理（Super Adminのみ）
@@ -335,7 +353,10 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
     }
     try {
       const result = await db.query(
-        `SELECT id, name, plan, features, lemonslice_agent_id, conversion_types, faq_question_hint, faq_answer_hint, onboarding_industry, onboarding_completed_at, onboarding_widget_seen_at, widget_theme, created_at FROM tenants WHERE id = $1`,
+        // 既知の不具合修正: allowed_origins がここに無かったため、AllowedOriginsSettings.tsx が
+        // 常に空配列を読み込み、1件追加するだけで保存済みの許可ドメインを黙って全消しする
+        // データ消失事故になっていた。excluded_page_patterns も同じ経路で読むため同時に追加する。
+        `SELECT id, name, plan, features, lemonslice_agent_id, conversion_types, faq_question_hint, faq_answer_hint, onboarding_industry, onboarding_completed_at, onboarding_widget_seen_at, widget_theme, allowed_origins, excluded_page_patterns, created_at FROM tenants WHERE id = $1`,
         [tenantId]
       );
       if (result.rowCount === 0) {
@@ -391,6 +412,9 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       // client_admin向けフォーム(AllowedOriginsSettings.tsx)はワイルドカードを一律拒否する
       // より厳しいUIだが、バックエンドはここで安全な形(https://*.example.com)のみ通す。
       allowed_origins: allowedOriginsSchema,
+      // ページ除外設定のテナント自己申告。同じくsuper_admin用updateTenantSchemaと
+      // 同一インスタンス(excludedPagePatternsSchema)を共有する。
+      excluded_page_patterns: excludedPagePatternsSchema,
     });
     const parsed = bodySchema.safeParse(req.body ?? {});
     if (!parsed.success) {
@@ -440,11 +464,12 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
         setClauses.push(`onboarding_completed_at = NOW()`);
       }
       if (fields.allowed_origins !== undefined) { params.push(fields.allowed_origins); setClauses.push(`allowed_origins = $${params.length}`); }
+      if (fields.excluded_page_patterns !== undefined) { params.push(fields.excluded_page_patterns); setClauses.push(`excluded_page_patterns = $${params.length}`); }
       setClauses.push(`updated_at = NOW()`);
       params.push(tenantId);
       const result = await db.query(
         `UPDATE tenants SET ${setClauses.join(", ")} WHERE id = $${params.length}
-         RETURNING id, name, features, lemonslice_agent_id, faq_question_hint, faq_answer_hint, onboarding_industry, onboarding_completed_at, allowed_origins`,
+         RETURNING id, name, features, lemonslice_agent_id, faq_question_hint, faq_answer_hint, onboarding_industry, onboarding_completed_at, allowed_origins, excluded_page_patterns`,
         params
       );
       if (result.rowCount === 0) {
@@ -455,6 +480,8 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       if (fields.allowed_origins !== undefined) {
         updateTenantAllowedOrigins(tenantId, fields.allowed_origins);
       }
+      // excluded_page_patternsはミドルウェアが参照する値ではなく、ウィジェット生成時に
+      // DBから直接読むため、tenantStoreのミラー更新は不要（allowed_originsとの違い）。
       return res.json(result.rows[0]);
     } catch (err) {
       logger.warn("[PATCH /v1/admin/my-tenant]", err);
@@ -719,7 +746,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
     const { id } = req.params;
     try {
       const result = await db.query(
-        `SELECT id, name, plan, is_active, allowed_origins, system_prompt, billing_enabled, billing_free_from, billing_free_until, features, lemonslice_agent_id, conversion_types, faq_question_hint, faq_answer_hint, onboarding_industry, onboarding_widget_seen_at, widget_theme, created_at, updated_at FROM tenants WHERE id = $1`,
+        `SELECT id, name, plan, is_active, allowed_origins, excluded_page_patterns, system_prompt, billing_enabled, billing_free_from, billing_free_until, features, lemonslice_agent_id, conversion_types, faq_question_hint, faq_answer_hint, onboarding_industry, onboarding_widget_seen_at, widget_theme, created_at, updated_at FROM tenants WHERE id = $1`,
         [id]
       );
       if (result.rowCount === 0) {
@@ -805,6 +832,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       if (fields.plan !== undefined) { params.push(fields.plan); setClauses.push(`plan = $${params.length}`); }
       if (fields.is_active !== undefined) { params.push(fields.is_active); setClauses.push(`is_active = $${params.length}`); }
       if (fields.allowed_origins !== undefined) { params.push(fields.allowed_origins); setClauses.push(`allowed_origins = $${params.length}`); }
+      if (fields.excluded_page_patterns !== undefined) { params.push(fields.excluded_page_patterns); setClauses.push(`excluded_page_patterns = $${params.length}`); }
       // Phase38 Step6: system_prompt の更新（空文字列による削除も許可）
       if (fields.system_prompt !== undefined) { params.push(fields.system_prompt); setClauses.push(`system_prompt = $${params.length}`); }
       // Phase39: 課金管理
@@ -834,7 +862,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       setClauses.push(`updated_at = NOW()`);
       params.push(id);
       const result = await db.query(
-        `UPDATE tenants SET ${setClauses.join(", ")} WHERE id = $${params.length} RETURNING id, name, plan, is_active, allowed_origins, system_prompt, billing_enabled, billing_free_from, billing_free_until, features, lemonslice_agent_id, conversion_types, tenant_contact_email, faq_question_hint, faq_answer_hint, created_at, updated_at`,
+        `UPDATE tenants SET ${setClauses.join(", ")} WHERE id = $${params.length} RETURNING id, name, plan, is_active, allowed_origins, excluded_page_patterns, system_prompt, billing_enabled, billing_free_from, billing_free_until, features, lemonslice_agent_id, conversion_types, tenant_contact_email, faq_question_hint, faq_answer_hint, created_at, updated_at`,
         params
       );
       // プラン判定のキャッシュは2系統ある（機能ゲート用・請求焼き付け用）。両方消す。

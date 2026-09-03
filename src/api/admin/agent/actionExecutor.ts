@@ -10,6 +10,7 @@ import {
 } from '../knowledge/faqCrudRoutes';
 import { deleteFaqFromEs } from '../../../lib/knowledge/faqIndexSync';
 import { isValidOriginPattern } from '../../middleware/originCheck';
+import { isValidExcludedPagePattern } from '../../../lib/excludedPagePattern';
 import { FAQ_CATEGORY_IDS } from '../../../lib/knowledge/faqCategories';
 import { callGroq8bSuggestFromText, callGroq8bSuggest } from '../tuning/routes';
 import { listRules, createRule, updateRule, deleteRule, type ApprovedResponse, type RuleEvidence } from '../tuning/tuningRulesRepository';
@@ -799,7 +800,7 @@ export async function executeToolCall(
     case 'get_tenant_settings': {
       try {
         const result = await db.query(
-          'SELECT ga4_measurement_id, posthog_host, widget_theme, allowed_origins, faq_question_hint, faq_answer_hint FROM tenants WHERE id = $1',
+          'SELECT ga4_measurement_id, posthog_host, widget_theme, allowed_origins, excluded_page_patterns, faq_question_hint, faq_answer_hint FROM tenants WHERE id = $1',
           [tenantId]
         );
         if (result.rows.length === 0) {
@@ -810,16 +811,19 @@ export async function executeToolCall(
           posthog_host: string | null;
           widget_theme: Record<string, unknown> | null;
           allowed_origins: string[] | null;
+          excluded_page_patterns: string[] | null;
           faq_question_hint: string | null;
           faq_answer_hint: string | null;
         };
         const origins = row.allowed_origins ?? [];
+        const excludedPages = row.excluded_page_patterns ?? [];
         return truncate(
           `現在の設定:\n` +
           `• GA4 Measurement ID: ${row.ga4_measurement_id ?? '未設定'}\n` +
           `• PostHog ホスト: ${row.posthog_host ?? '未設定'}\n` +
           `• ウィジェットテーマ: ${JSON.stringify(row.widget_theme ?? {})}\n` +
           `• Widget埋め込み許可ドメイン: ${origins.length > 0 ? origins.join(', ') : '未登録（全ドメインから埋め込み可能）'}\n` +
+          `• Widgetを表示しないページ: ${excludedPages.length > 0 ? excludedPages.join(', ') : '未登録（すべてのページで表示）'}\n` +
           `• FAQ質問欄の入力例: ${row.faq_question_hint ?? '未設定（既定の例文を表示）'}\n` +
           `• FAQ回答欄の入力例: ${row.faq_answer_hint ?? '未設定（既定の例文を表示）'}`
         );
@@ -936,6 +940,79 @@ export async function executeToolCall(
       } catch (err) {
         logger.warn('[actionExecutor] update_allowed_origins failed', err);
         return truncate('許可ドメインの更新に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // allowed_originsとは非対称: 0件=「除外なし・全ページ表示」が安全な既定状態であり、
+    // fail-open/closedの境界が無い。confirmedは全書き込みツール共通のゲートとして要求するが、
+    // 「削除で無制限に戻る」文言はここでは書かない(該当しないため)。
+    case 'update_excluded_page_patterns': {
+      const action = args['action'];
+      const pattern = typeof args['pattern'] === 'string' ? args['pattern'].trim() : '';
+      const confirmed = isConfirmed(args['confirmed']);
+
+      if (action !== 'add' && action !== 'remove') {
+        return truncate('action には add または remove を指定してください');
+      }
+      if (!pattern) {
+        return truncate('pattern を指定してください');
+      }
+      if (!confirmed) {
+        return truncate(
+          `この変更には確認が必要です。「${pattern}」を${action === 'add' ? '追加' : '削除'}してよいか、` +
+          '変更後にどうなるかを含めてユーザーに提示し、同意を得てから実行してください'
+        );
+      }
+      if (action === 'add' && !isValidExcludedPagePattern(pattern)) {
+        return truncate(
+          `「${pattern}」は登録できない形式です。/ から始まり、?や#を含まない200文字以内の ` +
+          '形式で指定してください(例: /cart, /products/*, /blog/**)'
+        );
+      }
+
+      try {
+        const result = await db.query<{ excluded_page_patterns: string[] | null }>(
+          'SELECT excluded_page_patterns FROM tenants WHERE id = $1',
+          [tenantId]
+        );
+        if (result.rows.length === 0) {
+          return truncate('テナントが見つかりません');
+        }
+        const existing = result.rows[0]!.excluded_page_patterns ?? [];
+
+        if (action === 'add') {
+          if (existing.includes(pattern)) {
+            return truncate(
+              `「${pattern}」は既に登録されています。現在の登録(${existing.length}件): ${existing.join(', ')}`
+            );
+          }
+          if (existing.length >= 20) {
+            return truncate('登録できるパターンは最大20件です。不要なものを削除してから追加してください');
+          }
+          const next = [...existing, pattern];
+          await db.query('UPDATE tenants SET excluded_page_patterns = $1, updated_at = NOW() WHERE id = $2', [next, tenantId]);
+          return truncate(
+            `「${pattern}」を追加しました。現在の登録(${next.length}件): ${next.join(', ')}` +
+            '(反映まで最大5分かかります)'
+          );
+        }
+
+        // action === 'remove'
+        if (!existing.includes(pattern)) {
+          return truncate(
+            `「${pattern}」は登録されていません。現在の登録: ${existing.length > 0 ? existing.join(', ') : '(登録なし)'}`
+          );
+        }
+        const next = existing.filter((p) => p !== pattern);
+        await db.query('UPDATE tenants SET excluded_page_patterns = $1, updated_at = NOW() WHERE id = $2', [next, tenantId]);
+        return truncate(
+          `「${pattern}」を削除しました。現在の登録(${next.length}件): ${next.length > 0 ? next.join(', ') : '(登録なし・すべてのページで表示)'}` +
+          '(反映まで最大5分かかります)'
+        );
+      } catch (err) {
+        logger.warn('[actionExecutor] update_excluded_page_patterns failed', err);
+        return truncate('ページ除外設定の更新に失敗しました');
       }
     }
 

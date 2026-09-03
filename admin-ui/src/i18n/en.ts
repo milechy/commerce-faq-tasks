@@ -107,6 +107,22 @@ const en: Record<TranslationKey, string> = {
   "knowledge.allowed_origins_saved": "✅ Allowed domains saved",
   "knowledge.allowed_origins_save_error": "❌ Failed to save. Please try again.",
 
+  // Per-page widget hiding (hide the Widget on specific pages within an allowed domain)
+  "knowledge.excluded_pages_settings_title": "Pages Where the Widget Is Hidden",
+  "knowledge.excluded_pages_settings_desc": "Even within an allowed domain, you can register paths where the Widget should not appear (e.g. cart or checkout pages). /cart matches exactly, /products/* matches one level deep, /blog/** matches everything below.",
+  "knowledge.excluded_pages_input_placeholder": "/cart",
+  "knowledge.excluded_pages_add": "Add",
+  "knowledge.excluded_pages_empty": "The Widget currently shows on every page",
+  "knowledge.excluded_pages_empty_desc": "Register at least one path to hide the Widget on matching pages.",
+  "knowledge.excluded_pages_invalid_leading_slash": "Path must start with / (e.g. /cart, /products/*, /blog/**)",
+  "knowledge.excluded_pages_invalid_query": "Query strings (?) and fragments (#) are not allowed (path only)",
+  "knowledge.excluded_pages_duplicate": "Already registered",
+  "knowledge.excluded_pages_max_reached": "Up to 20 entries can be registered",
+  "knowledge.excluded_pages_saved": "✅ Excluded pages saved",
+  "knowledge.excluded_pages_save_error": "❌ Failed to save. Please try again.",
+  "knowledge.excluded_pages_reflect_note": "⏱️ Changes may take up to 5 minutes to take effect.",
+  "knowledge.excluded_pages_embed_note": "⚠️ This setting only takes effect with the current embed code format (https://api.r2c.biz/widget/{tenantId}.js). It has no effect on the legacy direct /widget.js embed.",
+
   // Tabs
   "knowledge.tab_list": "Knowledge List",
   "knowledge.tab_text": "Text Input",

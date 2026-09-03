@@ -497,4 +497,24 @@ describe('public/widget.js — S6 開示バナーのfail-open是正', () => {
   it('sendMessage() からの recordAbExposure() 呼び出しは try/catch で握りつぶす(計測でチャットを止めない)', () => {
     expect(WIDGET_SRC).toMatch(/try\s*\{\s*recordAbExposure\(\);\s*\}\s*catch/);
   });
+
+  // ページ除外設定(excluded_page_patterns)は、DOM構築・SDK読み込み・fetchより前に
+  // 同期判定する必要がある(チラつきと除外ページでの不要通信を防ぐため)。
+  it('ページ除外判定は data-tenant ガードの直後・PostHog SDK読み込みより前に存在する', () => {
+    const guardIdx = WIDGET_SRC.indexOf("data-tenant 属性が必要です");
+    const excludeIdx = WIDGET_SRC.indexOf('excludedPagePatterns[_excludeIdx]');
+    const posthogIdx = WIDGET_SRC.indexOf("phScript.src = 'https://eu-assets.i.posthog.com");
+    expect(guardIdx).toBeGreaterThan(-1);
+    expect(excludeIdx).toBeGreaterThan(guardIdx);
+    expect(posthogIdx).toBeGreaterThan(excludeIdx);
+  });
+
+  // グロブ構文の実装が2箇所に割れると「保存できたが効かない」事故になる。
+  // TriggerEngine._matchPathname はトップレベルの matchPathnameGlob() へ委譲しているだけで、
+  // 正規表現の組み立てロジックを重複して持っていないことを固定する。
+  it('TriggerEngine._matchPathname は matchPathnameGlob() へ委譲している(グロブ構文の二重実装防止)', () => {
+    expect(WIDGET_SRC).toMatch(
+      /TriggerEngine\.prototype\._matchPathname = function \(pathname, pattern\) \{\s*return matchPathnameGlob\(pathname, pattern\);\s*\};/
+    );
+  });
 });

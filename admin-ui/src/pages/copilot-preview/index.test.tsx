@@ -1978,6 +1978,22 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
     expect(screen.queryByText("deactivate_avatar")).toBeNull();
   });
 
+  // #17: update_excluded_page_patterns(docs/COPILOT_UI_PARITY.md §3.1 #17)。
+  // REAL_TOOL_LABEL への登録を忘れると生の英語ツール名がそのまま出る。
+  it("ページ除外設定ツールは生の英語名ではなく日本語ラベルで表示される", async () => {
+    mockAgent({
+      reply: "/cart ではWidgetを表示しないように設定しました。",
+      actions: [
+        { tool: "update_excluded_page_patterns", result: "「/cart」を追加しました。現在の登録(1件): /cart(反映まで最大5分かかります)" },
+      ],
+    });
+
+    await send("/cart ではWidgetを表示しないようにして");
+
+    expect(await screen.findByText("Widgetを表示しないページの設定変更")).toBeTruthy();
+    expect(screen.queryByText("update_excluded_page_patterns")).toBeNull();
+  });
+
   // mockAgent は2回目以降すべて同じ応答を返す(単発の描画確認向け)ため、
   // クリック後の3ターン目に別の応答を返す必要があるこのテストだけは自前でモックする。
   it("見本提案が出たら「採用して」チップが出て、押すと自然文で採用を伝える", async () => {

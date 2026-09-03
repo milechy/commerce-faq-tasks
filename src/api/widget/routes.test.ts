@@ -114,7 +114,9 @@ describe('GET /widget/:tenantSlug.js', () => {
     const app = makeApp(db);
     const res = await request(app).get('/widget/tenant-a.js');
     expect(res.headers['content-type']).toContain('application/javascript');
-    expect(res.headers['cache-control']).toBe('public, max-age=86400');
+    // ページ除外設定(excluded_page_patterns)の変更をほぼ即時に反映させるため、
+    // 24h(旧 max-age=86400)から5分に短縮している。
+    expect(res.headers['cache-control']).toBe('public, max-age=300');
     expect(res.headers['x-content-type-options']).toBe('nosniff');
   });
 
@@ -315,12 +317,44 @@ describe('GET /widget/:tenantSlug.js — バッジが表示されない既知の
     // plan由来のbadgeUrl/showBrandingBadgeは注入されない。
   });
 
-  it('③レスポンスは Cache-Control: max-age=86400 のため、プラン変更の反映に最大24時間かかる', async () => {
+  it('③レスポンスは Cache-Control: max-age=300 のため、プラン変更の反映に最大5分かかる', async () => {
     const db = makePool([
       { rows: [{ id: 'tenant-a', is_active: true, features: {}, plan: 'growth' }], rowCount: 1 },
     ]);
     const app = makeApp(db);
     const res = await request(app).get('/widget/tenant-a.js');
-    expect(res.headers['cache-control']).toBe('public, max-age=86400');
+    expect(res.headers['cache-control']).toBe('public, max-age=300');
+  });
+});
+
+describe('GET /widget/:tenantSlug.js — ページ除外設定(excluded_page_patterns)の受け渡し', () => {
+  beforeEach(() => {
+    (generateWidgetJs as jest.Mock).mockClear();
+  });
+
+  it('tenants.excluded_page_patterns をそのまま generateWidgetJs に渡す', async () => {
+    const db = makePool([
+      {
+        rows: [{
+          id: 'tenant-a', is_active: true, features: {}, plan: 'starter',
+          excluded_page_patterns: ['/cart', '/checkout/**'],
+        }],
+        rowCount: 1,
+      },
+    ]);
+    const app = makeApp(db);
+    await request(app).get('/widget/tenant-a.js');
+    const config = (generateWidgetJs as jest.Mock).mock.calls[0][0];
+    expect(config.excludedPagePatterns).toEqual(['/cart', '/checkout/**']);
+  });
+
+  it('列が undefined(migration未適用等) → fail-safeで空配列(表示する側)に倒れる', async () => {
+    const db = makePool([
+      { rows: [{ id: 'tenant-a', is_active: true, features: {}, plan: 'starter' }], rowCount: 1 },
+    ]);
+    const app = makeApp(db);
+    await request(app).get('/widget/tenant-a.js');
+    const config = (generateWidgetJs as jest.Mock).mock.calls[0][0];
+    expect(config.excludedPagePatterns).toEqual([]);
   });
 });
