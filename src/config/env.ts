@@ -140,6 +140,10 @@ const envSchema = z.object({
   STRIPE_PRICE_GROWTH_TEXT_OVERAGE: z.string().optional(),
   STRIPE_PRICE_GROWTH_AVATAR_OVERAGE: z.string().optional(),
   MARGIN_RATE: numEnv,
+  // USD→JPY の換算レート（既定 150）。原価は USD セント、売上は JPY のため、
+  // 粗利を出すには換算が要る。唯一の実装は src/lib/billing/fx.ts。
+  // ★レート履歴を持たないので、変更すると過去月の粗利も後から変わる★
+  USD_JPY_RATE: numEnv,
 
   // ── Notifications / Webhooks ──────────────────────────────────────────
   SLACK_WEBHOOK_URL: z.string().optional(),

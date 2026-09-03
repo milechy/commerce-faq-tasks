@@ -2,7 +2,8 @@
 // Phase32: API使用量の非同期記録（fire-and-forget）
 
 import type pino from 'pino';
-import { calculateLLMCostCents, calculateBillingAmountCents, normalizeModelKey, NON_BILLABLE_FEATURES } from './costCalculator';
+import { calculateLLMCostCents, calculateBillingAmountCents,
+  calculateBaseCostCents, normalizeModelKey, NON_BILLABLE_FEATURES } from './costCalculator';
 import { queryTenantPlanResult, type TenantPlan } from './planFeatures';
 import { planMultiplier } from './planPricing';
 
@@ -215,14 +216,23 @@ async function _insertUsageLog(params: TrackUsageParams): Promise<void> {
 
   let costLlmCents = 0;
   let costTotalCents = 0;
+  // マージン前の実原価。粗利（売上 − API原価）の原価側になる。
+  // null は「未記録」を意味する列なので、算出できなければ 0 ではなく null を書く
+  // （0 を書くと「原価ゼロ」と区別できなくなる。plan_multiplier と同じ流儀）。
+  let costBaseCents: number | null = null;
   try {
-    costLlmCents   = calculateLLMCostCents({ model, inputTokens, outputTokens, extraLlmUsages });
-    costTotalCents = calculateBillingAmountCents({
+    // 引数リストを2度書かない（片方にだけ新項目を足す事故を防ぐ）。
+    const usageRecord = {
       model, inputTokens, outputTokens, marginOverride,
       ttsTextBytes, ttsModel, avatarCredits, avatarSessionMs,
       featureUsed, imageCount, anam_session_seconds, extraLlmUsages, saiAgentSteps,
       ocrPages, asrRequestCount, asrAudioSeconds, voiceDesignRequestCount, magnificUpscaleCount, fluxImageCount, lemonsliceRegistrationCount,
-    });
+    };
+    costLlmCents   = calculateLLMCostCents({ model, inputTokens, outputTokens, extraLlmUsages });
+    costTotalCents = calculateBillingAmountCents(usageRecord);
+    // marginOverride は原価に影響しない（マージン倍率にしか効かない）ので、
+    // 同じレコードをそのまま渡してよい。
+    costBaseCents  = calculateBaseCostCents(usageRecord);
   } catch (err) {
     _logger?.warn({ err, requestId }, '[usageTracker] cost calculation error, defaulting to 0');
   }
@@ -262,14 +272,14 @@ async function _insertUsageLog(params: TrackUsageParams): Promise<void> {
          (tenant_id, request_id, model, input_tokens, output_tokens,
           feature_used, cost_llm_cents, cost_total_cents,
           tts_text_bytes, avatar_credits, avatar_session_ms, anam_session_seconds, billable,
-          plan, plan_multiplier, session_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+          plan, plan_multiplier, session_id, cost_base_cents)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
        ON CONFLICT (request_id) DO NOTHING`,
       [tenantId, requestId, model, totalInputTokens, totalOutputTokens,
        featureUsed, costLlmCents, costTotalCents,
        ttsTextBytes ?? null, avatarCredits ?? null, avatarSessionMs ?? null,
        anam_session_seconds ?? null, isBillable,
-       planAtUsage, planMultiplierAtUsage, sessionId ?? null]
+       planAtUsage, planMultiplierAtUsage, sessionId ?? null, costBaseCents]
     );
     _logger?.debug(
       { tenantId, requestId, costLlmCents, costTotalCents, billable: isBillable },
@@ -286,8 +296,9 @@ async function _insertUsageLog(params: TrackUsageParams): Promise<void> {
     if ((err as { code?: string })?.code === '42703') {
       _logger?.error(
         { err, requestId, tenantId },
-        '[usageTracker] usage_logs に plan/plan_multiplier/session_id のいずれかの列が無い — ' +
-        'migration_usage_logs_plan_snapshot.sql / migration_usage_logs_session_id.sql が未適用。' +
+        '[usageTracker] usage_logs に plan/plan_multiplier/session_id/cost_base_cents のいずれかの列が無い — ' +
+        'migration_usage_logs_plan_snapshot.sql / migration_usage_logs_session_id.sql / ' +
+        'migration_usage_logs_cost_base.sql のいずれかが未適用。' +
         '旧カラムで記録を継続するが、プラン倍率は焼き付けられず請求が遡及し、' +
         '会話単位の請求も効かない状態のまま。至急 migration を適用すること'
       );
