@@ -16,5 +16,12 @@ jobs:
         with:
           node-version: 20
       - run: pnpm install --frozen-lockfile
+      # 分類ロジックの自己検査(偽 pnpm を PATH に差し込むだけでネットワーク不要)。
+      # audit-check.sh の判別が壊れたら、本番の audit が動く前にここで落とす。
+      - run: bash SCRIPTS/audit-check.test.sh
       - run: bash SCRIPTS/security-scan.sh
-      - run: pnpm audit --production --audit-level=high
+      # security-scan.sh とは独立に、依存監査だけをもう一度ゲートにする。
+      # ★生の `pnpm audit` を直に呼ばない★ — レジストリ不通でも非ゼロになるため、
+      # それを脆弱性として扱うと無関係な PR が止まり、FAIL の意味も薄まる
+      # (Asana 1218165546985984)。分類は audit-check.sh に一本化する。
+      - run: bash SCRIPTS/audit-check.sh

@@ -73,7 +73,38 @@ bash SCRIPTS/security-scan.sh
 - `SCRIPTS/security-scan.sh` の audit 評価は **`pnpm audit --production --audit-level=high`** に統一済み (旧 `|| true` 握り潰しを撤廃)。
 - `set -o pipefail` で `{ ... } | tee` 内部の `exit 1` を script 終了コードに伝播。
 - CI `.github/workflows/security-scan.yml` の独立 audit ステップと **判定基準・対象パス・閾値が完全一致**。
+  2026-09-04 以降は両方とも `SCRIPTS/audit-check.sh` を呼ぶ（実装を2箇所に持たない）。
 - ignore 対象 CVE は **`package.json#pnpm.auditConfig.ignoreCves` で集中管理**。根拠と再評価トリガーは `docs/SECURITY_SCAN_ALLOWLIST.md#pnpm-auditconfig-ignorecves` を参照。
+
+### audit の3状態分類 (2026-09-04, Asana 1218165546985984)
+
+`pnpm audit` は「脆弱性を検出した」ときも「レジストリへ到達できなかった」ときも
+同じように非ゼロ終了する。旧仕様は**非ゼロを一律 FAIL** にしていたため、npm の
+audit エンドポイントが不通になるたびに無関係な PR のマージが止まっていた
+（#1157 で実際に発生。ローカルでも同じ `ERR_SOCKET_TIMEOUT` を再現したので CI 固有ではない）。
+
+本当の害は足止めそのものより **FAIL の意味が薄まること**にある。本物かネットワークかを
+見分けられない警告は、いずれ全部無視されるようになる。
+
+`SCRIPTS/audit-check.sh` が3状態に分類する:
+
+| 状態 | 意味 | 終了コード | scan 全体 |
+|---|---|---|---|
+| `clean` | 到達でき、閾値以上の脆弱性なし | 0 | PASS |
+| `not_checked` | レジストリへ到達できず、**検査していない** | 0 | PASS（ただし WARN） |
+| `vulnerable` | 到達でき、閾値以上の脆弱性あり | 1 | FAIL |
+
+**★判別できないときは `vulnerable` に倒す（fail-closed）★**
+ネットワーク由来と断定できる痕跡が無い非ゼロ終了は脆弱性として扱う。
+ネットワークの痕跡があっても advisory が同時に出ていれば `vulnerable`。
+
+**★`not_checked` を黙って PASS にしない★**
+スキャンのサマリに `AUDIT: not_checked` と注意書きを必ず出す。
+「脆弱性が無いことを確認できた」わけではないので、**依存を変更した PR では
+到達可能になってから再確認すること**。この状態が常態化したら気づけるようにしてある。
+
+分類ロジックは `SCRIPTS/audit-check.test.sh` が偽 `pnpm` を PATH に差し込んで検証する
+（ネットワーク不要・数秒）。CI でも本番 audit の前に実行する。
 
 > ⚠️ `pnpm verify` (定義: `package.json#scripts.verify`) の末尾には `bash SCRIPTS/security-scan.sh || true` が残っており、Gate 1 単独では audit 失敗を捕らえない。`bash SCRIPTS/security-scan.sh` を別途実行するか、verify から `|| true` を撤廃する follow-up を別 PR で扱う。
 

@@ -3,7 +3,9 @@
 # Usage: bash SCRIPTS/security-scan.sh [--save]
 #
 # CI と判定基準を完全に揃える:
-#   - pnpm audit は --audit-level=high で評価し、非ゼロを FAIL とする
+#   - pnpm audit は --audit-level=high で評価する。判定は SCRIPTS/audit-check.sh に
+#     一本化し、「脆弱性あり(FAIL)」と「レジストリ不通で検査できず(WARN)」を区別する
+#     (旧仕様は非ゼロを一律 FAIL にしていた)
 #   - ignore 対象 CVE は package.json#pnpm.auditConfig.ignoreCves で集中管理
 #     (根拠と再評価条件は docs/SECURITY_SCAN_ALLOWLIST.md に記録)
 
@@ -41,11 +43,20 @@ echo ''
 #    ignore 対象 CVE は package.json#pnpm.auditConfig.ignoreCves で集中管理
 # -------------------------------------------------------------------
 echo '--- [1] npm audit (--audit-level=high) ---'
-pnpm audit --production --audit-level=high 2>&1
+# 判定は SCRIPTS/audit-check.sh に一本化する(実装を2箇所に持たない)。
+# 「脆弱性を検出した」と「レジストリへ到達できなかった」を区別するため。
+# 従来はどちらも FAIL にしていたので、npm 側が不通になるたびに無関係な PR の
+# マージが止まり、かつ FAIL の意味が薄まっていた(Asana 1218165546985984)。
+AUDIT_OUTPUT=$(bash "$(dirname "$0")/audit-check.sh" 2>&1)
 AUDIT_RC=$?
+echo "$AUDIT_OUTPUT"
+AUDIT_STATUS=$(echo "$AUDIT_OUTPUT" | grep -o 'AUDIT_STATUS=[a-z_]*' | tail -1 | cut -d= -f2)
 if [[ $AUDIT_RC -ne 0 ]]; then
-  echo "[HIGH] pnpm audit detected high/critical vulnerabilities (exit=$AUDIT_RC)"
+  # audit-check.sh が非ゼロを返すのは vulnerable のときだけ(判別不能も含む)。
   FAIL_COUNT=$((FAIL_COUNT + 1))
+elif [[ "$AUDIT_STATUS" == "not_checked" ]]; then
+  # ★黙って PASS にしない★ 検査できていないことをサマリにも残す。
+  WARN_COUNT=$((WARN_COUNT + 1))
 fi
 echo ''
 
@@ -172,6 +183,13 @@ echo ''
 # Summary
 # -------------------------------------------------------------------
 echo '=== Scan Summary ==='
+# 依存監査を「実行できたか」を必ず明示する。PASS の一言に紛れると、
+# 検査できていない期間が常態化しても誰も気づけない。
+echo "AUDIT:                ${AUDIT_STATUS:-unknown}"
+if [[ "$AUDIT_STATUS" == "not_checked" ]]; then
+  echo '  ↑ 依存の脆弱性は今回検査できていません(レジストリ不通)。'
+  echo '    依存を変更した PR では、到達可能になってから再確認すること。'
+fi
 echo "CRITICAL/HIGH (FAIL): $FAIL_COUNT"
 echo "WARN:                 $WARN_COUNT"
 if [[ $FAIL_COUNT -gt 0 ]]; then
