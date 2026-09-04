@@ -858,9 +858,21 @@
     '  overscroll-behavior: contain;',
     '  -webkit-overflow-scrolling: touch;',
     '  touch-action: pan-y;',
+    '  transition: ' + (prefersReducedMotion ? 'none' : 'opacity 0.2s ease, max-height 0.2s ease') + ';',
     '}',
     '.panel.avatar-active .messages::-webkit-scrollbar { display: none; }',
     '.panel.avatar-active .messages > :first-child { margin-top: auto; }',
+
+    /* 音声再生中（ミュート解除）はメッセージ履歴を非表示にして映像に集中させる。
+       入力エリアは常に表示・操作可能（visitorが行き止まりにならないため）。 */
+    '.panel.avatar-active.history-hidden .messages {',
+    '  opacity: 0;',
+    '  max-height: 0;',
+    '  padding-top: 0;',
+    '  padding-bottom: 0;',
+    '  overflow: hidden;',
+    '  pointer-events: none;',
+    '}',
 
     /* チャットバブル: ダークテーマ */
     '.panel.avatar-active .bubble.assistant {',
@@ -1854,6 +1866,9 @@
 
       avatarMuteBtn.addEventListener('click', function () {
         avatarMuted = !avatarMuted;
+        // 音声再生中（ミュート解除）はメッセージ履歴を隠して映像に集中させる。入力エリアは常に表示。
+        panel.classList.toggle('history-hidden', !avatarMuted);
+        messagesArea.setAttribute('aria-hidden', String(!avatarMuted));
         if (anamClient) {
           try {
             if (avatarMuted) {
@@ -2145,6 +2160,9 @@
 
       avatarMuteBtn.addEventListener('click', function () {
         avatarMuted = !avatarMuted;
+        // 音声再生中（ミュート解除）はメッセージ履歴を隠して映像に集中させる。入力エリアは常に表示。
+        panel.classList.toggle('history-hidden', !avatarMuted);
+        messagesArea.setAttribute('aria-hidden', String(!avatarMuted));
         // 全 audio 要素にミュートを反映
         var audios = avatarArea.querySelectorAll('audio');
         for (var i = 0; i < audios.length; i++) { audios[i].muted = avatarMuted; }
