@@ -42,7 +42,7 @@ import { isValidUpsellSignal } from "../../../lib/billing/upsellSignals";
  * figures の組み立て(Stripe到達)で落ちる可能性があるのでここでも包む。
  * 「通知が出なかった」より「承認が 500 になった」方が損害が大きい。
  */
-async function notifyTenantOfApprovedUpsell(ruleId: number): Promise<void> {
+export async function notifyTenantOfApprovedUpsell(ruleId: number): Promise<void> {
   try {
     const pool = getPool();
     const { rows } = await pool.query<{ tenant_id: string; evidence: unknown }>(

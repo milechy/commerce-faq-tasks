@@ -530,3 +530,101 @@ d("D8-2: 承認/却下の二重実行（実DB）", () => {
     expect(rows[0]).toEqual({ status: "pending", is_active: false });
   });
 });
+
+/**
+ * 運営向けアップセル一覧(GET /v1/admin/upsell-proposals)の実DB検証(2026-09-04)。
+ *
+ * Hermes が投稿した upsell 提案が、実際に listRules(proposalType:'upsell',
+ * status:'pending') で拾えることと、承認後は一覧から消える(status変化)ことを
+ * 実DBで確認する。粗利計算(buildSuperAdminUpsellFigures)自体はモックDBの
+ * billingApi.superAdminUpsell.test.ts で別途担保しているため、ここでは
+ * 「listRules フィルタが実際に効くか」だけに絞る。
+ */
+d("listRules(proposalType:'upsell') — 運営向け一覧の実DB検証", () => {
+  beforeAll(() => {
+    db = new Pool({ connectionString: DB_URL, options: "-c timezone=UTC" });
+  });
+
+  afterAll(async () => {
+    await db.end();
+  });
+
+  beforeEach(async () => {
+    await db.query("TRUNCATE tuning_rules RESTART IDENTITY CASCADE");
+    await db.query("TRUNCATE tenants CASCADE");
+    await db.query(
+      `INSERT INTO tenants (id, name, plan, features) VALUES ('carnation', 'carnation', 'standard', $1::jsonb)`,
+      [JSON.stringify({ learning: { learn: true, share: true } })],
+    );
+    process.env.HERMES_MCP_API_KEY = API_KEY;
+  });
+
+  afterEach(() => {
+    delete process.env.HERMES_MCP_API_KEY;
+  });
+
+  it("★upsell を投稿すると listRules(proposalType:'upsell') で拾える★", async () => {
+    const { listRules } = await import("../admin/tuning/tuningRulesRepository");
+
+    await authedPost("/v1/hermes-mcp/proposals", {
+      scope: "tenant", tenant_id: "carnation",
+      title: "会話が込み枠を超えています", rationale: "根拠",
+      suggested_action: "Growthプランへの変更を提案する",
+      dedup_key: "tenant:carnation:list-test",
+      proposal_type: "upsell",
+      upsell: { signal: "text_overage", current_plan: "standard", recommended_plan: "growth", period_yyyymm: "202609" },
+    });
+
+    const rows = await listRules(undefined, { proposalType: "upsell", status: "pending" });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.tenant_id).toBe("carnation");
+  });
+
+  it("★承認すると一覧(status:'pending')から消える★", async () => {
+    const { listRules } = await import("../admin/tuning/tuningRulesRepository");
+    const { approveTuningRule } = await import("../admin/evaluations/evaluationsRepository");
+
+    const post = await authedPost("/v1/hermes-mcp/proposals", {
+      scope: "tenant", tenant_id: "carnation",
+      title: "会話が込み枠を超えています", rationale: "根拠",
+      suggested_action: "Growthプランへの変更を提案する",
+      dedup_key: "tenant:carnation:approve-list-test",
+      proposal_type: "upsell",
+      upsell: { signal: "text_overage", current_plan: "standard", recommended_plan: "growth", period_yyyymm: "202609" },
+    });
+
+    await approveTuningRule(Number(post.body.proposal_id), "carnation");
+
+    const rows = await listRules(undefined, { proposalType: "upsell", status: "pending" });
+    expect(rows).toHaveLength(0);
+  });
+
+  it("behavior 提案は proposalType:'upsell' の一覧に混ざらない", async () => {
+    const { listRules } = await import("../admin/tuning/tuningRulesRepository");
+    await authedPost("/v1/hermes-mcp/proposals", {
+      scope: "tenant", tenant_id: "carnation",
+      title: "保証訴求の改善", rationale: "根拠",
+      suggested_action: "保証訴求を初回応答に含める",
+      dedup_key: "tenant:carnation:behavior-not-mixed",
+    });
+    const rows = await listRules(undefined, { proposalType: "upsell", status: "pending" });
+    expect(rows).toHaveLength(0);
+  });
+
+  it("複数テナントの upsell 提案が全テナント横断で1つの一覧に集まる", async () => {
+    await db.query(`INSERT INTO tenants (id, name, plan) VALUES ('other-tenant', 'other-tenant', 'starter')`);
+    const { listRules, createRule } = await import("../admin/tuning/tuningRulesRepository");
+    void createRule;
+
+    await authedPost("/v1/hermes-mcp/proposals", {
+      scope: "tenant", tenant_id: "carnation",
+      title: "A社の提案", rationale: "根拠", suggested_action: "Growthへ",
+      dedup_key: "tenant:carnation:multi-1",
+      proposal_type: "upsell",
+      upsell: { signal: "text_overage", current_plan: "standard", recommended_plan: "growth", period_yyyymm: "202609" },
+    });
+
+    const rows = await listRules(undefined, { proposalType: "upsell", status: "pending" });
+    expect(rows.map((r) => r.tenant_id)).toContain("carnation");
+  });
+});

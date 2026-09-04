@@ -18,6 +18,7 @@ import { supabase } from "../../../../lib/supabaseClient";
 import { LoadErrorBanner } from "../../../../components/common/LoadErrorBanner";
 import { CARD, BTN_LINK } from "../utils";
 import { MarginTable } from "./MarginTable";
+import { UpsellProposalsSection } from "./UpsellProposalsSection";
 import { parseMarginSummaryResponse } from "./marginSummary.schema";
 import {
   exportMarginCsv, monthToPeriod, recentMonths, sortMarginRows,
@@ -134,6 +135,9 @@ export default function MarginDashboardPage() {
       {status === "loading" && (
         <p style={{ color: "var(--muted-foreground)", fontSize: 14 }}>読み込み中…</p>
       )}
+
+      {/* 提案 → 根拠(表)の順。運営は提案から入る。 */}
+      <UpsellProposalsSection />
 
       {status === "ready" && data && (
         <>
