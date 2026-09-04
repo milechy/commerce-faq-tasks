@@ -15,3 +15,20 @@ export const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 export function shiftToJstWallClock(now: Date): Date {
   return new Date(now.getTime() + JST_OFFSET_MS);
 }
+
+/**
+ * now を含む「JST の暦日の開始（00:00 JST）」を UTC Date で返す。
+ * WordPress プラグイン計画の日次総量ガード(D7: 新規作成30件/日)が、
+ * getMonthRangeJst / getWeekRange と同じ手法(process TZ非依存のUTC算術)で
+ * 日境界を必要としたため追加。
+ */
+export function getDayStartJst(now: Date): Date {
+  const shifted = shiftToJstWallClock(now);
+  const shiftedDayStart = Date.UTC(
+    shifted.getUTCFullYear(),
+    shifted.getUTCMonth(),
+    shifted.getUTCDate(),
+    0, 0, 0, 0,
+  );
+  return new Date(shiftedDayStart - JST_OFFSET_MS);
+}

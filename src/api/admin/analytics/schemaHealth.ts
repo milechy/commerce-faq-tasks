@@ -84,7 +84,7 @@ export const REQUIRED_COLUMNS: Record<string, readonly string[]> = {
   // tenant_contact_email は migration_phase_a.sql で追加。
   // 未適用のまま配備すると POST /v1/admin/my-tenant/billing/checkout-session の
   // SELECT が 42703 で例外になり、セルフサービス決済導線が全件500になる。
-  tenants: ["id", "is_active", "name", "plan", "tenant_contact_email"],
+  tenants: ["allowed_origins", "id", "is_active", "name", "plan", "tenant_contact_email"],
   trigger_rules: ["is_active", "message_template", "priority", "tenant_id", "trigger_config", "trigger_type"],
   // proposal_type は migration_proposal_type.sql で追加(D8-2)。
   // 未適用のまま配備すると POST /v1/hermes-mcp/proposals と承認経路が 42703 で落ちる。

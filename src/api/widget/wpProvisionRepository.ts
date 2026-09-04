@@ -195,6 +195,23 @@ export async function markWpProvisioningFailed(
  * 「存在しない」と「期限切れ」を区別して返すため、行は消さない（→ 禁止20）。
  * 対象は pending / site_verified のみ。
  */
+/**
+ * 検証専用: challenge_hash だけを返す。他のSELECTには絶対に混ぜない
+ * (ROW_COLUMNS を使う一般のSELECTは公開APIのレスポンスに載る可能性があるため、
+ * ハッシュを含めない設計にしている。この関数はサーバ内部の照合処理だけが呼ぶ)。
+ * pending の行のみを対象にする(site_verified/provisioned は再照合の必要が無い)。
+ */
+export async function getWpProvisioningChallengeHashForVerification(
+  db: Db,
+  id: string
+): Promise<string | null> {
+  const result = await db.query(
+    `SELECT challenge_hash FROM wp_provisionings WHERE id = $1 AND status = 'pending'`,
+    [id]
+  );
+  return (result.rows[0]?.challenge_hash as string | undefined) ?? null;
+}
+
 export async function expireStaleWpProvisionings(
   db: Db,
   ttlHours: number

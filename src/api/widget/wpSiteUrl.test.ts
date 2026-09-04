@@ -5,7 +5,7 @@
 //   I-1  ドメイン変更(http→https, www有無)でウィジェットが無言で止まる
 //   I-9  localhost / 内部IP のローカル開発環境から接続しようとする
 
-import { normalizeWpSiteUrl, isNonPublicHostname } from "./wpSiteUrl";
+import { normalizeWpSiteUrl, isNonPublicHostname, buildWpTenantId } from "./wpSiteUrl";
 
 describe("normalizeWpSiteUrl — 正常系", () => {
   it.each([
@@ -106,5 +106,60 @@ describe("isNonPublicHostname — プライベート範囲の境界", () => {
   it("大文字のホスト名でも判定できる", () => {
     expect(isNonPublicHostname("LOCALHOST")).toBe(true);
     expect(isNonPublicHostname("MySite.LOCAL")).toBe(true);
+  });
+});
+
+describe("buildWpTenantId", () => {
+  const ID_FORMAT = /^[a-z0-9_-]+$/;
+
+  it("正常なホスト名からは wp-<ホスト>-<サフィックス> を組み立てる", () => {
+    expect(buildWpTenantId("https://example.com", "abcd1234")).toBe("wp-example-abcd1234");
+  });
+
+  it("常に createTenantSchema の id 形式(3〜50字、[a-z0-9_-]+)に収まる", () => {
+    const cases = [
+      "https://a.com",
+      "https://www.example.co.jp",
+      "https://xn--wgv71a119e.jp",
+      "https://8.8.8.8",
+      "https://" + "a".repeat(200) + ".com",
+      "not-a-valid-url",
+      "",
+    ];
+    for (const origin of cases) {
+      for (const suffix of ["", "x", "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", "!!!---???"]) {
+        const id = buildWpTenantId(origin, suffix);
+        expect(id.length).toBeGreaterThanOrEqual(3);
+        expect(id.length).toBeLessThanOrEqual(50);
+        expect(id).toMatch(ID_FORMAT);
+      }
+    }
+  });
+
+  it("URL として壊れている origin でも 'site' にフォールバックする(throwしない)", () => {
+    expect(buildWpTenantId("not-a-url", "abcd")).toBe("wp-site-abcd");
+  });
+
+  it("記号だけのホスト名は 'site' にフォールバックする", () => {
+    expect(buildWpTenantId("https://---.example.com", "abcd")).toBe("wp-site-abcd");
+  });
+
+  it("サフィックスが空文字でも '0' にフォールバックする(空IDを作らない)", () => {
+    expect(buildWpTenantId("https://example.com", "")).toBe("wp-example-0");
+  });
+
+  it("サフィックスの大文字・記号は取り除いて小文字化する", () => {
+    expect(buildWpTenantId("https://example.com", "AB-12_cd!!")).toBe("wp-example-ab12cd");
+  });
+
+  it("同じ入力からは常に同じIDを返す(決定的)", () => {
+    const a = buildWpTenantId("https://example.com", "abcd1234");
+    const b = buildWpTenantId("https://example.com", "abcd1234");
+    expect(a).toBe(b);
+  });
+
+  it("非文字列のサフィックスでも throw しない", () => {
+    expect(() => buildWpTenantId("https://example.com", undefined as unknown as string)).not.toThrow();
+    expect(buildWpTenantId("https://example.com", undefined as unknown as string)).toBe("wp-example-0");
   });
 });
