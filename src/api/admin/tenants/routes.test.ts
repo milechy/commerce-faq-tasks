@@ -32,6 +32,19 @@ jest.mock("../../../admin/http/supabaseAuthMiddleware", () => ({
   supabaseAuthMiddleware: (_req: any, _res: any, next: any) => next(),
 }));
 
+// D8-2 (MG-8): upsell-suggestion が依存する関数群。
+// buildTenantUpsellFigures / renderUpsellForTenant は upsellRenderer.test.ts /
+// tenantEconomics.test.ts 側で「原価を出さない」ことを別途固定済みなので、
+// ここでは戻り値をモックしてルーティング・シグナル選択だけを見る。
+const mockComputeExpectedBilling = jest.fn();
+jest.mock("../../../lib/billing/stripeSync", () => ({
+  computeExpectedBilling: (...a: unknown[]) => mockComputeExpectedBilling(...a),
+}));
+const mockBuildTenantUpsellFigures = jest.fn();
+jest.mock("../../../lib/billing/billingApi", () => ({
+  buildTenantUpsellFigures: (...a: unknown[]) => mockBuildTenantUpsellFigures(...a),
+}));
+
 // --------------------------------------------------------------------------
 // ヘルパー
 // --------------------------------------------------------------------------
@@ -2079,5 +2092,82 @@ describe("PATCH /v1/admin/tenants/:id — 降格時の features 整合", () => {
     expect(res.status).toBe(200);
     expect(res.body.plan).toBe("growth");
     expect(res.body.is_active).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /v1/admin/my-tenant/upsell-suggestion (D8-2, MG-8)
+// ---------------------------------------------------------------------------
+describe("GET /v1/admin/my-tenant/upsell-suggestion", () => {
+  function dbWithPlan(plan: string | null) {
+    return { query: jest.fn().mockResolvedValue({ rowCount: 1, rows: [{ plan }] }) };
+  }
+
+  beforeEach(() => {
+    mockComputeExpectedBilling.mockReset();
+    mockBuildTenantUpsellFigures.mockReset().mockResolvedValue({
+      __audience: "tenant", signal: "text_overage",
+      current_plan: "standard", recommended_plan: "growth",
+      current_base_monthly_jpy: 9800, recommended_base_monthly_jpy: 29800,
+      text_included_now: 1000, text_included_after: 3000,
+      avatar_included_minutes_now: 30, avatar_included_minutes_after: 150,
+      text_overage: 500, avatar_overage_minutes: 0,
+      as_of: "2026-09-04T00:00:00.000Z",
+    });
+  });
+
+  it("超過していなければ available:false（訴求すること自体がない）", async () => {
+    mockComputeExpectedBilling.mockResolvedValue({ textUnits: 100, avatarMinutes: 0 });
+    const res = await request(makeApp(dbWithPlan("standard"), "client_admin"))
+      .get("/v1/admin/my-tenant/upsell-suggestion")
+      .set("Authorization", "Bearer dummy");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ available: false });
+    expect(mockBuildTenantUpsellFigures).not.toHaveBeenCalled();
+  });
+
+  it("超過していれば available:true で文面を返す", async () => {
+    mockComputeExpectedBilling.mockResolvedValue({ textUnits: 1500, avatarMinutes: 0 });
+    const res = await request(makeApp(dbWithPlan("standard"), "client_admin"))
+      .get("/v1/admin/my-tenant/upsell-suggestion")
+      .set("Authorization", "Bearer dummy");
+    expect(res.status).toBe(200);
+    expect(res.body.available).toBe(true);
+    expect(typeof res.body.headline).toBe("string");
+    expect(Array.isArray(res.body.lines)).toBe(true);
+  });
+
+  it("★レスポンスに原価・マージン・粗利のキーが1つも無い★", async () => {
+    mockComputeExpectedBilling.mockResolvedValue({ textUnits: 1500, avatarMinutes: 0 });
+    const res = await request(makeApp(dbWithPlan("standard"), "client_admin"))
+      .get("/v1/admin/my-tenant/upsell-suggestion")
+      .set("Authorization", "Bearer dummy");
+    expect(JSON.stringify(res.body)).not.toMatch(/cost|margin|profit|_jpy|_cents/i);
+  });
+
+  it("超過が複数あれば text_overage を優先する（訴求として最も強い）", async () => {
+    mockComputeExpectedBilling.mockResolvedValue({ textUnits: 1500, avatarMinutes: 200 });
+    await request(makeApp(dbWithPlan("standard"), "client_admin"))
+      .get("/v1/admin/my-tenant/upsell-suggestion")
+      .set("Authorization", "Bearer dummy");
+    expect(mockBuildTenantUpsellFigures).toHaveBeenCalledWith(
+      expect.anything(), "tenant-a", "text_overage", "standard", "growth",
+    );
+  });
+
+  it("テナントが見つからなければ404", async () => {
+    const db = { query: jest.fn().mockResolvedValue({ rowCount: 0, rows: [] }) };
+    const res = await request(makeApp(db, "client_admin"))
+      .get("/v1/admin/my-tenant/upsell-suggestion")
+      .set("Authorization", "Bearer dummy");
+    expect(res.status).toBe(404);
+  });
+
+  it("★super_admin(自テナントを持たない)は403★", async () => {
+    // requireAdminRole 自体は super_admin も通すが、tenant_id claim が無いため弾かれる。
+    const res = await request(makeApp(dbWithPlan("standard"), "super_admin", ""))
+      .get("/v1/admin/my-tenant/upsell-suggestion")
+      .set("Authorization", "Bearer dummy");
+    expect(res.status).toBe(403);
   });
 });

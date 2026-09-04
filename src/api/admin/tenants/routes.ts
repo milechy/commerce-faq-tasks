@@ -22,6 +22,11 @@ import { deriveOnboardingStage, type OnboardingStageStatus } from "../agent/onbo
 import { isValidOriginPattern } from "../../middleware/originCheck";
 import { isValidExcludedPagePattern } from "../../../lib/excludedPagePattern";
 import { purgeTenantChatData } from "../chat-history/retentionRepository";
+import { computeExpectedBilling } from "../../../lib/billing/stripeSync";
+import { getMonthRangeJst } from "../../../lib/billing/planQuota";
+import { computeUpsellSignals, type UpsellSignal } from "../../../lib/billing/upsellSignals";
+import { buildTenantUpsellFigures } from "../../../lib/billing/billingApi";
+import { renderUpsellForTenant } from "../../../lib/billing/upsellRenderer";
 
 // free_ad(starterより下の最下段。広告原資の無料プラン)と
 // standard(starter と growth の間。既定アバターの利用を開放する段)を含む5値。
@@ -531,6 +536,67 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
     // (ロジックを2箇所に書き写さない。挙動は元実装と無変更)。
     const result = await changeTenantPlan(db, logger, tenantId, nextPlan, changedBy);
     return res.status(result.status).json(result.body);
+  });
+
+  // GET /v1/admin/my-tenant/upsell-suggestion — Client Admin専用: 自テナントの
+  // 利用状況からアップセル訴求を返す(D8-2, MG-8)。
+  //
+  // ★原価が絶対に漏れない設計★
+  // このハンドラは fetchTenantBillingSnapshot(全テナント横断の粗利分析が使う、
+  // 原価入りのスナップショット)を呼ばない。呼ぶのは buildTenantUpsellFigures
+  // (TenantUpsellFigures だけを組み立てる別関数)のみで、原価・マージン・粗利の
+  // 値がこの経路のどこにも存在しない(型としても値としても)。
+  //
+  // レスポンスは renderUpsellForTenant() が返す構造化されていない文字列
+  // (headline / lines)だけで、個別の数値フィールドを一切持たない。
+  // フロント側でパースして再構成する必要が無く、「どのフィールドが
+  // 原価由来か」をフロントが判断する余地自体が無い。
+  app.get("/v1/admin/my-tenant/upsell-suggestion", tenantAuth, requireAdminRole, async (req: Request, res: Response) => {
+    const su = (req as AuthedReq).supabaseUser;
+    const tenantId = su?.app_metadata?.tenant_id as string | undefined;
+    if (!tenantId) {
+      return res.status(403).json({ error: "forbidden", message: "テナントIDが見つかりません" });
+    }
+
+    try {
+      const planRow = await db.query<{ plan: string | null }>(
+        `SELECT plan FROM tenants WHERE id = $1`,
+        [tenantId]
+      );
+      if (planRow.rowCount === 0) {
+        return res.status(404).json({ error: "not_found" });
+      }
+      const currentPlan = planRow.rows[0]!.plan ?? "starter";
+
+      const { monthStart, monthEnd } = getMonthRangeJst(new Date());
+      const from = monthStart.toISOString();
+      const to = monthEnd.toISOString();
+      const { textUnits, avatarMinutes } = await computeExpectedBilling(db, tenantId, from, to, currentPlan);
+      const signalResult = computeUpsellSignals({ plan: currentPlan, textUnits, avatarMinutes });
+
+      if (signalResult.signals.length === 0 || !signalResult.nextPlanCandidate) {
+        // ★訴求すること自体がないのを 200 + available:false で表現する★
+        // 404/204 にすると「未取得」と「対象外」の区別がフロントで付かない。
+        return res.json({ available: false });
+      }
+
+      // 複数シグナルが同時に立つことがある(例: 超過 + near_limit)。
+      // 優先度: 実際に超過している方が「上限が近い」より訴求として強い。
+      const priority: UpsellSignal[] = [
+        "text_overage", "avatar_overage", "starter_cap_reached",
+        "free_ad_limit_reached", "enterprise_nudge", "text_near_limit",
+      ];
+      const signal = priority.find((s) => signalResult.signals.includes(s)) ?? signalResult.signals[0]!;
+
+      const figures = await buildTenantUpsellFigures(
+        db, tenantId, signal, currentPlan, signalResult.nextPlanCandidate,
+      );
+      const rendered = renderUpsellForTenant(figures);
+      return res.json({ available: true, headline: rendered.headline, lines: rendered.lines });
+    } catch (err) {
+      logger.warn("[GET /v1/admin/my-tenant/upsell-suggestion]", err);
+      return res.status(500).json({ error: "internal_error" });
+    }
   });
 
   // POST /v1/admin/my-tenant/keys — Client Admin専用: 自テナントのAPIキーを自力発行する。

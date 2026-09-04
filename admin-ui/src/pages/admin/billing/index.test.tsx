@@ -139,6 +139,18 @@ describe("BillingPage — プラン表示 (GID 1217808323616744 / P1-7)", () => 
     await waitFor(() => expect(screen.getByText(/Starter/)).toBeTruthy());
   });
 
+  it("★super_admin には upsell-suggestion を叩かない（運営は margin 画面で見る）★", async () => {
+    mockAuthFetchImpl(() => jsonResponse(200, {
+      tenants: [{ id: "lp-demo-avator", name: "LPデモ", plan: "starter", is_active: true }],
+    }));
+    superAdminAuth();
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText(/現在のプラン/).textContent).toContain("Starter"));
+    const calledUrls = mockAuthFetch.mock.calls.map((c) => c[0] as string);
+    expect(calledUrls.some((u) => u.includes("/upsell-suggestion"))).toBe(false);
+  });
+
   it("super_admin: 選択中テナントのプランを一覧レスポンスからそのまま表示する（個別取得しない）", async () => {
     mockAuthFetchImpl(() => jsonResponse(200, {
       tenants: [{ id: "lp-demo-avator", name: "LPデモ", plan: "starter", is_active: true }],
