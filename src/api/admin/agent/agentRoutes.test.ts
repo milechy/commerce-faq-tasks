@@ -9578,6 +9578,25 @@ describe('POST /v1/admin/agent/chat', () => {
       };
     }
 
+    // GID 1218167822555278: data-tenant 属性が欠落しており、widget.js が
+    // tenantId を取得できず(public/widget.js:28,100)ウィジェットが無反応になっていた
+    it('data-tenant と data-api-key の両方を含める', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-ec-0', 'get_embed_code'))
+        .mockResolvedValueOnce(makeGroqResponse('埋め込みコードです。'));
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ key_prefix: 'r2c_live_abc' }] })
+        .mockResolvedValueOnce({ rows: [{ widget_theme: null }] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '埋め込みコードを教えて', sessionId: 'sess-embed-00' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('data-tenant="tenant-abc"');
+      expect(res.body.actions[0].result).toContain('data-api-key="YOUR_API_KEY"');
+    });
+
     it('widget_theme.primaryColor が設定済みなら data-accent-color 属性を含める', async () => {
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('call-ec-1', 'get_embed_code'))
