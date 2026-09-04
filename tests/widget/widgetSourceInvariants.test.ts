@@ -518,3 +518,111 @@ describe('public/widget.js — S6 開示バナーのfail-open是正', () => {
     );
   });
 });
+
+// PR #1167: デスクトップパネルの width/height 拡大(390px→460px, 672px→760px)。
+//
+// この数値をロックしないと、誰かが「コードの掃除」で古い390/672に戻す変更をしても
+// 既存テストは全部緑のまま通ってしまう(このファイル導入前は実際にそういう不変条件が
+// 一つも無かった)。モバイル側は同じ min() の中の calc() 分岐がそのまま効くため、
+// 誤って別の分岐(min()の外側や単位)を触っていないことも合わせて固定する。
+describe('public/widget.js デスクトップパネル width/height の不変条件(PR #1167)', () => {
+  it('.panel の width は min(460px, calc(100vw - 32px)) に固定されている', () => {
+    expect(WIDGET_SRC).toContain("'  width: min(460px, calc(100vw - 32px));',");
+  });
+
+  it('.panel の height は min(760px, calc(100vh - var(--offset-y) - 124px)) に固定されている', () => {
+    expect(WIDGET_SRC).toContain(
+      "'  height: min(760px, calc(100vh - var(--offset-y) - 124px));',"
+    );
+  });
+
+  it('モバイル側で効く calc(100vw - 32px) / calc(100vh - var(--offset-y) - 124px) の分岐が温存されている(min()の中身だけを差し替える回帰対策)', () => {
+    expect(WIDGET_SRC).toContain('calc(100vw - 32px)');
+    expect(WIDGET_SRC).toContain('calc(100vh - var(--offset-y) - 124px)');
+  });
+});
+
+// PR #1168: エスカレーションボタンのサイレント失敗修正。
+//
+// サーバ側(escalateSession)は「来訪者が最低1通送っているか」で判定するため、
+// クライアント側も同じ基準(role==='user'の実発言)で有効化しないと、
+// 自動あいさつ/プロアクティブ声がけ(role: 'assistant')だけの状態でボタンが
+// 押せてしまい、サーバ側に弾かれて無言で失敗する退行が起きる。
+describe('public/widget.js エスカレーションボタンの不変条件(PR #1168)', () => {
+  it('ボタン活性化条件は role===\'user\' の実発言の有無で判定している(role==="assistant"等への先祖返り防止)', () => {
+    expect(WIDGET_SRC).toMatch(
+      /var hasVisitorMessage = messages\.some\(function \(m\) \{ return m\.role === 'user'; \}\);/
+    );
+  });
+
+  it('escalateBtn は生成時点で disabled=true が既定(会話開始前は押せない)', () => {
+    const idx = WIDGET_SRC.indexOf("var escalateBtn = el('button'");
+    expect(idx).toBeGreaterThan(-1);
+    const block = WIDGET_SRC.slice(idx, idx + 400);
+    expect(block).toContain('escalateBtn.disabled = true;');
+  });
+
+  it('クリックハンドラの先頭で escalated / escalatePending / disabled を全てガードしている(二重発火防止)', () => {
+    expect(WIDGET_SRC).toMatch(
+      /escalateBtn\.addEventListener\('click', function \(\) \{\s*if \(escalated \|\| escalatePending \|\| escalateBtn\.disabled\) return;/
+    );
+  });
+
+  it('markEscalated() は escalated フラグを立ててから以降のクリックを無効化する', () => {
+    const m = WIDGET_SRC.match(/function markEscalated\(\) \{[\s\S]*?\n  \}/);
+    expect(m).not.toBeNull();
+    expect(m![0]).toMatch(/^function markEscalated\(\) \{\s*escalated = true;/);
+  });
+
+  it('404 conversation_not_found のときだけ専用の案内文を出し、それ以外(他ステータス/ネットワーク失敗)は汎用文にフォールバックする', () => {
+    expect(WIDGET_SRC).toMatch(
+      /if \(result\.status === 404 && result\.data && result\.data\.error === 'conversation_not_found'\) \{\s*pushEscalateFailureMessage\('少し会話をしてからもう一度お試しください。'\);\s*\} else \{\s*pushEscalateFailureMessage\('接続できませんでした。もう一度お試しください。'\);\s*\}/
+    );
+  });
+
+  it('fetch自体が例外/rejectする場合(ネットワークレベル障害)も.catch()で同じ汎用文にフォールバックし、無言で失敗しない', () => {
+    const clickIdx = WIDGET_SRC.indexOf("escalateBtn.addEventListener('click'");
+    expect(clickIdx).toBeGreaterThan(-1);
+    const block = WIDGET_SRC.slice(clickIdx, clickIdx + 1600);
+    const catchIdx = block.indexOf('.catch(function () {');
+    expect(catchIdx).toBeGreaterThan(-1);
+    const catchBlock = block.slice(catchIdx);
+    expect(catchBlock).toContain('escalatePending = false;');
+    expect(catchBlock).toContain("pushEscalateFailureMessage('接続できませんでした。もう一度お試しください。');");
+  });
+});
+
+// PR #1179: 音声リンク型チャットUI(avatarMuteBtn によるヒストリー表示切替)。
+//
+// このリポジトリでは過去に「ほぼ同一の2経路(Anam SDK / LiveKit)のうち片方だけ
+// 修正して片方を壊す」事故が実際に起きているため、両方の click ハンドラが
+// 同じ3行(ミュート状態反転→history-hiddenトグル→aria-hidden反映)を
+// 持っていることを機械的に固定する。
+describe('public/widget.js 音声リンク型チャットUIの不変条件(PR #1179)', () => {
+  it('.panel.avatar-active.history-hidden .messages というセレクタが「両クラス必須」の組み合わせのまま存在する(片方だけの .history-hidden .messages への緩和を防止)', () => {
+    expect(WIDGET_SRC).toContain("'.panel.avatar-active.history-hidden .messages {'");
+  });
+
+  it('"history-hidden" という文字列は CSSセレクタ1箇所 + JSのトグル2箇所(Anam/LiveKit)の合計3箇所にのみ存在する(第3の書き込み経路が増えていないこと、および.input-area等への横流れ防止)', () => {
+    const matches = WIDGET_SRC.match(/history-hidden/g) || [];
+    expect(matches.length).toBe(3);
+  });
+
+  it('Anam SDK経路(connectAnam)の avatarMuteBtn クリックハンドラは avatarMuted 反転→history-hiddenトグル→aria-hidden反映の3行を持つ', () => {
+    const idx = WIDGET_SRC.indexOf('function connectAnam(sessionToken) {');
+    expect(idx).toBeGreaterThan(-1);
+    const block = WIDGET_SRC.slice(idx, idx + 4000);
+    expect(block).toMatch(
+      /avatarMuteBtn\.addEventListener\('click', function \(\) \{\s*avatarMuted = !avatarMuted;\s*\/\/[^\n]*\n\s*panel\.classList\.toggle\('history-hidden', !avatarMuted\);\s*messagesArea\.setAttribute\('aria-hidden', String\(!avatarMuted\)\);/
+    );
+  });
+
+  it('LiveKit経路(_connectLiveKitAfterCleanup)の avatarMuteBtn クリックハンドラも同じ3行を持つ(Anam経路と実装が分岐/漂流していないこと)', () => {
+    const idx = WIDGET_SRC.indexOf('function _connectLiveKitAfterCleanup() {');
+    expect(idx).toBeGreaterThan(-1);
+    const block = WIDGET_SRC.slice(idx, idx + 6000);
+    expect(block).toMatch(
+      /avatarMuteBtn\.addEventListener\('click', function \(\) \{\s*avatarMuted = !avatarMuted;\s*\/\/[^\n]*\n\s*panel\.classList\.toggle\('history-hidden', !avatarMuted\);\s*messagesArea\.setAttribute\('aria-hidden', String\(!avatarMuted\)\);/
+    );
+  });
+});
