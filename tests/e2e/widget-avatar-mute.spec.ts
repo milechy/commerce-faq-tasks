@@ -71,11 +71,20 @@ test.describe('Widget — 音声リンク型チャットUI(avatarMuteBtn)', () =
       const sendBtn = root?.querySelector('.send-btn') as HTMLElement | null;
       const micBtn = root?.querySelector('.mic-btn') as HTMLElement | null;
       const cs = (el: HTMLElement | null) => (el ? getComputedStyle(el).display : null);
+      // .panel.avatar-active.history-hidden .messages は display ではなく
+      // opacity/max-height/overflow で隠す(public/widget.js:868-873)。display は
+      // 隠れていても変化しないため、隠れているかどうかの判定はこちらで行う。
+      const isVisuallyHidden = (el: HTMLElement | null) => {
+        if (!el) return null;
+        const cs2 = getComputedStyle(el);
+        return cs2.opacity === '0' && cs2.overflow === 'hidden';
+      };
       return {
         hasPanel: !!panel,
         hasAvatarActive: !!panel?.classList.contains('avatar-active'),
         hasHistoryHidden: !!panel?.classList.contains('history-hidden'),
         messagesDisplay: cs(messages),
+        messagesVisuallyHidden: isVisuallyHidden(messages),
         inputAreaDisplay: cs(inputArea),
         textareaDisplay: cs(textarea),
         sendBtnDisplay: cs(sendBtn),
@@ -105,7 +114,7 @@ test.describe('Widget — 音声リンク型チャットUI(avatarMuteBtn)', () =
         return;
       }
       expect(before.hasAvatarActive).toBe(false);
-      expect(before.messagesDisplay).not.toBe('none');
+      expect(before.messagesVisuallyHidden).toBe(false);
 
       // avatarMuteBtnクリックを経由せず、CSSセレクタの契約そのものを直接検証する
       // (avatar-active無しでhistory-hiddenだけが付くという、実装上は起きないはずの
@@ -120,7 +129,7 @@ test.describe('Widget — 音声リンク型チャットUI(avatarMuteBtn)', () =
       expect(afterHistoryHiddenOnly.hasAvatarActive).toBe(false);
       // 核心の回帰ガード: .history-hidden 単体ではセレクタが不成立のため、
       // メッセージ履歴は表示されたままでなければならない
-      expect(afterHistoryHiddenOnly.messagesDisplay).not.toBe('none');
+      expect(afterHistoryHiddenOnly.messagesVisuallyHidden).toBe(false);
 
       // 対照実験: avatar-active も足すと初めて隠れることを確認し、
       // 上のテストが「そもそもCSSが効いていないだけ」の偽陰性でないことを保証する
@@ -128,8 +137,16 @@ test.describe('Widget — 音声リンク型チャットUI(avatarMuteBtn)', () =
         const host = document.getElementById('faq-chat-widget-host') as HTMLElement | null;
         host?.shadowRoot?.querySelector('.panel')?.classList.add('avatar-active');
       });
+      // .messages には opacity 0.2s のtransitionが付いている(public/widget.js:861)。
+      // クラス付与直後は遷移中でopacityがまだ0に達していないため、実際に0になるまで待つ
+      // (固定sleepではなく実測でポーリングすることで、CI側の実行速度差に依存しない)。
+      await page.waitForFunction(() => {
+        const host = document.getElementById('faq-chat-widget-host') as HTMLElement | null;
+        const messages = host?.shadowRoot?.querySelector('.messages') as HTMLElement | null;
+        return !!messages && getComputedStyle(messages).opacity === '0';
+      }, { timeout: 2000 });
       const afterBoth = await getPanelMessagesState(page);
-      expect(afterBoth.messagesDisplay).toBe('none');
+      expect(afterBoth.messagesVisuallyHidden).toBe(true);
     });
 
     test('history-hidden + avatar-active が揃った状態でも、入力エリア(textarea/送信/マイク)は非表示にならない', async ({
@@ -155,9 +172,15 @@ test.describe('Widget — 音声リンク型チャットUI(avatarMuteBtn)', () =
         panel?.classList.add('avatar-active');
         panel?.classList.add('history-hidden');
       });
+      // opacity 0.2s のtransitionが完了するまで待つ(上のテストと同じ理由)。
+      await page.waitForFunction(() => {
+        const host = document.getElementById('faq-chat-widget-host') as HTMLElement | null;
+        const messages = host?.shadowRoot?.querySelector('.messages') as HTMLElement | null;
+        return !!messages && getComputedStyle(messages).opacity === '0';
+      }, { timeout: 2000 });
 
       const state = await getPanelMessagesState(page);
-      expect(state.messagesDisplay).toBe('none'); // 前提: 履歴自体は隠れている
+      expect(state.messagesVisuallyHidden).toBe(true); // 前提: 履歴自体は隠れている
       // 「テキスト入力は常に表示され続ける」という要件をレンダリング結果で確認する
       expect(state.inputAreaDisplay).not.toBe('none');
       expect(state.textareaDisplay).not.toBe('none');
@@ -200,7 +223,12 @@ test.describe('Widget — 音声リンク型チャットUI(avatarMuteBtn)', () =
       const muted = state.ariaPressed === 'true';
       // avatarMuted===true(ミュート中)のときは履歴を隠さない(!avatarMuted===false)
       expect(state.historyHidden).toBe(!muted);
-      expect(state.messagesAriaHidden).toBe(String(!muted));
+      // aria-hidden は avatarMuteBtn が一度もクリックされていない間は属性自体が
+      // 存在しない(public/widget.js はクリックハンドラの中でのみ setAttribute する)。
+      // 「属性が無い」と「aria-hidden="false"」はアクセシビリティ上同値なので、
+      // 文字列の完全一致ではなく真偽値に正規化してから比較する。
+      const isAriaHidden = state.messagesAriaHidden === 'true';
+      expect(isAriaHidden).toBe(!muted);
     }
 
     test('クリック1回でミュート状態が反転し、history-hidden / aria-hidden が連動する', async ({ page }) => {
@@ -361,7 +389,9 @@ test.describe('Widget — 音声リンク型チャットUI(avatarMuteBtn)', () =
       expect(initial.ariaPressed).toBe('true');
       const mutedInitially = initial.ariaPressed === 'true';
       expect(initial.historyHidden).toBe(!mutedInitially);
-      expect(initial.messagesAriaHidden).toBe(String(!mutedInitially));
+      // aria-hidden はクリック前は属性自体が無い(null)ことがある。無いことと
+      // "false"であることは同値なので、真偽値に正規化してから比較する。
+      expect(initial.messagesAriaHidden === 'true').toBe(!mutedInitially);
 
       await page.evaluate(() => {
         const host = document.getElementById('faq-chat-widget-host') as HTMLElement | null;
@@ -372,7 +402,7 @@ test.describe('Widget — 音声リンク型チャットUI(avatarMuteBtn)', () =
       expect(after.ariaPressed).toBe('false');
       const mutedAfter = after.ariaPressed === 'true';
       expect(after.historyHidden).toBe(!mutedAfter);
-      expect(after.messagesAriaHidden).toBe(String(!mutedAfter));
+      expect(after.messagesAriaHidden === 'true').toBe(!mutedAfter);
     });
   });
 });
