@@ -29,6 +29,8 @@ import {
   TEXT_DIMENSION_FEATURES,
   ADMIN_DIMENSION_FEATURES,
 } from './costCalculator';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 
 // ---------------------------------------------------------------------------
 // normalizeModelKey
@@ -1041,6 +1043,47 @@ describe('FEATURE_BILLING_DIMENSION', () => {
   it('TEXT_DIMENSION_FEATURES / ADMIN_DIMENSION_FEATURES はFEATURE_BILLING_DIMENSIONから導出される', () => {
     expect([...TEXT_DIMENSION_FEATURES].sort()).toEqual(['agent_search', 'chat']);
     expect(ADMIN_DIMENSION_FEATURES).toEqual(['admin_agent']);
+  });
+
+  // ---------------------------------------------------------------------------
+  // スキーマ↔コード整合: usage_logs.feature_used の CHECK 制約と1対1であること。
+  //
+  // ★なぜこのテストが要るか★
+  // FEATURE_BILLING_DIMENSION に新しい featureUsed を足しても、TypeScript は
+  // それだけで動く(FeatureUsed 型はこの map から導出されるため)。しかし DB 側の
+  // usage_logs_feature_used_check 制約に対応する値を追加する migration
+  // (人間承認・手動適用)を忘れると、trackUsage({featureUsed: '新しい値'}) の
+  // INSERT が CHECK 制約違反(23514)で失敗する。usageTracker.ts の _insertUsageLog は
+  // 42703(列欠落)以外の例外を catch して logger.error に落とすだけの
+  // fire-and-forget 設計なので、この失敗は API レスポンスにも画面にも一切出ず、
+  // 該当機能の利用記録・請求だけが本番で無言のまま消え続ける
+  // (CLAUDE.md 禁止42「マージ済み・デプロイ済みは本番で動いているを意味しない」と
+  // 同じ形の事故。かつ禁止50「監視が0件で沈黙」も併発する — 記録が無いので
+  // 異常検知の対象にすら乗らない)。
+  //
+  // 制約は DROP+ADD で置き換わる累積 migration なので、最後に更新された
+  // ファイル(2026-09時点は migration_agent_search_feature.sql)が現在の
+  // 完全なリストを持つ。次に featureUsed を追加する人は、この migration ファイルの
+  // 隣に新しい migration_*.sql を足して制約を置き換えること
+  // (このテストの読み先を書き換えるのではなく、新しいファイルを追加する形)。
+  it('FEATURE_BILLING_DIMENSION のキーは usage_logs_feature_used_check 制約(migration_agent_search_feature.sql)の値と1対1', () => {
+    const migrationSql = readFileSync(
+      join(__dirname, 'migration_agent_search_feature.sql'),
+      'utf8',
+    );
+    const match = migrationSql.match(/CHECK \(feature_used IN \(([\s\S]*?)\)\)/);
+    expect(match).not.toBeNull();
+    const constraintValues = [...match![1].matchAll(/'([a-z0-9_]+)'/g)].map((m) => m[1]);
+
+    const mapKeys = Object.keys(FEATURE_BILLING_DIMENSION);
+
+    // 制約にあるのに map に無い(=課金次元を宣言し忘れている。CLAUDE.md禁止6と同種)
+    const missingInMap = constraintValues.filter((v) => !mapKeys.includes(v));
+    // map にあるのに制約に無い(=migrationを書き忘れている。INSERTが23514で無言消失する)
+    const missingInConstraint = mapKeys.filter((k) => !constraintValues.includes(k));
+
+    expect(missingInMap).toEqual([]);
+    expect(missingInConstraint).toEqual([]);
   });
 });
 

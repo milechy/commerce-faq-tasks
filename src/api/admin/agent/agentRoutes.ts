@@ -945,7 +945,11 @@ const ADMIN_AGENT_FREE_AD_LIMIT_MESSAGE =
  * 境界比較には AT TIME ZONE を使わない）。AT TIME ZONE は JST 暦日を取り出す
  * （グルーピング用の日付キーを作る）ためだけに使う。
  */
-async function countFreeAdAdminConsults(
+// export: billingSqlIntegration.test.ts が実 Postgres に対してこの関数を直接呼び、
+// JS側(shiftToJstWallClock)とSQL側(AT TIME ZONE 'Asia/Tokyo')のJST日付計算が
+// 実際に一致することを検証する(src/api/chat/route.ts の
+// countFreeAdBillableConversations と同じ理由・同じ作法)。
+export async function countFreeAdAdminConsults(
   db: Pool,
   tenantId: string,
   sessionId: string,

@@ -25,6 +25,7 @@ import { Pool } from "pg";
 import { computeExpectedBilling } from "./stripeSync";
 import { findMissingColumns, REQUIRED_COLUMNS } from "../../api/admin/analytics/schemaHealth";
 import { countFreeAdBillableConversations, countFreeAdBillableRequests } from "../../api/chat/route";
+import { countFreeAdAdminConsults } from "../../api/admin/agent/agentRoutes";
 import { initUsageTracker, trackUsage } from "./usageTracker";
 import { calculateBaseCostCents, calculateBillingAmountCents } from "./costCalculator";
 import { MARGIN_MULTIPLIER } from "./costCalculator";
@@ -1153,6 +1154,149 @@ d("countFreeAdBillableRequests（実 Postgres に対する P0-4 生リクエス�
   it("利用が無い月は0を返し、例外を投げない", async () => {
     const requestCount = await countFreeAdBillableRequests(db, "t1", ...RANGE);
     expect(requestCount).toBe(0);
+  });
+});
+
+// countFreeAdAdminConsults(agentRoutes.ts, S7: free_ad の管理AI月次上限)の実DB回帰。
+//
+// ★このテストが守っている事故★ この関数は admin_units CTE(stripeSync.ts)と同じ
+// 「(session_id, JST暦日)のDISTINCT」を数えるが、実装がSQL側の
+// `(created_at AT TIME ZONE 'Asia/Tokyo')::date` と、JS側の
+// shiftToJstWallClock(now)+文字列整形という**2つの別々の実装**で「今日(JST)」を
+// 計算し、`jst_date = $6::date` で突き合わせている。この2つが1箇所でも食い違うと、
+// 「今日まだ相談していないか」の判定(countedToday)が実際のJST日と無関係な
+// UTC日基準になり得る(CLAUDE.md 禁止16と同種)。stripeSync.ts の admin_units は
+// Gate 4 で実Postgres検証済みだが、この関数は別実装のため未検証だった
+// (mockのdb.queryでしか実行されたことがない)。
+d("countFreeAdAdminConsults（実 Postgres に対する管理AI月次上限の判定SQL）", () => {
+  let db: Pool;
+
+  beforeAll(() => {
+    db = new Pool({ connectionString: DB_URL, options: "-c timezone=UTC" });
+  });
+
+  afterAll(async () => {
+    await db.end();
+  });
+
+  beforeEach(async () => {
+    await db.query(
+      "TRUNCATE usage_logs, stripe_usage_reports, stripe_subscriptions, chat_sessions RESTART IDENTITY CASCADE"
+    );
+    await db.query("TRUNCATE tenants CASCADE");
+    await db.query(
+      `INSERT INTO tenants (id, name, plan) VALUES ('t1', 't1', 'free_ad'), ('other', 'other', 'free_ad')`
+    );
+  });
+
+  const RANGE_START = "2026-03-01T00:00:00Z";
+
+  // JST(UTC+9)は UTC 16:00〜翌23:59 の間に日付が変わる。UTC暦日をそのまま使う
+  // (シフト忘れの)バグだと、この時間帯のcreated_atだけ判定を取り違える。
+  it("★JST日付境界: UTC上は同じ日でも、JST 0時をまたぐと『今日』の判定が変わる(AT TIME ZONEの向きの検査)★", async () => {
+    // 2026-03-02T16:00:00Z = JST 2026-03-03 01:00(UTC暦日はまだ03-02のまま)
+    await db.query(`
+      INSERT INTO usage_logs (tenant_id, request_id, session_id, feature_used, billable, created_at)
+      VALUES ('t1','r1','s1','admin_agent', true, '2026-03-02T16:00:00Z');
+    `);
+
+    // now も同じ瞬間(JST 2026-03-03 01:05)。正しく実装されていれば
+    // 「s1は今日(JST 03-03)すでに相談済み」と判定される。
+    const same = await countFreeAdAdminConsults(db, "t1", "s1", new Date("2026-03-02T16:05:00Z"));
+    expect(same.countedToday).toBe(true);
+
+    // now を1つ前のJST暦日(JST 2026-03-02 23:00 = UTC 2026-03-02T14:00:00Z)にすると、
+    // s1の相談(JST 03-03)は「今日」ではなくなる。UTC暦日だけを見る実装だと
+    // 両方とも'2026-03-02'のままになり、ここが誤って true になる。
+    const dayBefore = await countFreeAdAdminConsults(db, "t1", "s1", new Date("2026-03-02T14:00:00Z"));
+    expect(dayBefore.countedToday).toBe(false);
+  });
+
+  it("同一session_idの同日複数行は1件、別日なら2件(admin_unitsと同じ数え方)", async () => {
+    await db.query(`
+      INSERT INTO usage_logs (tenant_id, request_id, session_id, feature_used, billable, created_at) VALUES
+        ('t1','r1','s1','admin_agent', true, '2026-03-05T02:00:00Z'),
+        ('t1','r2','s1','admin_agent', true, '2026-03-05T05:00:00Z'),
+        ('t1','r3','s1','admin_agent', true, '2026-03-06T02:00:00Z');
+    `);
+    const { count } = await countFreeAdAdminConsults(
+      db, "t1", "s1", new Date(RANGE_START)
+    );
+    expect(count).toBe(2); // (s1,03-05) と (s1,03-06) の2組
+  });
+
+  it("同じ相談件数でもsession_idが違えば別々に数える", async () => {
+    await db.query(`
+      INSERT INTO usage_logs (tenant_id, request_id, session_id, feature_used, billable, created_at) VALUES
+        ('t1','r1','s1','admin_agent', true, '2026-03-05T02:00:00Z'),
+        ('t1','r2','s2','admin_agent', true, '2026-03-05T02:00:00Z'),
+        ('t1','r3','s3','admin_agent', true, '2026-03-05T02:00:00Z');
+    `);
+    const { count } = await countFreeAdAdminConsults(db, "t1", "sX", new Date(RANGE_START));
+    expect(count).toBe(3);
+  });
+
+  it("chat(管理AI以外)の行は数えない(次元の分離)", async () => {
+    await db.query(`
+      INSERT INTO usage_logs (tenant_id, request_id, session_id, feature_used, billable, created_at)
+      VALUES ('t1','r1','s1','chat', true, '2026-03-05T02:00:00Z');
+    `);
+    const { count } = await countFreeAdAdminConsults(db, "t1", "s1", new Date(RANGE_START));
+    expect(count).toBe(0);
+  });
+
+  it("billable=falseの行は数えない", async () => {
+    await db.query(`
+      INSERT INTO usage_logs (tenant_id, request_id, session_id, feature_used, billable, created_at)
+      VALUES ('t1','r1','s1','admin_agent', false, '2026-03-05T02:00:00Z');
+    `);
+    const { count } = await countFreeAdAdminConsults(db, "t1", "s1", new Date(RANGE_START));
+    expect(count).toBe(0);
+  });
+
+  it("session_idがNULLの行は数えない(この判定は月次上限のショートカットで、rowへのフォールバックは持たない)", async () => {
+    await db.query(`
+      INSERT INTO usage_logs (tenant_id, request_id, session_id, feature_used, billable, created_at)
+      VALUES ('t1','r1',NULL,'admin_agent', true, '2026-03-05T02:00:00Z');
+    `);
+    const { count } = await countFreeAdAdminConsults(db, "t1", "s1", new Date(RANGE_START));
+    expect(count).toBe(0);
+  });
+
+  it("他テナントの相談は数えない(テナント境界)", async () => {
+    await db.query(`
+      INSERT INTO usage_logs (tenant_id, request_id, session_id, feature_used, billable, created_at)
+      VALUES ('other','r1','s1','admin_agent', true, '2026-03-05T02:00:00Z');
+    `);
+    const { count } = await countFreeAdAdminConsults(db, "t1", "s1", new Date(RANGE_START));
+    expect(count).toBe(0);
+  });
+
+  // ★JST暦月の境界であって、UTC暦月の境界ではない★
+  // getMonthRangeJst は「JST 3/1 00:00」〜「JST 4/1 00:00」を返す。UTCでは
+  // 2026-02-28T15:00:00Z 〜 2026-03-31T15:00:00Z にあたる(JST=UTC+9のため9時間分ずれる)。
+  // countFreeAdBillableRequests 等(呼び出し元がUTC境界を直接渡す関数)の
+  // 境界値をそのまま流用すると9時間分ずれた誤った境界を検査してしまう。
+  it("期間の境界はJST暦月の半開区間(月またぎを二重計上・取りこぼししない)", async () => {
+    await db.query(`
+      INSERT INTO usage_logs (tenant_id, request_id, session_id, feature_used, billable, created_at) VALUES
+        ('t1','before','s-before','admin_agent', true, '2026-02-28T14:59:59Z'),
+        ('t1','start','s-start','admin_agent', true, '2026-02-28T15:00:00Z'),
+        ('t1','end','s-end','admin_agent', true, '2026-03-31T14:59:59Z'),
+        ('t1','after','s-after','admin_agent', true, '2026-03-31T15:00:00Z');
+    `);
+    const { count } = await countFreeAdAdminConsults(
+      db, "t1", "s-none", new Date("2026-03-15T00:00:00Z")
+    );
+    expect(count).toBe(2); // start(JST 3/1 00:00)・end(JST 3/31 23:59:59) のみ
+  });
+
+  it("利用が無い月は0件・countedToday falseを返し、例外を投げない", async () => {
+    const { count, countedToday } = await countFreeAdAdminConsults(
+      db, "t1", "s1", new Date(RANGE_START)
+    );
+    expect(count).toBe(0);
+    expect(countedToday).toBe(false);
   });
 });
 
