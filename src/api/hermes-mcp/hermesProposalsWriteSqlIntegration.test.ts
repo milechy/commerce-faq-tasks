@@ -287,6 +287,41 @@ d("D8-2: アップセル提案は承認しても本番プロンプトに入ら�
     ]);
   });
 
+  it("★listRules は既定で upsell を返さない（FAQ一覧に営業提案が混ざらない）★", async () => {
+    const { listRules } = await import("../admin/tuning/tuningRulesRepository");
+
+    await authedPost("/v1/hermes-mcp/proposals", UPSELL);
+    await authedPost("/v1/hermes-mcp/proposals", {
+      scope: "tenant", tenant_id: "carnation",
+      title: "保証訴求の改善", rationale: "根拠",
+      suggested_action: "保証訴求を初回応答に含める",
+      dedup_key: "tenant:carnation:warranty",
+    });
+
+    // 既定(フィルタ未指定) → behavior だけ
+    const def = await listRules("carnation");
+    expect(def.map((r) => r.trigger_pattern)).toEqual(["保証訴求の改善"]);
+
+    // 明示的に upsell を求めた面だけが営業提案を受け取る
+    const ups = await listRules("carnation", { proposalType: "upsell" });
+    expect(ups.map((r) => r.trigger_pattern)).toEqual(["upsell:202609:text_overage"]);
+
+    // all は両方
+    const all = await listRules("carnation", { proposalType: "all" });
+    expect(all).toHaveLength(2);
+  });
+
+  it("source フィルタと併用しても upsell は既定で除外される", async () => {
+    const { listRules } = await import("../admin/tuning/tuningRulesRepository");
+    await authedPost("/v1/hermes-mcp/proposals", UPSELL);
+
+    // AIReportTab と同じ絞り込み(source=judge,hermes / status=pending)
+    const rows = await listRules("carnation", {
+      source: ["judge", "hermes"], status: "pending",
+    });
+    expect(rows).toHaveLength(0);
+  });
+
   it("現プランと食い違う提案は409で保存されない", async () => {
     await db.query(`UPDATE tenants SET plan = 'growth' WHERE id = 'carnation'`);
     const res = await authedPost("/v1/hermes-mcp/proposals", UPSELL);

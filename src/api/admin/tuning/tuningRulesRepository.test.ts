@@ -30,14 +30,17 @@ describe('listRules', () => {
   // S3(GID 1217769376950104): 管理UI一覧も回答経路(getActiveRulesForTenant)と
   // 同じ述語(GLOBAL_RULE_VISIBILITY_WHERE)でフィルタする方針にした
   // (share=OFF のテナントに「効かないルール」を一覧に出さない)。
-  it('tenantId指定・filtersなし → WHERE句にGLOBAL_RULE_VISIBILITY_WHEREが使われ、引数は[tenantId]', async () => {
+  it('tenantId指定・filtersなし → GLOBAL_RULE_VISIBILITY_WHERE + 既定の proposal_type 絞り込み', async () => {
     await listRules('tenant-abc');
 
     const [sql, args] = mockQuery.mock.calls[0];
     expect(sql).toContain(GLOBAL_RULE_VISIBILITY_WHERE);
     expect(sql).not.toContain('source =');
     expect(sql).not.toContain('status =');
-    expect(args).toEqual(['tenant-abc']);
+    // D8-2: filters 未指定でも upsell(営業提案)は除外する。
+    // 「呼び出し側が毎回除外するのを忘れない」前提は壊れやすいので既定を安全側に倒した。
+    expect(sql).toContain('proposal_type = $2');
+    expect(args).toEqual(['tenant-abc', 'behavior']);
   });
 
   it('tenantId + source + status 指定 → SQLに両条件が追加され、引数が正しい順で渡る', async () => {
@@ -46,7 +49,9 @@ describe('listRules', () => {
     const [sql, args] = mockQuery.mock.calls[0];
     expect(sql).toContain('source = $2');
     expect(sql).toContain('status = $3');
-    expect(args).toEqual(['tenant-abc', 'judge', 'pending']);
+    // D8-2 の既定絞り込みは常に最後に付く（既存の $n をずらさない）
+    expect(sql).toContain('proposal_type = $4');
+    expect(args).toEqual(['tenant-abc', 'judge', 'pending', 'behavior']);
   });
 
   // R6: Judge/Hermes提案を同一一覧に出すため、source に配列を渡すと ANY() になる
@@ -56,7 +61,7 @@ describe('listRules', () => {
     const [sql, args] = mockQuery.mock.calls[0];
     expect(sql).toContain('source = ANY($2)');
     expect(sql).toContain('status = $3');
-    expect(args).toEqual(['tenant-abc', ['judge', 'hermes'], 'pending']);
+    expect(args).toEqual(['tenant-abc', ['judge', 'hermes'], 'pending', 'behavior']);
   });
 
   it('SELECT句にsource/status/evidence列が含まれる（AIReportTabがこれらを必要とする）', async () => {
@@ -69,16 +74,31 @@ describe('listRules', () => {
     await listRules(undefined, { source: 'judge', status: 'pending' });
 
     const [sql, args] = mockQuery.mock.calls[0];
-    expect(sql).toContain('WHERE source = $1 AND status = $2');
-    expect(args).toEqual(['judge', 'pending']);
+    expect(sql).toContain('WHERE source = $1 AND status = $2 AND proposal_type = $3');
+    expect(args).toEqual(['judge', 'pending', 'behavior']);
   });
 
-  it('tenantId・filters両方未指定 → WHERE句なしで全件取得（従来挙動）', async () => {
+  it('★tenantId・filters両方未指定でも upsell は返さない（既定が安全側）★', async () => {
+    // 旧仕様は「WHERE句なしで全件」だった。D8-2 で既定を behavior 絞りに変えている。
+    // 全件が要る面は proposalType: 'all' を明示的に渡すこと。
     await listRules();
 
     const [sql, args] = mockQuery.mock.calls[0];
-    expect(sql).not.toMatch(/WHERE/);
-    expect(args).toEqual([]);
+    expect(sql).toContain('WHERE proposal_type = $1');
+    expect(args).toEqual(['behavior']);
+  });
+
+  it("proposalType: 'upsell' を渡した面だけが営業提案を受け取る", async () => {
+    await listRules('tenant-abc', { proposalType: 'upsell' });
+    const [, args] = mockQuery.mock.calls[0];
+    expect(args).toEqual(['tenant-abc', 'upsell']);
+  });
+
+  it("proposalType: 'all' なら proposal_type 条件を付けない（両方見たい面のため）", async () => {
+    await listRules('tenant-abc', { proposalType: 'all' });
+    const [sql, args] = mockQuery.mock.calls[0];
+    expect(sql).not.toContain('proposal_type =');
+    expect(args).toEqual(['tenant-abc']);
   });
 });
 

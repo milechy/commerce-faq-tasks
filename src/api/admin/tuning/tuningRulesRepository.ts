@@ -53,6 +53,19 @@ export interface ListRulesFilters {
   /** R6: Judge/Hermes提案を同一一覧に出すため、複数値(配列)を受け付ける */
   source?: string | string[];
   status?: string;
+  /**
+   * D8-2: 提案の種別。
+   *
+   * ★省略時は 'behavior' に絞る(既定で upsell を除外する)★
+   * upsell(営業提案)は FAQ チューニングとは全く別種の行で、
+   * 「トリガー / 提案返答」というラベルで描画されると意味を成さないうえ、
+   * 同じ承認ボタンから承認すると DB CHECK 制約により 23514 で 500 になる。
+   *
+   * 「呼び出し側が毎回 upsell を除外するのを忘れない」という前提は壊れやすいので、
+   * 既定を安全側に倒し、営業提案を見たい面だけが明示的に 'upsell' を指定する。
+   * 全種別を見たい場合のみ 'all' を渡す。
+   */
+  proposalType?: "behavior" | "upsell" | "all";
 }
 
 // ---------------------------------------------------------------------------
@@ -153,6 +166,13 @@ export async function listRules(tenantId?: string, filters?: ListRulesFilters): 
     }
   }
   if (filters?.status) { args.push(filters.status); conditions.push(`status = $${args.length}`); }
+  // D8-2: 既定で upsell を除外する(上の ListRulesFilters のコメント参照)。
+  // 'all' のときだけ条件を付けない。
+  const proposalType = filters?.proposalType ?? "behavior";
+  if (proposalType !== "all") {
+    args.push(proposalType);
+    conditions.push(`proposal_type = $${args.length}`);
+  }
   const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
   if (tenantId) {
