@@ -67,6 +67,9 @@ const wpSettingsPatchSchema = z.object({
 
 type WpSettingsResponseBody = {
   tenant_id: string;
+  plan: string;
+  is_active: boolean;
+  has_published_faq: boolean;
   position: WidgetPosition;
   offset_x: number;
   offset_y: number;
@@ -77,6 +80,9 @@ type WpSettingsResponseBody = {
 
 function buildSettingsResponse(
   tenantId: string,
+  plan: string,
+  isActive: boolean,
+  hasPublishedFaq: boolean,
   widgetTheme: Record<string, unknown> | null,
   allowedOrigins: string[] | null,
   excludedPagePatterns: string[] | null
@@ -90,6 +96,9 @@ function buildSettingsResponse(
 
   return {
     tenant_id: tenantId,
+    plan,
+    is_active: isActive,
+    has_published_faq: hasPublishedFaq,
     position,
     offset_x: offsetX,
     offset_y: offsetY,
@@ -97,6 +106,23 @@ function buildSettingsResponse(
     excluded_page_patterns: excludedPagePatterns ?? [],
     allowed_origins: allowedOrigins ?? [],
   };
+}
+
+// admin/tenants/routes.ts の fetchOnboardingStageStatus と同じ published_count
+// クエリ形状(そちらは非公開関数かつ他の集計と合わせて計算するため直接は使えない)。
+// GET/PATCH 両方のレスポンスがFR-27の「FAQ未登録警告」の判定材料を必要とするため、
+// このファイル内の2箇所から呼べる形にして重複を避ける。
+async function fetchHasPublishedFaq(db: Pool, tenantId: string): Promise<boolean> {
+  try {
+    const result = await db.query<{ published_count: string }>(
+      `SELECT COUNT(*) FILTER (WHERE is_published) AS published_count FROM faq_docs WHERE tenant_id = $1`,
+      [tenantId]
+    );
+    return Number(result.rows[0]?.published_count ?? 0) > 0;
+  } catch (err) {
+    logger.warn({ err }, "[wpSettingsRoutes] fetchHasPublishedFaq failed");
+    return false;
+  }
 }
 
 export function registerWpSettingsRoutes(app: Express, db: Pool | null): void {
@@ -141,11 +167,13 @@ export function registerWpSettingsRoutes(app: Express, db: Pool | null): void {
         if (!tenantId) return;
 
         const result = await (db as Pool).query<{
+          plan: string;
+          is_active: boolean;
           widget_theme: Record<string, unknown> | null;
           allowed_origins: string[] | null;
           excluded_page_patterns: string[] | null;
         }>(
-          `SELECT widget_theme, allowed_origins, excluded_page_patterns FROM tenants WHERE id = $1`,
+          `SELECT plan, is_active, widget_theme, allowed_origins, excluded_page_patterns FROM tenants WHERE id = $1`,
           [tenantId]
         );
         if (result.rowCount === 0) {
@@ -153,8 +181,17 @@ export function registerWpSettingsRoutes(app: Express, db: Pool | null): void {
           return;
         }
         const row = result.rows[0]!;
+        const hasPublishedFaq = await fetchHasPublishedFaq(db as Pool, tenantId);
         res.status(200).json(
-          buildSettingsResponse(tenantId, row.widget_theme, row.allowed_origins, row.excluded_page_patterns)
+          buildSettingsResponse(
+            tenantId,
+            row.plan,
+            row.is_active,
+            hasPublishedFaq,
+            row.widget_theme,
+            row.allowed_origins,
+            row.excluded_page_patterns
+          )
         );
       } catch (err) {
         logger.warn({ err }, "[GET /v1/public/wp/settings]");
@@ -229,12 +266,14 @@ export function registerWpSettingsRoutes(app: Express, db: Pool | null): void {
         params.push(tenantId);
 
         const result = await (db as Pool).query<{
+          plan: string;
+          is_active: boolean;
           widget_theme: Record<string, unknown> | null;
           allowed_origins: string[] | null;
           excluded_page_patterns: string[] | null;
         }>(
           `UPDATE tenants SET ${setClauses.join(", ")} WHERE id = $${params.length}
-           RETURNING widget_theme, allowed_origins, excluded_page_patterns`,
+           RETURNING plan, is_active, widget_theme, allowed_origins, excluded_page_patterns`,
           params
         );
         if (result.rowCount === 0) {
@@ -249,10 +288,20 @@ export function registerWpSettingsRoutes(app: Express, db: Pool | null): void {
           updateTenantAllowedOrigins(tenantId, fields.allowed_origins);
         }
 
+        const hasPublishedFaq = await fetchHasPublishedFaq(db as Pool, tenantId);
+
         // FR-24: 保存できたように見せて実際は保存されていない、を作らない——
         // 更新後の全体設定をその場で返し、WP側がこれをそのまま画面に反映できるようにする。
         res.status(200).json(
-          buildSettingsResponse(tenantId, row.widget_theme, row.allowed_origins, row.excluded_page_patterns)
+          buildSettingsResponse(
+            tenantId,
+            row.plan,
+            row.is_active,
+            hasPublishedFaq,
+            row.widget_theme,
+            row.allowed_origins,
+            row.excluded_page_patterns
+          )
         );
       } catch (err) {
         logger.warn({ err }, "[PATCH /v1/public/wp/settings]");
