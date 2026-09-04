@@ -304,6 +304,7 @@ import { upsertToEsAsync as mockUpsertToEsAsync } from '../knowledge/faqCrudRout
 // TTL/上限とは独立にテスト間の状態リークを防ぐためのリセット関数として使う。
 import {
   getStagedFaqImport,
+  setStagedFaqImport,
   __resetKnowledgeImportStagingForTest,
   __resetPlanLimitNoticesForTest,
 } from './knowledgeImportStaging';
@@ -5251,6 +5252,28 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.body.actions[0].result).toContain('50文字以上');
     });
 
+    // urls側には既に同種のテスト(全URL失敗→0件)があるが、textのgenerateTextFaqPreviewが
+    // 空配列を返すケースは未検証だった。0件のままステージングされて、後続のcommit系が
+    // 「0件を登録しました」のような空振り成功を装わないことをここで固定する。
+    it('suggest_faq_import_from_text: FAQが1件も生成できない場合はステージングせずエラー文言を返す', async () => {
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-fi-2z', 'suggest_faq_import_from_text', { text: '十分な長さの商品説明文です。'.repeat(5) }))
+        .mockResolvedValueOnce(makeGroqResponse('もう少し詳しく教えてください。'));
+
+      mockGenerateTextFaqPreview.mockResolvedValueOnce([]);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'このテキストからFAQを作って', sessionId: 'sess-fi-02z' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].result).toContain('FAQを生成できませんでした');
+      expect(res.body.actions[0].card).toBeUndefined();
+      // 0件のステージングエントリが残っていないこと(残っていると次のcommitが
+      // 「0件登録しました」という空振り成功を返しかねない)。
+      expect(getStagedFaqImport('tenant-abc', 'sess-fi-02z')).toBeNull();
+    });
+
     it('suggest_faq_import_from_urls: 複数URLのプレビューを合算してステージングする', async () => {
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('call-fi-4', 'suggest_faq_import_from_urls', { urls: ['https://example.com/p/1', 'https://example.com/p/2'] }))
@@ -5641,6 +5664,267 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.status).toBe(200);
       expect(mockGenerateTextFaqPreview).not.toHaveBeenCalled();
       expect(res.body.actions[0].result).toContain('テナントが特定できません');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // GID 1218166714484055: POST /v1/admin/agent/faq-import/commit-selected
+  // faq_import_previewカードのチェックボックスから直接叩く件単位登録エンドポイント。
+  // commit_faq_import(自然文経由)と同じステージング/コミット関数を共有するが、
+  // 自然文を介さずindexで確定的に選択する経路のため、選択ロジック固有の
+  // 境界値(空選択・範囲外・重複index)と越境ガードの配線をここで個別に検証する。
+  // -------------------------------------------------------------------------
+  describe('POST /v1/admin/agent/faq-import/commit-selected', () => {
+    const selFaq1 = { question: '送料はいくらですか？', answer: '550円です。', category: 'store_info', duplicate: null };
+    const selFaq2 = { question: '送料無料の条件は？', answer: '5000円以上です。', category: 'store_info', duplicate: null };
+    const selFaq3 = { question: '営業時間は？', answer: '10-18時です。', category: 'store_info', duplicate: null };
+
+    function stageText(tenantId: string, sessionId: string, faqs = [selFaq1, selFaq2, selFaq3]) {
+      setStagedFaqImport(tenantId, sessionId, {
+        kind: 'text',
+        tenantId,
+        faqs,
+        categoryOverride: null,
+        truncated: false,
+        createdAt: Date.now(),
+      });
+    }
+
+    it('選択したindexのFAQのみをコミットし、ステージングをクリアする(全件フォールバックしない)', async () => {
+      stageText('tenant-abc', 'sess-cs-01');
+      mockCommitTextFaqs.mockResolvedValueOnce({ inserted: 1, skipped: 0, insertedIds: [50] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/faq-import/commit-selected')
+        .send({ sessionId: 'sess-cs-01', selectedIndices: [0] });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ ok: true, inserted: 1, skipped: 0 });
+      // index=1,2(selFaq2/selFaq3)は選択されていないため含まれない(全件へのフォールバックなし)
+      expect(mockCommitTextFaqs).toHaveBeenCalledWith(
+        expect.anything(),
+        'tenant-abc',
+        [selFaq1],
+        undefined,
+        'admin_agent_text_import',
+      );
+      expect(getStagedFaqImport('tenant-abc', 'sess-cs-01')).toBeNull();
+    });
+
+    // 「選択0件で登録」は最も危険な誤動作(=全件登録にフォールバックする)の可能性がある分岐。
+    // 空配列でも commitTextFaqs には空配列がそのまま渡ることを固定する。
+    it('selectedIndicesが空配列なら何も選択されず、0件で成功する(全件フォールバックしない)', async () => {
+      stageText('tenant-abc', 'sess-cs-02');
+      mockCommitTextFaqs.mockResolvedValueOnce({ inserted: 0, skipped: 0, insertedIds: [] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/faq-import/commit-selected')
+        .send({ sessionId: 'sess-cs-02', selectedIndices: [] });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ ok: true, inserted: 0, skipped: 0 });
+      expect(mockCommitTextFaqs).toHaveBeenCalledWith(
+        expect.anything(),
+        'tenant-abc',
+        [], // 全件(3件)にフォールバックしていないことが本テストの核心
+        undefined,
+        'admin_agent_text_import',
+      );
+      // 0件でも「登録した」ことになっているため、ステージングは通常どおりクリアされる
+      expect(getStagedFaqImport('tenant-abc', 'sess-cs-02')).toBeNull();
+    });
+
+    it('範囲外のindexは無視され、有効なindexだけが対象になる(クラッシュしない)', async () => {
+      stageText('tenant-abc', 'sess-cs-03');
+      mockCommitTextFaqs.mockResolvedValueOnce({ inserted: 1, skipped: 0, insertedIds: [51] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/faq-import/commit-selected')
+        .send({ sessionId: 'sess-cs-03', selectedIndices: [1, 999] });
+
+      expect(res.status).toBe(200);
+      expect(mockCommitTextFaqs).toHaveBeenCalledWith(
+        expect.anything(),
+        'tenant-abc',
+        [selFaq2], // index=999はstaged.faqs(3件)の範囲外なので無視される
+        undefined,
+        'admin_agent_text_import',
+      );
+    });
+
+    it('同じindexを複数回指定しても、そのFAQは1回だけコミット対象になる(二重登録しない)', async () => {
+      stageText('tenant-abc', 'sess-cs-04');
+      mockCommitTextFaqs.mockResolvedValueOnce({ inserted: 1, skipped: 0, insertedIds: [52] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/faq-import/commit-selected')
+        .send({ sessionId: 'sess-cs-04', selectedIndices: [0, 0, 0] });
+
+      expect(res.status).toBe(200);
+      expect(mockCommitTextFaqs).toHaveBeenCalledWith(
+        expect.anything(),
+        'tenant-abc',
+        [selFaq1],
+        undefined,
+        'admin_agent_text_import',
+      );
+    });
+
+    it('負のindexはスキーマ検証で400拒否され、コミットは実行されない', async () => {
+      stageText('tenant-abc', 'sess-cs-05');
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/faq-import/commit-selected')
+        .send({ sessionId: 'sess-cs-05', selectedIndices: [-1] });
+
+      expect(res.status).toBe(400);
+      expect(mockCommitTextFaqs).not.toHaveBeenCalled();
+      // 400で弾かれた場合はステージングも消費されない(やり直しが効く)
+      expect(getStagedFaqImport('tenant-abc', 'sess-cs-05')).not.toBeNull();
+    });
+
+    it('整数でないindex(小数)はスキーマ検証で400拒否される', async () => {
+      stageText('tenant-abc', 'sess-cs-06');
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/faq-import/commit-selected')
+        .send({ sessionId: 'sess-cs-06', selectedIndices: [1.5] });
+
+      expect(res.status).toBe(400);
+      expect(mockCommitTextFaqs).not.toHaveBeenCalled();
+    });
+
+    // 二度押し(ダブルクリック)race: 1回目でステージングがclearされるため、
+    // 2回目は「プレビューがありません」と同じ404になり、再コミットもクラッシュもしない。
+    it('同じステージングへの2回連続呼び出し: 1回目は成功しclear、2回目はプレビュー無し扱いになる(二重登録防止)', async () => {
+      stageText('tenant-abc', 'sess-cs-07');
+      mockCommitTextFaqs.mockResolvedValueOnce({ inserted: 3, skipped: 0, insertedIds: [60, 61, 62] });
+
+      const res1 = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/faq-import/commit-selected')
+        .send({ sessionId: 'sess-cs-07', selectedIndices: [0, 1, 2] });
+      expect(res1.status).toBe(200);
+      expect(res1.body.inserted).toBe(3);
+
+      const res2 = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/faq-import/commit-selected')
+        .send({ sessionId: 'sess-cs-07', selectedIndices: [0, 1, 2] });
+
+      expect(res2.status).toBe(404);
+      expect(res2.body.error).toContain('プレビューがありません');
+      // 2回目はcommitTextFaqsが再度呼ばれていない(1回目の1コールのみ)
+      expect(mockCommitTextFaqs).toHaveBeenCalledTimes(1);
+    });
+
+    it('client_adminが他テナントIDをtargetTenantIdに指定すると拒否される(越境書き込み防止)', async () => {
+      stageText('tenant-abc', 'sess-cs-08');
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/faq-import/commit-selected')
+        .send({ sessionId: 'sess-cs-08', selectedIndices: [0], targetTenantId: 'tenant-other' });
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toContain('他のテナントには登録できません');
+      expect(mockCommitTextFaqs).not.toHaveBeenCalled();
+      // 拒否された場合、自テナント分のステージングは温存される(再試行できる)
+      expect(getStagedFaqImport('tenant-abc', 'sess-cs-08')).not.toBeNull();
+    });
+
+    it('client_adminがtargetTenantId=globalを指定すると拒否される(Super Admin限定)', async () => {
+      stageText('tenant-abc', 'sess-cs-09');
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/faq-import/commit-selected')
+        .send({ sessionId: 'sess-cs-09', selectedIndices: [0], targetTenantId: 'global' });
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toContain('Super Adminのみ登録可能');
+      expect(mockCommitTextFaqs).not.toHaveBeenCalled();
+    });
+
+    it('super_adminはtargetTenantIdで他テナントのステージングを操作・登録できる(越境ガードはclient_admin限定)', async () => {
+      stageText('tenant-other', 'sess-cs-10');
+      mockCommitTextFaqs.mockResolvedValueOnce({ inserted: 1, skipped: 0, insertedIds: [70] });
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/faq-import/commit-selected')
+        .send({ sessionId: 'sess-cs-10', selectedIndices: [0], targetTenantId: 'tenant-other' });
+
+      expect(res.status).toBe(200);
+      expect(mockCommitTextFaqs).toHaveBeenCalledWith(
+        expect.anything(),
+        'tenant-other',
+        [selFaq1],
+        undefined,
+        'admin_agent_text_import',
+      );
+    });
+
+    it('super_adminでもtargetTenantId未指定の他テナントのステージングは読めない(テナント越境しない)', async () => {
+      // tenant-otherにステージングがある一方、super_adminがtargetTenantIdを指定しない場合、
+      // effectiveTenantId は tenantId('' = 空文字)になり別キーになるため見つからない。
+      stageText('tenant-other', 'sess-cs-11');
+
+      const res = await request(makeApp(SUPER_ADMIN_USER))
+        .post('/v1/admin/agent/faq-import/commit-selected')
+        .send({ sessionId: 'sess-cs-11', selectedIndices: [0] });
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toContain('テナント情報が取得できません');
+      expect(mockCommitTextFaqs).not.toHaveBeenCalled();
+    });
+
+    it('super_admin/client_admin以外のroleは403で拒否される', async () => {
+      stageText('tenant-abc', 'sess-cs-12');
+      const VIEWER_USER = { app_metadata: { role: 'viewer', tenant_id: 'tenant-abc' } };
+
+      const res = await request(makeApp(VIEWER_USER))
+        .post('/v1/admin/agent/faq-import/commit-selected')
+        .send({ sessionId: 'sess-cs-12', selectedIndices: [0] });
+
+      expect(res.status).toBe(403);
+      expect(mockCommitTextFaqs).not.toHaveBeenCalled();
+    });
+
+    it('プレビュー無し(未生成・失効済み)の状態でcommit-selectedを呼ぶと404で明確なエラーになる', async () => {
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/faq-import/commit-selected')
+        .send({ sessionId: 'sess-cs-13-no-such-session', selectedIndices: [0] });
+
+      expect(res.status).toBe(404);
+      expect(res.body.error).toContain('プレビューがありません');
+    });
+
+    it('scrape由来のステージングでも選択indexはflat順で解決され、対応するURLグループのみコミットされる', async () => {
+      setStagedFaqImport('tenant-abc', 'sess-cs-14', {
+        kind: 'scrape',
+        tenantId: 'tenant-abc',
+        items: [
+          { url: 'https://example.com/p/1', faqs: [selFaq1, selFaq2] },
+          { url: 'https://example.com/p/2', faqs: [selFaq3] },
+        ],
+        categoryOverride: null,
+        truncated: false,
+        createdAt: Date.now(),
+      });
+      mockCommitScrapeFaqs.mockResolvedValueOnce({ inserted: 2, skipped: 0, insertedIds: [80, 81] });
+
+      // flat index: 0=selFaq1(p/1), 1=selFaq2(p/1), 2=selFaq3(p/2)。p/1のselFaq1とp/2のselFaq3を選ぶ。
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/faq-import/commit-selected')
+        .send({ sessionId: 'sess-cs-14', selectedIndices: [0, 2] });
+
+      expect(res.status).toBe(200);
+      expect(mockCommitScrapeFaqs).toHaveBeenCalledWith(
+        expect.anything(),
+        'tenant-abc',
+        [
+          { url: 'https://example.com/p/1', faqs: [selFaq1] },
+          { url: 'https://example.com/p/2', faqs: [selFaq3] },
+        ],
+        undefined,
+        'admin_agent_scrape_import',
+      );
     });
   });
 

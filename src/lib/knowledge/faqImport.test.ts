@@ -383,6 +383,34 @@ describe('commitTextFaqs', () => {
 
     expect(mockUpsertFaqToEs).not.toHaveBeenCalled();
   });
+
+  // GID 1218166714484055 リスク文書化: commit-selectedのチェックボックスUIは
+  // duplicate=trueの項目を初期状態で未選択にするだけで、店主が明示的にチェックを
+  // 入れ直して選択した場合はそのままリクエストに含まれる(選択UI自体はduplicate情報を
+  // 再フィルタしない)。しかし commitTextFaqs は FaqEntry しか受け取らず(duplicateフィールドは
+  // 型上も存在しない)、常にコミット時点のDBへ再クエリして重複判定をやり直す。つまり
+  // 店主が「重複でも構わないので登録する」と明示的に選んでも、コミット時点でまだ類似FAQが
+  // 存在していれば無条件でスキップされる — 選択の意思がサーバー側の重複ガードに勝てない、
+  // という店主にとって意外な挙動を固定する(是正の要否は起票者の判断に委ねる)。
+  it('店主が重複候補を明示的に選択して送っても、コミット時点でまだ類似FAQが存在すれば無条件でスキップされる', async () => {
+    const queryMock = jest.fn().mockResolvedValueOnce({ rows: [{ question: '営業時間を教えてください' }] });
+    const db = makeMockPool(queryMock);
+
+    // duplicateフラグ付き(=UI上でユーザーが再チェックして選んだことを想定)のFAQ案。
+    // commitTextFaqsの型はFaqEntry[]でduplicateを要求しないが、実際の呼び出し元
+    // (selectFromStagedFaqImportの戻り値)はFaqEntryWithDuplicate[]をそのまま渡すため、
+    // 実運用と同じ形の入力で検証する。
+    const selectedButDuplicate = {
+      question: '営業時間は',
+      answer: '9-18時です',
+      duplicate: { existingQuestion: '営業時間を教えてください', existingAnswer: '10-18時です' },
+    };
+
+    const result = await commitTextFaqs(db, 't1', [selectedButDuplicate], undefined, 'text');
+
+    expect(result).toEqual({ inserted: 0, skipped: 1, insertedIds: [] });
+    expect(mockUpsertFaqToEs).not.toHaveBeenCalled();
+  });
 });
 
 describe('commitScrapeFaqs', () => {
