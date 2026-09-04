@@ -109,6 +109,10 @@ interface WpProvisioningStats {
   current_month_free_ad_cost_jpy: number;
   cost_alert_threshold_jpy: number;
   cost_alert_triggered: boolean;
+  // team-lead指摘(2026-09-05): fetchTenantEconomicsの50件上限で集計対象が
+  // 切り捨てられたか。trueのときcurrent_month_free_ad_cost_jpyは実際より
+  // 少なく出うるため、数値をそのまま出さず注意書きに差し替える(禁止50と同じ精神)。
+  cost_data_truncated: boolean;
 }
 
 interface MonitoringKpis {
@@ -408,7 +412,8 @@ export default function MonitoringPage() {
         typeof json.today_new_provision_cap === "number" &&
         typeof json.current_month_free_ad_cost_jpy === "number" &&
         typeof json.cost_alert_threshold_jpy === "number" &&
-        typeof json.cost_alert_triggered === "boolean"
+        typeof json.cost_alert_triggered === "boolean" &&
+        typeof json.cost_data_truncated === "boolean"
       ) {
         setWpStats(json as WpProvisioningStats);
       } else {
@@ -994,16 +999,28 @@ export default function MonitoringPage() {
                     </div>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
                       <span style={{ fontSize: 13, color: "var(--muted-foreground)" }}>当月のfree_ad原価</span>
-                      <span
-                        style={{
-                          fontSize: 20, fontWeight: 700, fontVariantNumeric: "tabular-nums",
-                          color: wpStats.cost_alert_triggered ? "#f87171" : "var(--foreground)",
-                        }}
-                      >
-                        ¥{wpStats.current_month_free_ad_cost_jpy.toLocaleString("ja-JP")}
-                      </span>
+                      {/* team-lead指摘(2026-09-05): cost_data_truncated=trueのとき、
+                          集計対象が50件上限で切り捨てられ実際より少ない値になりうる。
+                          正確でない数値を正常な数値であるかのように出さない(禁止50と同じ精神)。 */}
+                      {wpStats.cost_data_truncated ? (
+                        <span style={{ fontSize: 15, fontWeight: 700, color: "#fbbf24" }}>集計不能</span>
+                      ) : (
+                        <span
+                          style={{
+                            fontSize: 20, fontWeight: 700, fontVariantNumeric: "tabular-nums",
+                            color: wpStats.cost_alert_triggered ? "#f87171" : "var(--foreground)",
+                          }}
+                        >
+                          ¥{wpStats.current_month_free_ad_cost_jpy.toLocaleString("ja-JP")}
+                        </span>
+                      )}
                     </div>
-                    {wpStats.cost_alert_triggered ? (
+                    {wpStats.cost_data_truncated ? (
+                      <p style={{ margin: "2px 0 0", fontSize: 12, color: "#fbbf24", fontWeight: 700, lineHeight: 1.6 }}>
+                        テナント数が多く、正確な原価集計ができていません(集計上限50件を超過)。
+                        アラート判定(閾値到達の有無)も信頼できないため、別途確認してください。
+                      </p>
+                    ) : wpStats.cost_alert_triggered ? (
                       <p style={{ margin: "2px 0 0", fontSize: 12, color: "#f87171", fontWeight: 700, lineHeight: 1.6 }}>
                         当月原価がアラート閾値(¥{wpStats.cost_alert_threshold_jpy.toLocaleString("ja-JP")})に到達しています。
                       </p>

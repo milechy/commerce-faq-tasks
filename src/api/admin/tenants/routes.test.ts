@@ -2341,6 +2341,7 @@ describe("GET /v1/admin/tenants/wp-provisioning-stats", () => {
         { plan: "free_ad", cost_base_jpy: 300 },
         { plan: "standard", cost_base_jpy: 99999 },
       ],
+      truncated: false,
     });
 
     const res = await request(makeApp({ query: dbQuery }, "super_admin"))
@@ -2356,6 +2357,7 @@ describe("GET /v1/admin/tenants/wp-provisioning-stats", () => {
       current_month_free_ad_cost_jpy: 800,
       cost_alert_threshold_jpy: 20000,
       cost_alert_triggered: false,
+      cost_data_truncated: false,
     });
   });
 
@@ -2364,7 +2366,7 @@ describe("GET /v1/admin/tenants/wp-provisioning-stats", () => {
       .fn()
       .mockResolvedValueOnce({ rows: [{ count: 0 }], rowCount: 1 })
       .mockResolvedValueOnce({ rows: [{ count: 0 }], rowCount: 1 });
-    mockFetchTenantEconomics.mockResolvedValue({ tenants: [] });
+    mockFetchTenantEconomics.mockResolvedValue({ tenants: [], truncated: false });
 
     const res = await request(makeApp({ query: dbQuery }, "super_admin"))
       .get("/v1/admin/tenants/wp-provisioning-stats")
@@ -2375,6 +2377,7 @@ describe("GET /v1/admin/tenants/wp-provisioning-stats", () => {
     expect(res.body.today_new_provisions).toBe(0);
     expect(res.body.current_month_free_ad_cost_jpy).toBe(0);
     expect(res.body.cost_alert_triggered).toBe(false);
+    expect(res.body.cost_data_truncated).toBe(false);
   });
 
   it("当月原価が閾値以上ならcost_alert_triggered=true", async () => {
@@ -2384,6 +2387,7 @@ describe("GET /v1/admin/tenants/wp-provisioning-stats", () => {
       .mockResolvedValueOnce({ rows: [{ count: 10 }], rowCount: 1 });
     mockFetchTenantEconomics.mockResolvedValue({
       tenants: [{ plan: "free_ad", cost_base_jpy: 20000 }],
+      truncated: false,
     });
 
     const res = await request(makeApp({ query: dbQuery }, "super_admin"))
@@ -2392,6 +2396,31 @@ describe("GET /v1/admin/tenants/wp-provisioning-stats", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.cost_alert_triggered).toBe(true);
+  });
+
+  // team-lead指摘(2026-09-05): fetchTenantEconomicsのMAX_TENANTS_PER_ECONOMICS_REQUEST
+  // (=50)上限による切り捨てを読み捨てていた。truncated=trueのとき
+  // current_month_free_ad_cost_jpyは実際より少なく出うるため、その事実自体を
+  // cost_data_truncatedとして開示することを固定する(禁止50と同じ精神)。
+  it("fetchTenantEconomicsがtruncated=trueを返したら、cost_data_truncated=trueで開示する", async () => {
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [{ count: 60 }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [{ count: 5 }], rowCount: 1 });
+    mockFetchTenantEconomics.mockResolvedValue({
+      tenants: [{ plan: "free_ad", cost_base_jpy: 1000 }],
+      truncated: true,
+    });
+
+    const res = await request(makeApp({ query: dbQuery }, "super_admin"))
+      .get("/v1/admin/tenants/wp-provisioning-stats")
+      .set("Authorization", "Bearer dummy");
+
+    expect(res.status).toBe(200);
+    expect(res.body.cost_data_truncated).toBe(true);
+    // 切り捨てが起きていても、集計できた範囲の生の数値自体は隠さず返す
+    // (「不正確になりうる」ことの開示はadmin-ui側の表示判断に委ねる)。
+    expect(res.body.current_month_free_ad_cost_jpy).toBe(1000);
   });
 
   it("client_adminだと403で、db.query・fetchTenantEconomicsとも呼ばれない", async () => {

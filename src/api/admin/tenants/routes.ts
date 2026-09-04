@@ -863,6 +863,13 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
           current_month_free_ad_cost_jpy: currentMonthFreeAdCostJpy,
           cost_alert_threshold_jpy: FREE_AD_COST_ALERT_JPY,
           cost_alert_triggered: isFreeAdCostAlertTriggered(currentMonthFreeAdCostJpy),
+          // ★fetchTenantEconomicsのMAX_TENANTS_PER_ECONOMICS_REQUEST(=50)上限に
+          // よる切り捨てが起きたかを開示する★ trueのときcurrent_month_free_ad_cost_jpyは
+          // 実際より少ない値になりうる(=cost_alert_triggeredがfalseでも実際は閾値超過の
+          // 可能性がある)。禁止50と同じ精神で、不正確になりうる数値を正常であるかの
+          // ように見せない — admin-ui側は truncated=true のとき原価をそのまま出さず
+          // 注意書きに差し替える。
+          cost_data_truncated: economics.truncated,
         });
       } catch (err) {
         logger.warn("[GET /v1/admin/tenants/wp-provisioning-stats]", err);

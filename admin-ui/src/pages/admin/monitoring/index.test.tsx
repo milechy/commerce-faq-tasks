@@ -749,6 +749,7 @@ describe("MonitoringPage — WordPress経由テナントの総量ガード", () 
           current_month_free_ad_cost_jpy: 0,
           cost_alert_threshold_jpy: 20000,
           cost_alert_triggered: false,
+          cost_data_truncated: false,
         });
       }
       return mockOk({});
@@ -777,6 +778,7 @@ describe("MonitoringPage — WordPress経由テナントの総量ガード", () 
           current_month_free_ad_cost_jpy: 1500,
           cost_alert_threshold_jpy: 20000,
           cost_alert_triggered: false,
+          cost_data_truncated: false,
         });
       }
       return mockOk({});
@@ -804,6 +806,7 @@ describe("MonitoringPage — WordPress経由テナントの総量ガード", () 
           current_month_free_ad_cost_jpy: 25000,
           cost_alert_threshold_jpy: 20000,
           cost_alert_triggered: true,
+          cost_data_truncated: false,
         });
       }
       return mockOk({});
@@ -814,6 +817,38 @@ describe("MonitoringPage — WordPress経由テナントの総量ガード", () 
     await waitFor(() => {
       expect(screen.getByText(/当月原価がアラート閾値/)).toBeTruthy();
     });
+  });
+
+  // team-lead指摘(2026-09-05): fetchTenantEconomicsの50件上限による切り捨てが
+  // 起きていても現在の実装は読み捨てていた。cost_data_truncated=trueのとき、
+  // 原価の数値をそのまま出さず(=正確でない値を正常であるかのように見せない)、
+  // 注意書きに差し替えることを固定する。
+  it("cost_data_truncated=trueのとき、原価の数値ではなく注意書きを表示する(禁止50と同じ精神)", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
+      if (url.includes("/measurement-health")) return mockOk(BASE_HEALTH);
+      if (url.includes("/wp-provisioning-stats")) {
+        return mockOk({
+          active_free_ad_tenants: 60,
+          active_free_ad_tenant_cap: 100,
+          today_new_provisions: 8,
+          today_new_provision_cap: 30,
+          current_month_free_ad_cost_jpy: 1200,
+          cost_alert_threshold_jpy: 20000,
+          cost_alert_triggered: false,
+          cost_data_truncated: true,
+        });
+      }
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText(/正確な原価集計ができていません/)).toBeTruthy();
+    });
+    // 切り捨てられた(=実際より少ない可能性がある)生の金額をそのまま出さない
+    expect(screen.queryByText("¥1,200")).toBeNull();
   });
 
   it("client_admin(APIが403を返す)のときカード自体を出さない", async () => {
