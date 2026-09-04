@@ -24,6 +24,7 @@
 
 import { getPool } from "./db";
 import { logger } from "./logger";
+import { createTtlCache } from "./ttlCache";
 
 export interface LearningConsent {
   learn: boolean;
@@ -188,12 +189,7 @@ export async function listHermesConsentingTenantIds(): Promise<string[]> {
 
 const SHARE_CACHE_TTL_MS = 60 * 1000; // 60 seconds (getTenantPlanと同じ方針)
 
-interface ShareCacheEntry {
-  share: boolean;
-  expiresAt: number;
-}
-
-export const shareConsentCache: Map<string, ShareCacheEntry> = new Map();
+export const shareConsentCache = createTtlCache<string, boolean>(SHARE_CACHE_TTL_MS);
 
 /**
  * resolveLearningConsent(tenantId).share の結果をTTLキャッシュ付きで返す。
@@ -202,12 +198,11 @@ export const shareConsentCache: Map<string, ShareCacheEntry> = new Map();
  */
 export async function getCachedShareConsent(tenantId: string): Promise<boolean> {
   const cached = shareConsentCache.get(tenantId);
-  const now = Date.now();
-  if (cached && cached.expiresAt > now) {
-    return cached.share;
+  if (cached !== undefined) {
+    return cached;
   }
 
   const { share } = await resolveLearningConsent(tenantId);
-  shareConsentCache.set(tenantId, { share, expiresAt: now + SHARE_CACHE_TTL_MS });
+  shareConsentCache.set(tenantId, share);
   return share;
 }
