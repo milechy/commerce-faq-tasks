@@ -25,7 +25,7 @@ import { Pool } from "pg";
 import { computeExpectedBilling } from "./stripeSync";
 import { findMissingColumns, REQUIRED_COLUMNS } from "../../api/admin/analytics/schemaHealth";
 import { countFreeAdBillableConversations, countFreeAdBillableRequests } from "../../api/chat/route";
-import { countFreeAdAdminConsults } from "../../api/admin/agent/agentRoutes";
+import { countFreeAdAdminConsults, reserveAdminConsultSlotIfWithinLimit } from "../../api/admin/agent/agentRoutes";
 import { initUsageTracker, trackUsage } from "./usageTracker";
 import { calculateBaseCostCents, calculateBillingAmountCents } from "./costCalculator";
 import { MARGIN_MULTIPLIER } from "./costCalculator";
@@ -1297,6 +1297,52 @@ d("countFreeAdAdminConsults（実 Postgres に対する管理AI月次上限の�
     );
     expect(count).toBe(0);
     expect(countedToday).toBe(false);
+  });
+
+  // ★本命: check-then-act の隙間が実際に塞がっていることの証明★
+  //
+  // 単純に「SELECTしてから決める」実装だと、上限(30件)ぎりぎりで多数の
+  // リクエストが同時に届いた場合、全員が同じ「まだ29件」を読んで素通りし、
+  // 実際の合計が30を大きく超えてしまう(連打・複数タブでの同時送信が典型)。
+  // reserveAdminConsultSlotIfWithinLimit はテナント単位の pg_advisory_lock で
+  // 「数える→予約行を書く」を直列化しているため、Promise.all で本当に同時に
+  // 35件送っても、通過するのはちょうど30件になるはず。
+  //
+  // real Postgres でしか意味を持たない検証(モックDBは呼び出しを並行実行しても
+  // 実際には直列にキューされるだけで、ロックの意味が無い)。
+  it("★35件を本当に同時実行しても、通過するのはちょうど30件(上限超過が起きない)★", async () => {
+    const now = new Date("2026-03-05T02:00:00Z"); // 全リクエスト同一のJST暦日
+    const results = await Promise.all(
+      Array.from({ length: 35 }, (_, i) =>
+        reserveAdminConsultSlotIfWithinLimit(db, "t1", `race-session-${i}`, now)
+      )
+    );
+
+    const allowed = results.filter((r) => !r.blocked).length;
+    const blocked = results.filter((r) => r.blocked).length;
+    expect(allowed).toBe(30);
+    expect(blocked).toBe(5);
+
+    // 予約行(billable=true, cost=0)を含めて実際にDBへ書かれた件数も30件ちょうど
+    // であることを確認する(「判定は30件と返したが実は31件書き込まれていた」という
+    // ロック漏れを、判定結果だけでなく実データでも検知する)。
+    const { count: actualCount } = await countFreeAdAdminConsults(db, "t1", "race-session-none", now);
+    expect(actualCount).toBe(30);
+  });
+
+  it("同一session_idへの同時複数リクエストは、予約行が1件に収束し重複しない(2重クリック・複数タブ)", async () => {
+    const now = new Date("2026-03-05T02:00:00Z");
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () =>
+        reserveAdminConsultSlotIfWithinLimit(db, "t1", "double-click-session", now)
+      )
+    );
+    // 同一(session, 今日)は「今日まだ相談していないか」の判定こそ各回で走るが、
+    // 予約行自体は request_id が決定的(session×JST暦日)なので ON CONFLICT で1行に収束する。
+    expect(results.every((r) => !r.blocked)).toBe(true);
+
+    const { count } = await countFreeAdAdminConsults(db, "t1", "none", now);
+    expect(count).toBe(1); // 5回同時に叩いても1相談として数えられる
   });
 });
 

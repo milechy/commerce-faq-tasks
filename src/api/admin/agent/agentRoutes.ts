@@ -915,22 +915,32 @@ const ADMIN_AGENT_FREE_AD_LIMIT_MESSAGE =
  * 境界比較には AT TIME ZONE を使わない）。AT TIME ZONE は JST 暦日を取り出す
  * （グルーピング用の日付キーを作る）ためだけに使う。
  */
+/** shiftToJstWallClock(now) から 'YYYY-MM-DD'(JST暦日)の文字列を作る。 */
+function todayJstDateString(now: Date): string {
+  const shifted = shiftToJstWallClock(now);
+  return (
+    `${shifted.getUTCFullYear()}-` +
+    `${String(shifted.getUTCMonth() + 1).padStart(2, '0')}-` +
+    `${String(shifted.getUTCDate()).padStart(2, '0')}`
+  );
+}
+
 // export: billingSqlIntegration.test.ts が実 Postgres に対してこの関数を直接呼び、
 // JS側(shiftToJstWallClock)とSQL側(AT TIME ZONE 'Asia/Tokyo')のJST日付計算が
 // 実際に一致することを検証する(src/api/chat/route.ts の
 // countFreeAdBillableConversations と同じ理由・同じ作法)。
+//
+// db は Pool でも PoolClient(トランザクション/ロック中の専用接続)でも渡せるよう
+// query() だけを要求する形にしている(reserveAdminConsultSlotIfWithinLimit が
+// ロック保持中のclientを直接渡すため)。
 export async function countFreeAdAdminConsults(
-  db: Pool,
+  db: Pick<Pool, 'query'>,
   tenantId: string,
   sessionId: string,
   now: Date,
 ): Promise<{ count: number; countedToday: boolean }> {
   const { monthStart, monthEnd } = getMonthRangeJst(now);
-  const shifted = shiftToJstWallClock(now);
-  const todayJst =
-    `${shifted.getUTCFullYear()}-` +
-    `${String(shifted.getUTCMonth() + 1).padStart(2, '0')}-` +
-    `${String(shifted.getUTCDate()).padStart(2, '0')}`;
+  const todayJst = todayJstDateString(now);
 
   const result = await db.query<{ count: string; counted_today: boolean }>(
     `WITH admin_consults AS (
@@ -956,9 +966,80 @@ export async function countFreeAdAdminConsults(
 }
 
 /**
+ * S7 の月次上限判定を「数える→(呼び出し元が)決める→(いずれ)記録する」の3段に分けたまま
+ * 放置すると、check-then-act の隙間ができる: SELECTしてから実際の trackUsage が
+ * usage_logs に INSERT するまでの間(Groq応答を待つ数秒〜十数秒)、複数の同時リクエストが
+ * 同じ「まだ29件」を読んで全部素通りし、月内の合計が上限をわずかに超える
+ * (連打・複数タブでの同時送信が典型)。
+ *
+ * ★対処: テナント単位の pg_advisory_lock で「数える→予約行を書く」を直列化する★
+ * 予約行は原価0円・billable=true の usage_logs 行で、request_id は
+ * (tenantId, sessionId, JST暦日)から決定的に導出する(admin-agent-slot-*)。
+ * これにより:
+ *   - 同じ session×日への予約は ON CONFLICT (request_id) DO NOTHING で1行に収束する
+ *     (2重クリック・再送でも予約が増えない)。
+ *   - 予約行は (session_id, JST暦日) の DISTINCT で数えるカウント側(admin_units /
+ *     countFreeAdAdminConsults 自身)には1件として反映されるが、後で本物の
+ *     trackUsage が書く実コスト行とは別の request_id なので、実コストの記録
+ *     (ON CONFLICT DO NOTHING で消えること)には一切影響しない。
+ *   - ロックは「数える→予約行を書く」の短い区間だけ保持し、Groq呼び出しの
+ *     数秒〜十数秒は保持しない(その間は解放済みなので、同じテナントの
+ *     無関係な別セッションの応答を無駄に足止めしない)。
+ * pg_advisory_lock はセッション(=このコネクション)単位のロックなので、
+ * lock/unlock は同一クライアントで行う(subscriptionSync.ts の
+ * syncSubscriptionItemsForTenant と同じ作法。プールが別コネクションへ
+ * 振り分けると解放されず全体を巻き込んで詰まるため)。
+ *
+ * fail-open: ロック獲得・カウント・予約行のいずれが失敗しても呼び出し元の
+ * try/catch がまとめて拾い、店主の相談を止めない(既存方針を維持)。
+ */
+// export: billingSqlIntegration.test.ts が実 Postgres に対して同時実行し、
+// テナント単位のロックが check-then-act の隙間を実際に塞ぐことを検証する。
+export async function reserveAdminConsultSlotIfWithinLimit(
+  pool: Pool,
+  tenantId: string,
+  sessionId: string,
+  now: Date,
+): Promise<{ blocked: boolean }> {
+  const client = await pool.connect();
+  try {
+    await client.query('SELECT pg_advisory_lock(hashtext($1))', [`admin_agent_consult:${tenantId}`]);
+    try {
+      const { count, countedToday } = await countFreeAdAdminConsults(client, tenantId, sessionId, now);
+      if (countedToday) return { blocked: false };
+      if (isFreeAdAdminConsultQuotaExceeded(count)) return { blocked: true };
+
+      // ロックを保持したまま、この(session, 今日)分の予約を書く。ここまでがロックの
+      // 目的(次の同時リクエストのカウントに即座に反映させる)。実際のGroq呼び出しは
+      // ロック解放後(呼び出し元)で行う。
+      //
+      // ★created_at は NOW()(DBサーバの実時刻)ではなく引数の now を束縛する★
+      // countFreeAdAdminConsults の月範囲・JST暦日はどちらも引数の now から計算している。
+      // NOW() を使うとDBサーバの実時刻がその月範囲の外にずれた瞬間(例えばテストで過去日を
+      // 指定した場合や、僅かなクロックドリフトがある場合)、この予約行が期間条件
+      // (created_at >= $3 AND created_at < $4)に一致せず、後続の同時リクエストの
+      // カウントに一切反映されない(=ロックの意味が消える)。
+      await client.query(
+        `INSERT INTO usage_logs (tenant_id, request_id, session_id, feature_used, billable, created_at)
+         VALUES ($1, $2, $3, 'admin_agent', true, $4)
+         ON CONFLICT (request_id) DO NOTHING`,
+        [tenantId, `admin-agent-slot-${sessionId}-${todayJstDateString(now)}`, sessionId, now],
+      );
+      return { blocked: false };
+    } finally {
+      await client.query('SELECT pg_advisory_unlock(hashtext($1))', [`admin_agent_consult:${tenantId}`]);
+    }
+  } finally {
+    client.release();
+  }
+}
+
+/**
  * free_ad プランの管理AI月次上限に到達しているか。到達していても、同じ相談
  * (同一 session_id × 今日)が既に計上済みなら継続を許す — 返事の途中で打ち切ると
  * 「途中で切れた」体験になるため（呼び出し元はこの結果に応じてGroqを呼ぶ前に打ち切る）。
+ * 実際の判定・予約は reserveAdminConsultSlotIfWithinLimit(テナント単位のロックで
+ * check-then-act の隙間を塞ぐ)に委ねる。
  *
  * ★プラン解決に queryTenantPlan(db, tenantId) も getTenantPlan(tenantId) も使わない★
  * どちらも「機能ゲート用の fail-safe」（DB例外・plan列null・未知の文字列・テナント不在を
@@ -976,9 +1057,11 @@ export async function countFreeAdAdminConsults(
  * 別チャネルにする。60秒キャッシュ付き getTenantPlan は上記の理由で使わない
  * （この経路は店主の相談＝低トラフィックで、主キー1本のSELECTなのでキャッシュなしを許容する）。
  *
- * fail-open: 集計クエリが失敗した場合も false(止めない)を返す。
- * 計測の失敗で店主の相談を止めない、という既存の fire-and-forget 方針と同じ考え方。
- * free_ad 以外のプランは常に false（既存動作は一切変えない）。
+ * fail-open: プラン解決・ロック獲得・集計・予約行の書き込みのいずれが失敗しても false
+ * (止めない)を返す。計測の失敗で店主の相談を止めない、という既存の fire-and-forget
+ * 方針と同じ考え方。free_ad 以外のプランは常に false（既存動作は一切変えない。
+ * ロックにも一切触れない — advisory lock はテナント単位のため、free_ad以外の
+ * 大多数のリクエストは reserveAdminConsultSlotIfWithinLimit 自体を呼ばない）。
  */
 async function isAdminAgentFreeAdLimitReached(
   db: Pool,
@@ -990,9 +1073,8 @@ async function isAdminAgentFreeAdLimitReached(
     const plan = await queryTenantPlanResult(getPool(), tenantId);
     if (plan !== 'free_ad') return false; // null(判定不能)もここで止めない側に倒れる
 
-    const { count, countedToday } = await countFreeAdAdminConsults(db, tenantId, sessionId, now);
-    if (countedToday) return false;
-    return isFreeAdAdminConsultQuotaExceeded(count);
+    const { blocked } = await reserveAdminConsultSlotIfWithinLimit(db, tenantId, sessionId, now);
+    return blocked;
   } catch (err) {
     logger.warn('[admin-agent] free_ad admin consult quota check failed', err);
     return false;

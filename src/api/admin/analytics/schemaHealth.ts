@@ -100,7 +100,12 @@ export const REQUIRED_COLUMNS: Record<string, readonly string[]> = {
   // cost_base_cents は migration_usage_logs_cost_base.sql で追加（マージン前の実原価）。
   // 未適用のまま配備すると主 INSERT が 42703 になり、旧カラム構成のフォールバックへ落ちる。
   // 記録自体は継続するが原価が一切残らず、粗利は永久に derived（推計）のままになる。
-  usage_logs: ["anam_session_seconds", "avatar_credits", "avatar_session_ms", "billable", "cost_base_cents", "cost_llm_cents", "cost_total_cents", "feature_used", "input_tokens", "model", "output_tokens", "plan", "plan_multiplier", "request_id", "session_id", "tenant_id", "tts_text_bytes"],
+  // created_at は migration.sql（基礎テーブル定義）以来ある列で、単独では未適用リスクを
+  // 持たないが、agentRoutes.ts の管理AI予約行INSERT(reserveAdminConsultSlotIfWithinLimit)が
+  // DEFAULT NOW()に頼らず明示的に束縛する(引数のnowをそのまま使う。DBサーバ時刻ではなく
+  // JS側の月範囲計算と一致させるため)ため、ここで明示的に列挙して
+  // schemaHealth.test.ts の機械的ガード(ソースのINSERT文とレジストリの完全一致)を保つ。
+  usage_logs: ["anam_session_seconds", "avatar_credits", "avatar_session_ms", "billable", "cost_base_cents", "cost_llm_cents", "cost_total_cents", "created_at", "feature_used", "input_tokens", "model", "output_tokens", "plan", "plan_multiplier", "request_id", "session_id", "tenant_id", "tts_text_bytes"],
 };
 
 export interface MissingColumn {

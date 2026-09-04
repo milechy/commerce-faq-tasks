@@ -14694,15 +14694,29 @@ describe('POST /v1/admin/agent/chat', () => {
   // -------------------------------------------------------------------------
   // S7(docs/ADMIN_AGENT_COST_REQUIREMENTS.md): free_ad の管理AI月次上限。
   // プラン解決は mockQueryTenantPlanResult(queryTenantPlanResultのモック。beforeEachの既定は
-  // growth)、当月相談件数の集計はmockQuery(実装どおりcountFreeAdAdminConsultsが叩く、
-  // 注入済みdb)。queryTenantPlan/getTenantPlan(機能ゲート用fail-safe。例外時'free_ad'に
+  // growth)。判定・予約(reserveAdminConsultSlotIfWithinLimit)は db.connect() 経由の
+  // 専用クライアント(mockConnect→{query: clientQuery, release})を叩く。注入済み
+  // db.query(mockQuery)とは別チャネルなので、他のツール呼び出しのmockQueryキューを
+  // 消費しない。queryTenantPlan/getTenantPlan(機能ゲート用fail-safe。例外時'free_ad'に
   // 丸める)ではなく queryTenantPlanResult(判定不能はnull)を使う理由は本体側のコメント参照。
   // -------------------------------------------------------------------------
   describe('free_adの管理AI月次上限', () => {
-    /** getTenantPlanをfree_adにし、countFreeAdAdminConsultsのmockQuery応答を積む */
+    // reserveAdminConsultSlotIfWithinLimit は advisory lock 保持用に db.connect() で
+    // 専用クライアントを取る(注入済み db.query = mockQuery とは別チャネル)。
+    // 呼び出し順は必ず: lock → count → (allowed かつ 新規なら) 予約INSERT → unlock。
+    /** getTenantPlanをfree_adにし、db.connect()経由のロック+カウントクエリ応答を積む */
     function mockFreeAdAndConsultCount(count: number, countedToday: boolean) {
       mockQueryTenantPlanResult.mockResolvedValueOnce('free_ad');
-      mockQuery.mockResolvedValueOnce({ rows: [{ count: String(count), counted_today: countedToday }] });
+      const blocked = !countedToday && count >= 30;
+      const willReserve = !countedToday && !blocked;
+      const clientQuery = jest.fn().mockResolvedValueOnce({ rows: [] }); // pg_advisory_lock
+      clientQuery.mockResolvedValueOnce({ rows: [{ count: String(count), counted_today: countedToday }] }); // count
+      if (willReserve) {
+        clientQuery.mockResolvedValueOnce({ rows: [] }); // 予約INSERT
+      }
+      clientQuery.mockResolvedValueOnce({ rows: [] }); // pg_advisory_unlock
+      mockConnect.mockResolvedValueOnce({ query: clientQuery, release: jest.fn() });
+      return clientQuery;
     }
 
     it('上限未満なら通常どおりGroqが呼ばれる', async () => {
@@ -14765,7 +14779,11 @@ describe('POST /v1/admin/agent/chat', () => {
 
     it('相談件数の取得がDBエラーになっても相談は止まらない(fail-open)', async () => {
       mockQueryTenantPlanResult.mockResolvedValueOnce('free_ad');
-      mockQuery.mockRejectedValueOnce(new Error('DB down'));
+      const release = jest.fn();
+      const clientQuery = jest.fn()
+        .mockResolvedValueOnce({ rows: [] }) // pg_advisory_lock は成功
+        .mockRejectedValueOnce(new Error('DB down')); // 集計クエリが失敗
+      mockConnect.mockResolvedValueOnce({ query: clientQuery, release });
       mockFetch.mockResolvedValueOnce(makeGroqResponse('お答えします。'));
 
       const res = await request(makeApp(CLIENT_ADMIN_USER))
@@ -14775,6 +14793,60 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.status).toBe(200);
       expect(res.body.reply).toBe('お答えします。');
       expect(mockFetch).toHaveBeenCalledTimes(1);
+      // ロック解放前に例外が伝播しても、クライアントは必ずプールへ返却される
+      // (finallyがclient.release()を保証する。コネクションリーク防止)。
+      expect(release).toHaveBeenCalledTimes(1);
+    });
+
+    it('ロック獲得(pg_advisory_lock)自体が失敗しても相談は止まらない(fail-open)', async () => {
+      mockQueryTenantPlanResult.mockResolvedValueOnce('free_ad');
+      const release = jest.fn();
+      const clientQuery = jest.fn().mockRejectedValueOnce(new Error('DB down'));
+      mockConnect.mockResolvedValueOnce({ query: clientQuery, release });
+      mockFetch.mockResolvedValueOnce(makeGroqResponse('お答えします。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '設定を教えて', sessionId: 'sess-freead-05c' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.reply).toBe('お答えします。');
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(release).toHaveBeenCalledTimes(1);
+    });
+
+    it('専用クライアントの取得(pool.connect)自体が失敗しても相談は止まらない(fail-open)', async () => {
+      mockQueryTenantPlanResult.mockResolvedValueOnce('free_ad');
+      mockConnect.mockRejectedValueOnce(new Error('pool exhausted'));
+      mockFetch.mockResolvedValueOnce(makeGroqResponse('お答えします。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '設定を教えて', sessionId: 'sess-freead-05d' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.reply).toBe('お答えします。');
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('予約行の書き込みが失敗しても相談は止まらず、クライアントは解放される(fail-open)', async () => {
+      mockQueryTenantPlanResult.mockResolvedValueOnce('free_ad');
+      const release = jest.fn();
+      const clientQuery = jest.fn()
+        .mockResolvedValueOnce({ rows: [] }) // pg_advisory_lock
+        .mockResolvedValueOnce({ rows: [{ count: '5', counted_today: false }] }) // count
+        .mockRejectedValueOnce(new Error('DB down')); // 予約INSERTが失敗
+      mockConnect.mockResolvedValueOnce({ query: clientQuery, release });
+      mockFetch.mockResolvedValueOnce(makeGroqResponse('お答えします。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '設定を教えて', sessionId: 'sess-freead-05e' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.reply).toBe('お答えします。');
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(release).toHaveBeenCalledTimes(1);
     });
 
     it('プラン取得自体がDBエラーになっても相談は止まらない(fail-open)', async () => {
