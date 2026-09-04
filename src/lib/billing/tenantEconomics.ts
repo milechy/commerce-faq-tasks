@@ -23,6 +23,7 @@
 import { END_USER_FEATURES, MARGIN_MULTIPLIER } from './costCalculator';
 import { usdCentsToJpy, fxMeta } from './fx';
 import { getMonthRangeJst } from './planQuota';
+import { shiftToJstWallClock } from '../date/jstOffset';
 
 /** 1リクエストで集計するテナント数の上限。超えたら truncated: true を返す。 */
 export const MAX_TENANTS_PER_ECONOMICS_REQUEST = 50;
@@ -121,6 +122,21 @@ export function periodToJstRangeIso(periodYyyyMm: string): { from: string; to: s
   const anchor = new Date(Date.UTC(year, month - 1, 15, 3, 0, 0));
   const { monthStart, monthEnd } = getMonthRangeJst(anchor);
   return { from: monthStart.toISOString(), to: monthEnd.toISOString() };
+}
+
+/**
+ * 現在の JST 暦月を period(YYYYMM)形式で返す。
+ *
+ * ★UTC 基準の getPeriodYyyyMm(stripeSync.ts)とは別物★
+ * period_yyyymm(evidence に保存される値・periodToJstRangeIso が解釈する値)は
+ * JST 暦月なので、比較対象の「今月」も同じ JST 基準で作らないと、JST 新月の
+ * 最初の9時間(UTC切替前)だけ誤って「陳腐化」判定してしまう(禁止16と同種の罠)。
+ */
+export function currentJstPeriodYyyyMm(now: Date = new Date()): string {
+  const shifted = shiftToJstWallClock(now);
+  const y = shifted.getUTCFullYear();
+  const m = String(shifted.getUTCMonth() + 1).padStart(2, '0');
+  return `${y}${m}`;
 }
 
 /**

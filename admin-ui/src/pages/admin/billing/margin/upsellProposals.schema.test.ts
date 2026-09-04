@@ -67,4 +67,35 @@ describe('parseUpsellProposalsResponse', () => {
     expect(parseUpsellProposalsResponse({ proposals: [] }).truncated).toBe(false);
     expect(parseUpsellProposalsResponse({ proposals: [], truncated: 'yes' }).truncated).toBe(false);
   });
+
+  it('★period_yyyymm/stale をそのまま伝える(P2b: 陳腐化検知)★', () => {
+    const r = parseUpsellProposalsResponse({
+      proposals: [{ ...RENDERABLE, period_yyyymm: '202609', stale: true }],
+    });
+    expect(r.proposals[0].period_yyyymm).toBe('202609');
+    expect(r.proposals[0].stale).toBe(true);
+  });
+
+  it('renderable:false の行にも period_yyyymm/stale が付く', () => {
+    const r = parseUpsellProposalsResponse({
+      proposals: [{
+        proposal_id: '2', tenant_id: 't2', renderable: false, created_at: 'x',
+        period_yyyymm: '202608', stale: true,
+      }],
+    });
+    expect(r.proposals[0].period_yyyymm).toBe('202608');
+    expect(r.proposals[0].stale).toBe(true);
+  });
+
+  it('period_yyyymm/stale が欠落・型違いなら undefined に倒す(誤った日付を出さない)', () => {
+    const r1 = parseUpsellProposalsResponse({ proposals: [RENDERABLE] });
+    expect(r1.proposals[0].period_yyyymm).toBeUndefined();
+    expect(r1.proposals[0].stale).toBeUndefined();
+
+    const r2 = parseUpsellProposalsResponse({
+      proposals: [{ ...RENDERABLE, period_yyyymm: 202609, stale: 'yes' }],
+    });
+    expect(r2.proposals[0].period_yyyymm).toBeUndefined();
+    expect(r2.proposals[0].stale).toBeUndefined();
+  });
 });

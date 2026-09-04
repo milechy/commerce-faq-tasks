@@ -14,6 +14,10 @@ export interface UpsellProposalRenderable {
   headline: string;
   lines: string[];
   created_at: string;
+  /** 提案投稿時点(evidence.upsell.period_yyyymm)。evidence が壊れていれば undefined。 */
+  period_yyyymm?: string;
+  /** true なら period_yyyymm が今月と異なる(長期pendingで数字が古い可能性)。黙って隠さない。 */
+  stale?: boolean;
 }
 
 /** evidence が壊れている、または figures 計算が失敗した行。文面は出せない。 */
@@ -22,6 +26,8 @@ export interface UpsellProposalUnrenderable {
   tenant_id: string;
   renderable: false;
   created_at: string;
+  period_yyyymm?: string;
+  stale?: boolean;
 }
 
 export type UpsellProposal = UpsellProposalRenderable | UpsellProposalUnrenderable;
@@ -48,11 +54,16 @@ function parseOne(input: unknown, i: number): UpsellProposal {
     throw new Error(`upsell-proposals: proposals[${i}].tenant_id が不正です`);
   }
   const createdAt = isFiniteAndString(r["created_at"]) ? r["created_at"] : "";
+  // period_yyyymm/stale はどちらもサーバが確信を持てるときだけ有効値を返す。
+  // 型が違えば「無い」ものとして扱う(黙って誤った日付を出すより非表示)。
+  const periodYyyyMm = isFiniteAndString(r["period_yyyymm"]) ? r["period_yyyymm"] : undefined;
+  const stale = typeof r["stale"] === "boolean" ? r["stale"] : undefined;
 
   if (r["renderable"] === false) {
     return {
       proposal_id: r["proposal_id"], tenant_id: r["tenant_id"],
       renderable: false, created_at: createdAt,
+      period_yyyymm: periodYyyyMm, stale,
     };
   }
   if (r["renderable"] !== true) {
@@ -68,6 +79,7 @@ function parseOne(input: unknown, i: number): UpsellProposal {
     proposal_id: r["proposal_id"], tenant_id: r["tenant_id"],
     renderable: true, headline: r["headline"], lines: r["lines"] as string[],
     created_at: createdAt,
+    period_yyyymm: periodYyyyMm, stale,
   };
 }
 
