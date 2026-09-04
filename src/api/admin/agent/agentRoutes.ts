@@ -411,6 +411,26 @@ interface ParsedToolCall {
 }
 
 /**
+ * tool_calls の arguments(JSON文字列) から値が null/undefined のキーを除去する。
+ * Groqは会話履歴に含めて送り返した直前の tool_calls を、関数スキーマ(例: type:'string')に対して
+ * 再検証するため、任意引数に null が残っていると 400 (`expected string, but got null`) になる。
+ * false/0/"" は意味のある値なので保持する。
+ */
+export function stripNullToolArgs(argsJson: string): string {
+  try {
+    const parsed = JSON.parse(argsJson);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return argsJson;
+    const cleaned: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (value !== null && value !== undefined) cleaned[key] = value;
+    }
+    return JSON.stringify(cleaned);
+  } catch {
+    return argsJson;
+  }
+}
+
+/**
  * ツール呼び出しの arguments(JSON文字列)を安全にパースする。
  * 実際のGroq API観測で、無引数ツールに対し文字列 "null" が送られてくるケースを確認済み。
  * JSON.parse自体は例外を投げず null を返すため、catch だけでは防げない
@@ -418,12 +438,22 @@ interface ParsedToolCall {
  */
 function parseToolArgs(raw: string): Record<string, unknown> {
   try {
-    const parsed = JSON.parse(raw);
+    const parsed = JSON.parse(stripNullToolArgs(raw));
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
     return {};
   } catch {
     return {};
   }
+}
+
+// Groqへ会話履歴として送り返す tool_calls の arguments から null 値キーを除去する。
+// parseToolArgs はツール実行用に「パース後の Record」を正規化するだけで、
+// メッセージ履歴に積む生の JSON 文字列そのものは別途こちらで正規化する必要がある。
+function sanitizeToolCallsForEcho(toolCalls: GroqToolCall[]): GroqToolCall[] {
+  return toolCalls.map((tc) => ({
+    ...tc,
+    function: { ...tc.function, arguments: stripNullToolArgs(tc.function.arguments) },
+  }));
 }
 
 // 同一ターン連鎖ブロックの対象かどうか。requiresConfirmation() は未分類ツール(読み取り専用含む)を
@@ -1176,7 +1206,11 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
               break;
             }
 
-            messages.push({ role: 'assistant', content: hopResult.content, tool_calls: hopResult.tool_calls });
+            messages.push({
+              role: 'assistant',
+              content: hopResult.content,
+              tool_calls: sanitizeToolCallsForEcho(hopResult.tool_calls),
+            });
 
             const parsedToolCalls: ParsedToolCall[] = hopResult.tool_calls.map((tc) => ({
               id: tc.id,
@@ -1287,7 +1321,7 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
         messages.push({
           role: 'assistant',
           content: hopResponse.content,
-          tool_calls: hopResponse.tool_calls,
+          tool_calls: sanitizeToolCallsForEcho(hopResponse.tool_calls),
         });
 
         const parsedToolCalls: ParsedToolCall[] = hopResponse.tool_calls.map((toolCall) => ({

@@ -292,7 +292,7 @@ function recordedSettingsChanges(): Array<Record<string, any>> {
 // テスト対象を import
 // ---------------------------------------------------------------------------
 
-import { registerAdminAgentRoutes, __resetUntrustedReadLatchForTest } from './agentRoutes';
+import { registerAdminAgentRoutes, __resetUntrustedReadLatchForTest, stripNullToolArgs } from './agentRoutes';
 import { ADMIN_AGENT_TOOLS, LEGACY_UI_FEATURES } from './toolDefinitions';
 import { FAQ_CATEGORY_IDS } from '../../../lib/knowledge/faqCategories';
 // オンボ 是正A-3: publish_faq_drafts が is_excluded_from_search を正しく引き継ぐことを
@@ -6665,6 +6665,43 @@ describe('POST /v1/admin/agent/chat', () => {
       // 実際は7件一致しているが、案内文は6件までしか反映しない(既知の表示上の制約)
       expect(res.body.actions[0].result).toContain('6件あります');
       expect(res.body.actions[0].result).not.toContain('7件あります');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // stripNullToolArgs — 任意引数に null が入った tool_calls.arguments の正規化
+  //
+  // Groq は会話履歴として送り返した直前の tool_calls を関数スキーマ(type: 'string' 等)に対して
+  // 再検証するため、任意引数が null のまま残っていると 400 (`expected string, but got null`) になる。
+  // -------------------------------------------------------------------------
+  describe('stripNullToolArgs', () => {
+    it('null値のキーを除去する', () => {
+      expect(JSON.parse(stripNullToolArgs('{"category": null}'))).toEqual({});
+    });
+
+    it('null以外のキーは温存しつつnullのキーだけ除去する', () => {
+      expect(JSON.parse(stripNullToolArgs('{"question": "送料は?", "category": null}'))).toEqual({
+        question: '送料は?',
+      });
+    });
+
+    it('false/0/"" は意味のある値として温存する', () => {
+      expect(
+        JSON.parse(stripNullToolArgs('{"confirmed": false, "limit": 0, "note": "", "category": null}'))
+      ).toEqual({ confirmed: false, limit: 0, note: '' });
+    });
+
+    it('nullを含まない場合は内容を変えない', () => {
+      expect(JSON.parse(stripNullToolArgs('{"question": "送料は?"}'))).toEqual({ question: '送料は?' });
+    });
+
+    it('不正なJSONはそのまま返す(呼び出し元のフォールバックに委ねる)', () => {
+      expect(stripNullToolArgs('not json')).toBe('not json');
+    });
+
+    it('配列やプリミティブに解決する場合はそのまま返す', () => {
+      expect(stripNullToolArgs('[1,2,3]')).toBe('[1,2,3]');
+      expect(stripNullToolArgs('"just a string"')).toBe('"just a string"');
     });
   });
 
