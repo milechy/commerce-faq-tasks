@@ -43,7 +43,21 @@ jest.mock("../../../lib/billing/stripeSync", () => ({
 const mockBuildTenantUpsellFigures = jest.fn();
 jest.mock("../../../lib/billing/billingApi", () => ({
   buildTenantUpsellFigures: (...a: unknown[]) => mockBuildTenantUpsellFigures(...a),
+  fetchTenantBillingSnapshot: jest.fn(),
 }));
+
+// WP-15(D11/§13.5): GET /v1/admin/tenants/wp-provisioning-stats。
+// fetchTenantEconomics は原価集計の唯一の出どころ(禁止32)なので実装は差し替えず、
+// 境界(戻り値)だけモックする(mockComputeExpectedBilling/mockBuildTenantUpsellFigures
+// と同じ流儀)。currentJstPeriodYyyyMm は日付計算だけの純関数なので実物を使う。
+const mockFetchTenantEconomics = jest.fn();
+jest.mock("../../../lib/billing/tenantEconomics", () => {
+  const actual = jest.requireActual("../../../lib/billing/tenantEconomics");
+  return {
+    ...actual,
+    fetchTenantEconomics: (...a: unknown[]) => mockFetchTenantEconomics(...a),
+  };
+});
 
 // --------------------------------------------------------------------------
 // ヘルパー
@@ -2303,6 +2317,131 @@ describe("GET /v1/admin/my-tenant/upsell-suggestion — 境界値・異常系", 
     const res = await request(makeApp(db, "client_admin"))
       .get("/v1/admin/my-tenant/upsell-suggestion")
       .set("Authorization", "Bearer dummy");
+    expect(res.status).toBe(500);
+  });
+});
+
+// --------------------------------------------------------------------------
+// ④ GET /v1/admin/tenants/wp-provisioning-stats — WP-15(D11/§13.5)
+// --------------------------------------------------------------------------
+
+describe("GET /v1/admin/tenants/wp-provisioning-stats", () => {
+  beforeEach(() => {
+    mockFetchTenantEconomics.mockReset();
+  });
+
+  it("super_adminには実績値を返す(free_adテナントの原価だけを合算する)", async () => {
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [{ count: 12 }], rowCount: 1 }) // countProvisionedWpTenants
+      .mockResolvedValueOnce({ rows: [{ count: 3 }], rowCount: 1 }); // countWpProvisioningsCreatedSince
+    mockFetchTenantEconomics.mockResolvedValue({
+      tenants: [
+        { plan: "free_ad", cost_base_jpy: 500 },
+        { plan: "free_ad", cost_base_jpy: 300 },
+        { plan: "standard", cost_base_jpy: 99999 },
+      ],
+      truncated: false,
+    });
+
+    const res = await request(makeApp({ query: dbQuery }, "super_admin"))
+      .get("/v1/admin/tenants/wp-provisioning-stats")
+      .set("Authorization", "Bearer dummy");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      active_free_ad_tenants: 12,
+      active_free_ad_tenant_cap: 100,
+      today_new_provisions: 3,
+      today_new_provision_cap: 30,
+      current_month_free_ad_cost_jpy: 800,
+      cost_alert_threshold_jpy: 20000,
+      cost_alert_triggered: false,
+      cost_data_truncated: false,
+    });
+  });
+
+  it("free_adが0件でも0を返す(異常なしと偽らない生の数値)", async () => {
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [{ count: 0 }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [{ count: 0 }], rowCount: 1 });
+    mockFetchTenantEconomics.mockResolvedValue({ tenants: [], truncated: false });
+
+    const res = await request(makeApp({ query: dbQuery }, "super_admin"))
+      .get("/v1/admin/tenants/wp-provisioning-stats")
+      .set("Authorization", "Bearer dummy");
+
+    expect(res.status).toBe(200);
+    expect(res.body.active_free_ad_tenants).toBe(0);
+    expect(res.body.today_new_provisions).toBe(0);
+    expect(res.body.current_month_free_ad_cost_jpy).toBe(0);
+    expect(res.body.cost_alert_triggered).toBe(false);
+    expect(res.body.cost_data_truncated).toBe(false);
+  });
+
+  it("当月原価が閾値以上ならcost_alert_triggered=true", async () => {
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [{ count: 50 }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [{ count: 10 }], rowCount: 1 });
+    mockFetchTenantEconomics.mockResolvedValue({
+      tenants: [{ plan: "free_ad", cost_base_jpy: 20000 }],
+      truncated: false,
+    });
+
+    const res = await request(makeApp({ query: dbQuery }, "super_admin"))
+      .get("/v1/admin/tenants/wp-provisioning-stats")
+      .set("Authorization", "Bearer dummy");
+
+    expect(res.status).toBe(200);
+    expect(res.body.cost_alert_triggered).toBe(true);
+  });
+
+  // team-lead指摘(2026-09-05): fetchTenantEconomicsのMAX_TENANTS_PER_ECONOMICS_REQUEST
+  // (=50)上限による切り捨てを読み捨てていた。truncated=trueのとき
+  // current_month_free_ad_cost_jpyは実際より少なく出うるため、その事実自体を
+  // cost_data_truncatedとして開示することを固定する(禁止50と同じ精神)。
+  it("fetchTenantEconomicsがtruncated=trueを返したら、cost_data_truncated=trueで開示する", async () => {
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [{ count: 60 }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [{ count: 5 }], rowCount: 1 });
+    mockFetchTenantEconomics.mockResolvedValue({
+      tenants: [{ plan: "free_ad", cost_base_jpy: 1000 }],
+      truncated: true,
+    });
+
+    const res = await request(makeApp({ query: dbQuery }, "super_admin"))
+      .get("/v1/admin/tenants/wp-provisioning-stats")
+      .set("Authorization", "Bearer dummy");
+
+    expect(res.status).toBe(200);
+    expect(res.body.cost_data_truncated).toBe(true);
+    // 切り捨てが起きていても、集計できた範囲の生の数値自体は隠さず返す
+    // (「不正確になりうる」ことの開示はadmin-ui側の表示判断に委ねる)。
+    expect(res.body.current_month_free_ad_cost_jpy).toBe(1000);
+  });
+
+  it("client_adminだと403で、db.query・fetchTenantEconomicsとも呼ばれない", async () => {
+    const dbQuery = jest.fn();
+
+    const res = await request(makeApp({ query: dbQuery }, "client_admin"))
+      .get("/v1/admin/tenants/wp-provisioning-stats")
+      .set("Authorization", "Bearer dummy");
+
+    expect(res.status).toBe(403);
+    expect(dbQuery).not.toHaveBeenCalled();
+    expect(mockFetchTenantEconomics).not.toHaveBeenCalled();
+  });
+
+  it("DB接続が例外を投げても500で落ち着く", async () => {
+    const dbQuery = jest.fn().mockRejectedValue(new Error("connection refused"));
+
+    const res = await request(makeApp({ query: dbQuery }, "super_admin"))
+      .get("/v1/admin/tenants/wp-provisioning-stats")
+      .set("Authorization", "Bearer dummy");
+
     expect(res.status).toBe(500);
   });
 });

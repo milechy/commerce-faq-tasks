@@ -2599,8 +2599,20 @@ export async function executeToolCall(
             'SELECT key_prefix FROM tenant_api_keys WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 1',
             [tenantId]
           ),
-          db.query('SELECT widget_theme FROM tenants WHERE id = $1', [tenantId]),
+          db.query('SELECT widget_theme, provisioning_source FROM tenants WHERE id = $1', [tenantId]),
         ]);
+
+        // ★WP-14(FR-29 / §12.3 I-10)★ WordPress プラグイン経由テナントには
+        // 手貼りコードを勧めない。プラグインが既にウィジェットを設置済みのため、
+        // 手貼りを案内するとプラグインと二重にウィジェットが表示される事故になる。
+        const provisioningSource = (themeResult.rows[0] as { provisioning_source?: string } | undefined)?.provisioning_source;
+        if (provisioningSource === 'wordpress_plugin') {
+          return truncate(
+            'このテナントは WordPress プラグインで既にウィジェットが設置されています。' +
+            '追加の埋め込みコードは不要です。プラグインの設定画面から表示位置や除外ページを調整できます。'
+          );
+        }
+
         const keyPrefix: string = keyResult.rows.length > 0
           ? String((keyResult.rows[0] as { key_prefix: string }).key_prefix)
           : '（キー未発行）';

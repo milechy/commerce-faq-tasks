@@ -99,6 +99,22 @@ interface FixedCostQuotaLine {
   historyMonths: number;
 }
 
+// WP-15(D11/§13.5): free_ad総量ガード(D7/planQuota.ts)の発火実績。
+// GET /v1/admin/tenants/wp-provisioning-stats(super_admin限定)の応答形状。
+interface WpProvisioningStats {
+  active_free_ad_tenants: number;
+  active_free_ad_tenant_cap: number;
+  today_new_provisions: number;
+  today_new_provision_cap: number;
+  current_month_free_ad_cost_jpy: number;
+  cost_alert_threshold_jpy: number;
+  cost_alert_triggered: boolean;
+  // team-lead指摘(2026-09-05): fetchTenantEconomicsの50件上限で集計対象が
+  // 切り捨てられたか。trueのときcurrent_month_free_ad_cost_jpyは実際より
+  // 少なく出うるため、数値をそのまま出さず注意書きに差し替える(禁止50と同じ精神)。
+  cost_data_truncated: boolean;
+}
+
 interface MonitoringKpis {
   completionRate: number;
   loopRate: number;
@@ -340,6 +356,10 @@ export default function MonitoringPage() {
   const [health, setHealth] = useState<MeasurementHealth | null>(null);
   const [healthError, setHealthError] = useState(false);
 
+  // WP-15(D11): client_adminには403で返るため、その場合はカード自体を出さない
+  // (エラーバナーは出さない — health同様、片方の失敗がもう片方の表示を止めない設計)。
+  const [wpStats, setWpStats] = useState<WpProvisioningStats | null>(null);
+
   const fetchKpis = useCallback(async () => {
     try {
       const res = await authFetch(`${API_BASE}/v1/admin/monitoring/kpis`);
@@ -374,6 +394,37 @@ export default function MonitoringPage() {
     }
   }, []);
 
+  const fetchWpStats = useCallback(async () => {
+    try {
+      const res = await authFetch(`${API_BASE}/v1/admin/tenants/wp-provisioning-stats`);
+      // client_adminは403 — カードを出さないだけで、エラー扱いにはしない。
+      if (!res.ok) {
+        setWpStats(null);
+        return;
+      }
+      const json = (await res.json()) as Partial<WpProvisioningStats>;
+      // 形が壊れている(モック/旧いAPI応答等)場合にレンダーで例外を投げないよう、
+      // 最低限の数値フィールドが揃っていることを確認してから反映する。
+      if (
+        typeof json.active_free_ad_tenants === "number" &&
+        typeof json.active_free_ad_tenant_cap === "number" &&
+        typeof json.today_new_provisions === "number" &&
+        typeof json.today_new_provision_cap === "number" &&
+        typeof json.current_month_free_ad_cost_jpy === "number" &&
+        typeof json.cost_alert_threshold_jpy === "number" &&
+        typeof json.cost_alert_triggered === "boolean" &&
+        typeof json.cost_data_truncated === "boolean"
+      ) {
+        setWpStats(json as WpProvisioningStats);
+      } else {
+        setWpStats(null);
+      }
+    } catch (err) {
+      if (err instanceof Error && err.message === "__AUTH_REQUIRED__") return; // fetchKpisが遷移を担当
+      setWpStats(null);
+    }
+  }, []);
+
   useEffect(() => {
     void (async () => {
       const { data } = await supabase.auth.getSession();
@@ -383,13 +434,14 @@ export default function MonitoringPage() {
       }
       void fetchKpis();
       void fetchHealth();
-      timerRef.current = setInterval(() => { void fetchKpis(); void fetchHealth(); }, POLL_INTERVAL_MS);
+      void fetchWpStats();
+      timerRef.current = setInterval(() => { void fetchKpis(); void fetchHealth(); void fetchWpStats(); }, POLL_INTERVAL_MS);
     })();
 
     return () => {
       if (timerRef.current !== null) clearInterval(timerRef.current);
     };
-  }, [fetchKpis, fetchHealth, navigate]);
+  }, [fetchKpis, fetchHealth, fetchWpStats, navigate]);
 
   const buildTenantRows = (): TenantSlaRow[] => {
     if (!data?.tenants) return [];
@@ -920,6 +972,66 @@ export default function MonitoringPage() {
                     {health.fixedCostQuota.livekit.quota === null && (
                       <p style={{ margin: "2px 0 0", fontSize: 11.5, color: "var(--muted-foreground)", lineHeight: 1.6 }}>
                         ※込み枠(LIVEKIT_MONTHLY_ROOM_QUOTA)が未設定のため、上げ下げの判定は保留中です。
+                      </p>
+                    )}
+                  </MeasurementHealthCard>
+                )}
+
+                {/* WP-15(D11/§13.5): WordPress プラグイン経由の free_ad テナント
+                    総量ガード(D7)の発火実績。禁止50に従い、0件でも「異常なし」の
+                    ような肯定的表示にはしない — まだ流入がない旨を中立に示す。 */}
+                {wpStats && (
+                  <MeasurementHealthCard
+                    title="WordPress経由テナントの総量ガード"
+                    description="free_adテナントの同時稼働数・日次新規発行数・当月原価の実績。上限に対する現在値を示す(D7/WP-5)"
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                      <span style={{ fontSize: 13, color: "var(--muted-foreground)" }}>稼働中(WordPress経由)</span>
+                      <span style={{ fontSize: 20, fontWeight: 700, color: "var(--foreground)", fontVariantNumeric: "tabular-nums" }}>
+                        {wpStats.active_free_ad_tenants.toLocaleString("ja-JP")} / {wpStats.active_free_ad_tenant_cap.toLocaleString("ja-JP")}
+                      </span>
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                      <span style={{ fontSize: 13, color: "var(--muted-foreground)" }}>本日の新規発行</span>
+                      <span style={{ fontSize: 20, fontWeight: 700, color: "var(--foreground)", fontVariantNumeric: "tabular-nums" }}>
+                        {wpStats.today_new_provisions.toLocaleString("ja-JP")} / {wpStats.today_new_provision_cap.toLocaleString("ja-JP")}
+                      </span>
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                      <span style={{ fontSize: 13, color: "var(--muted-foreground)" }}>当月のfree_ad原価</span>
+                      {/* team-lead指摘(2026-09-05): cost_data_truncated=trueのとき、
+                          集計対象が50件上限で切り捨てられ実際より少ない値になりうる。
+                          正確でない数値を正常な数値であるかのように出さない(禁止50と同じ精神)。 */}
+                      {wpStats.cost_data_truncated ? (
+                        <span style={{ fontSize: 15, fontWeight: 700, color: "#fbbf24" }}>集計不能</span>
+                      ) : (
+                        <span
+                          style={{
+                            fontSize: 20, fontWeight: 700, fontVariantNumeric: "tabular-nums",
+                            color: wpStats.cost_alert_triggered ? "#f87171" : "var(--foreground)",
+                          }}
+                        >
+                          ¥{wpStats.current_month_free_ad_cost_jpy.toLocaleString("ja-JP")}
+                        </span>
+                      )}
+                    </div>
+                    {wpStats.cost_data_truncated ? (
+                      <p style={{ margin: "2px 0 0", fontSize: 12, color: "#fbbf24", fontWeight: 700, lineHeight: 1.6 }}>
+                        テナント数が多く、正確な原価集計ができていません(集計上限50件を超過)。
+                        アラート判定(閾値到達の有無)も信頼できないため、別途確認してください。
+                      </p>
+                    ) : wpStats.cost_alert_triggered ? (
+                      <p style={{ margin: "2px 0 0", fontSize: 12, color: "#f87171", fontWeight: 700, lineHeight: 1.6 }}>
+                        当月原価がアラート閾値(¥{wpStats.cost_alert_threshold_jpy.toLocaleString("ja-JP")})に到達しています。
+                      </p>
+                    ) : wpStats.active_free_ad_tenants === 0 && wpStats.today_new_provisions === 0 ? (
+                      // ★禁止50: 0件を「異常なし」と表示しない★ まだ流入が無い事実を中立に示す。
+                      <p style={{ margin: "2px 0 0", fontSize: 12, color: "var(--muted-foreground)", lineHeight: 1.6 }}>
+                        まだWordPress経由の流入がありません(プラグインからの新規発行が0件)。
+                      </p>
+                    ) : (
+                      <p style={{ margin: "2px 0 0", fontSize: 11.5, color: "var(--muted-foreground)", lineHeight: 1.6 }}>
+                        アラート閾値: ¥{wpStats.cost_alert_threshold_jpy.toLocaleString("ja-JP")}
                       </p>
                     )}
                   </MeasurementHealthCard>

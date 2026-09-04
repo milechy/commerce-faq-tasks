@@ -66,6 +66,9 @@ export interface TenantDetail {
     offsetY?: number | string;
     [key: string]: unknown;
   } | null;
+  // WP-15(D11): テナントの流入元。manual = Super Admin作成、
+  // wordpress_plugin = WordPress プラグインのセルフサインアップ経由。
+  provisioning_source?: "manual" | "wordpress_plugin";
 }
 
 export interface ApiKey {

@@ -215,8 +215,8 @@ async function completeWpProvisioning(pool: Pool, provisioningId: string): Promi
     const tenantName = (row.site_name ?? "").trim() || tenantId;
 
     await client.query(
-      `INSERT INTO tenants (id, name, plan, is_active, allowed_origins)
-       VALUES ($1, $2, 'free_ad', true, $3)`,
+      `INSERT INTO tenants (id, name, plan, is_active, allowed_origins, provisioning_source)
+       VALUES ($1, $2, 'free_ad', true, $3, 'wordpress_plugin')`,
       [tenantId, tenantName, [row.site_origin]]
     );
 
