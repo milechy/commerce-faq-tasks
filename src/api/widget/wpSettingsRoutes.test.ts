@@ -82,15 +82,19 @@ describe("GET /v1/public/wp/settings", () => {
       .fn()
       .mockResolvedValueOnce({ rows: [{ tenant_id: "tenant-1" }], rowCount: 1 }) // 認証
       .mockResolvedValueOnce({
-        rows: [{ widget_theme: {}, allowed_origins: [], excluded_page_patterns: [] }],
+        rows: [{ plan: "starter", is_active: true, widget_theme: {}, allowed_origins: [], excluded_page_patterns: [] }],
         rowCount: 1,
-      });
+      })
+      .mockResolvedValueOnce({ rows: [{ published_count: "0" }], rowCount: 1 }); // FAQ有無
     const app = makeApp({ query: dbQuery });
     const res = await request(app).get("/v1/public/wp/settings").set("x-api-key", VALID_KEY);
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       tenant_id: "tenant-1",
+      plan: "starter",
+      is_active: true,
+      has_published_faq: false,
       position: "bottom-right",
       offset_x: 24,
       offset_y: 24,
@@ -107,19 +111,25 @@ describe("GET /v1/public/wp/settings", () => {
       .mockResolvedValueOnce({
         rows: [
           {
+            plan: "growth",
+            is_active: true,
             widget_theme: { position: "bottom-left", offsetX: 96, offsetY: 40, primaryColor: "#3B82F6" },
             allowed_origins: ["https://example.com"],
             excluded_page_patterns: ["/cart", "/checkout/*"],
           },
         ],
         rowCount: 1,
-      });
+      })
+      .mockResolvedValueOnce({ rows: [{ published_count: "3" }], rowCount: 1 });
     const app = makeApp({ query: dbQuery });
     const res = await request(app).get("/v1/public/wp/settings").set("x-api-key", VALID_KEY);
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       tenant_id: "tenant-1",
+      plan: "growth",
+      is_active: true,
+      has_published_faq: true,
       position: "bottom-left",
       offset_x: 96,
       offset_y: 40,
@@ -134,13 +144,37 @@ describe("GET /v1/public/wp/settings", () => {
       .fn()
       .mockResolvedValueOnce({ rows: [{ tenant_id: "tenant-1" }], rowCount: 1 })
       .mockResolvedValueOnce({
-        rows: [{ widget_theme: { primaryColor: "not-a-color" }, allowed_origins: [], excluded_page_patterns: [] }],
+        rows: [
+          {
+            plan: "starter",
+            is_active: true,
+            widget_theme: { primaryColor: "not-a-color" },
+            allowed_origins: [],
+            excluded_page_patterns: [],
+          },
+        ],
         rowCount: 1,
-      });
+      })
+      .mockResolvedValueOnce({ rows: [{ published_count: "0" }], rowCount: 1 });
     const app = makeApp({ query: dbQuery });
     const res = await request(app).get("/v1/public/wp/settings").set("x-api-key", VALID_KEY);
     expect(res.status).toBe(200);
     expect(res.body.primary_color).toBeNull();
+  });
+
+  it("FAQ集計クエリが失敗してもレスポンス全体は壊さずhas_published_faq=falseにする", async () => {
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [{ tenant_id: "tenant-1" }], rowCount: 1 })
+      .mockResolvedValueOnce({
+        rows: [{ plan: "starter", is_active: true, widget_theme: {}, allowed_origins: [], excluded_page_patterns: [] }],
+        rowCount: 1,
+      })
+      .mockRejectedValueOnce(new Error("faq_docs down"));
+    const app = makeApp({ query: dbQuery });
+    const res = await request(app).get("/v1/public/wp/settings").set("x-api-key", VALID_KEY);
+    expect(res.status).toBe(200);
+    expect(res.body.has_published_faq).toBe(false);
   });
 
   it("テナントが見つからない場合は404", async () => {
@@ -207,13 +241,16 @@ describe("PATCH /v1/public/wp/settings", () => {
       .mockResolvedValueOnce({
         rows: [
           {
+            plan: "starter",
+            is_active: true,
             widget_theme: { position: "bottom-left", offsetX: 96, offsetY: 24 },
             allowed_origins: [],
             excluded_page_patterns: [],
           },
         ],
         rowCount: 1,
-      }); // UPDATE
+      }) // UPDATE
+      .mockResolvedValueOnce({ rows: [{ published_count: "0" }], rowCount: 1 }); // FAQ有無
     const app = makeApp({ query: dbQuery });
     const res = await request(app)
       .patch("/v1/public/wp/settings")
@@ -223,6 +260,9 @@ describe("PATCH /v1/public/wp/settings", () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       tenant_id: "tenant-1",
+      plan: "starter",
+      is_active: true,
+      has_published_faq: false,
       position: "bottom-left",
       offset_x: 96,
       offset_y: 24,
@@ -234,7 +274,7 @@ describe("PATCH /v1/public/wp/settings", () => {
     const [sql, params] = dbQuery.mock.calls[1];
     expect(sql).toContain("widget_theme = COALESCE(widget_theme, '{}') || $1::jsonb");
     expect(sql).toContain("UPDATE tenants SET");
-    expect(sql).toContain("RETURNING widget_theme, allowed_origins, excluded_page_patterns");
+    expect(sql).toContain("RETURNING plan, is_active, widget_theme, allowed_origins, excluded_page_patterns");
     expect(JSON.parse(params[0] as string)).toEqual({ position: "bottom-left", offsetX: 96 });
     expect(params[params.length - 1]).toBe("tenant-1");
     expect(updateTenantAllowedOrigins).not.toHaveBeenCalled();
@@ -247,13 +287,16 @@ describe("PATCH /v1/public/wp/settings", () => {
       .mockResolvedValueOnce({
         rows: [
           {
+            plan: "starter",
+            is_active: true,
             widget_theme: {},
             allowed_origins: ["https://example.com"],
             excluded_page_patterns: [],
           },
         ],
         rowCount: 1,
-      });
+      })
+      .mockResolvedValueOnce({ rows: [{ published_count: "0" }], rowCount: 1 });
     const app = makeApp({ query: dbQuery });
     const res = await request(app)
       .patch("/v1/public/wp/settings")
