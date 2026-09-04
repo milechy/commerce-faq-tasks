@@ -59,6 +59,27 @@ describe('widgetPlacement', () => {
       expect(validateWidgetPlacement({ offsetX: 999 })).toContain('offsetX');
       expect(validateWidgetPlacement({ offsetY: 'abc' })).toContain('offsetY');
     });
+
+    // フロントのスライダーは min=0/max=320 で境界外を防ぐが、set_widget_theme は
+    // フロント以外(LLMの引数生成ミス・将来の別UI)からも呼ばれうる唯一の安全網。
+    // ここでは境界のすぐ外側(321, -1)と不正enum(top-left)を、実際にサーバへ
+    // 直接渡された想定で明示的に固定する。
+    it('境界のすぐ外側(offsetY: 321, offsetY: -1)を明示的に弾く', () => {
+      const over = validateWidgetPlacement({ offsetY: 321 });
+      expect(over).toContain('offsetY');
+      expect(over).toContain('0〜320');
+
+      const under = validateWidgetPlacement({ offsetY: -1 });
+      expect(under).toContain('offsetY');
+      expect(under).toContain('0〜320');
+    });
+
+    it('不正なenum値 position: "top-left" を明示的に弾く(bottom-right/bottom-leftのみ許可)', () => {
+      const msg = validateWidgetPlacement({ position: 'top-left' });
+      expect(msg).toContain('position');
+      expect(msg).toContain('bottom-right');
+      expect(msg).toContain('bottom-left');
+    });
   });
 
   describe('buildPlacementAttributes', () => {
