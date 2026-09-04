@@ -11,6 +11,7 @@ import {
 import { deleteFaqFromEs } from '../../../lib/knowledge/faqIndexSync';
 import { isValidOriginPattern } from '../../middleware/originCheck';
 import { isValidExcludedPagePattern } from '../../../lib/excludedPagePattern';
+import { discoverFaqCandidateUrls } from '../../../lib/sitemapDiscovery';
 import { FAQ_CATEGORY_IDS } from '../../../lib/knowledge/faqCategories';
 import { callGroq8bSuggestFromText, callGroq8bSuggest } from '../tuning/routes';
 import { listRules, createRule, updateRule, deleteRule, type ApprovedResponse, type RuleEvidence } from '../tuning/tuningRulesRepository';
@@ -3650,6 +3651,60 @@ export async function executeToolCall(
       } catch (err) {
         logger.warn('[actionExecutor] suggest_faq_import_from_urls failed', err);
         return truncate('FAQ案の生成に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // GID 1218167748520497 (L3-3): sitemap.xmlからFAQ取り込み候補URLを発見する。
+    // Phase 1(発見のみ) — FAQ生成もDB書き込みも行わない読み取り専用ツール。
+    // ここで見つけたURLをユーザーが選び、別途 suggest_faq_import_from_urls
+    // （1〜5件ずつ）に渡してFAQ案を生成する、という2段階の流れ。
+    case 'discover_faq_urls_from_sitemap': {
+      if (!tenantId) {
+        return truncate('テナントが特定できません。super_admin の場合は対象テナントを指定してください');
+      }
+      const baseUrlArg = typeof args['base_url'] === 'string' ? args['base_url'] : undefined;
+      const extraPatternsRaw = args['exclude_patterns'];
+      const extraPatterns = Array.isArray(extraPatternsRaw)
+        ? extraPatternsRaw.filter((p): p is string => typeof p === 'string')
+        : [];
+
+      try {
+        const result = await db.query<{
+          allowed_origins: string[] | null;
+          faq_crawl_exclude_patterns: string[] | null;
+        }>('SELECT allowed_origins, faq_crawl_exclude_patterns FROM tenants WHERE id = $1', [tenantId]);
+        if (result.rows.length === 0) {
+          return truncate('テナント設定が見つかりません');
+        }
+        const row = result.rows[0]!;
+        const baseUrl = baseUrlArg ?? row.allowed_origins?.[0];
+        if (!baseUrl || !/^https?:\/\//i.test(baseUrl)) {
+          return truncate(
+            'サイトのベースURLが特定できません。base_url を指定するか、先に埋め込み許可ドメイン(allowed_origins)を登録してください'
+          );
+        }
+
+        const excludePatterns = [...(row.faq_crawl_exclude_patterns ?? []), ...extraPatterns];
+        const urls = await discoverFaqCandidateUrls(baseUrl, excludePatterns);
+
+        if (urls.length === 0) {
+          return truncateRead(
+            `${baseUrl} の sitemap.xml からFAQ候補URLを見つけられませんでした` +
+            '（サイトマップが存在しない、除外パターンで全て除外された、取得に失敗した、のいずれかです）。'
+          );
+        }
+
+        const lines = [
+          `${baseUrl} のsitemap.xmlから${urls.length}件のURL候補が見つかりました。`,
+          ...urls.map((u) => `• ${u}`),
+          '',
+          'この中からFAQ化したいURLを選んで、suggest_faq_import_from_urls に1〜5件ずつ渡してください。',
+        ];
+        return truncateRead(lines.join('\n'));
+      } catch (err) {
+        logger.warn('[actionExecutor] discover_faq_urls_from_sitemap failed', err);
+        return truncate('サイトマップの取得に失敗しました');
       }
     }
 

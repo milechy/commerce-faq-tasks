@@ -367,6 +367,7 @@ const REAL_TOOL_LABEL: Record<string, string> = {
   import_industry_faq_templates: "業種別FAQたたき台の登録",
   suggest_faq_import_from_text: "テキストからのFAQ一括提案",
   suggest_faq_import_from_urls: "URLからのFAQ一括提案",
+  discover_faq_urls_from_sitemap: "サイトマップからのFAQ候補URL発見",
   commit_faq_import: "FAQの一括登録",
   discard_faq_import: "FAQ一括提案の破棄",
   publish_faq_drafts: "下書きFAQの公開",

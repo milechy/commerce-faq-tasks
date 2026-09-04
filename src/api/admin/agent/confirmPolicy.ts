@@ -182,6 +182,9 @@ export const NON_WRITE_TOOLS: readonly string[] = [
   'suggest_faq_import_from_urls',
   // 上記プレビューのプロセス内Mapを消すだけ（DBは触らない）。
   'discard_faq_import',
+  // GID 1218167748520497 (L3-3): sitemap.xmlからFAQ候補URLを提示するだけ。
+  // FAQ生成もDB書き込みも行わない(生成は別途suggest_faq_import_from_urlsで行う)。
+  'discover_faq_urls_from_sitemap',
 ];
 
 /**
