@@ -16,7 +16,7 @@ import {
   FREE_AD_MONTHLY_ADMIN_CONSULT_LIMIT,
 } from './planQuota';
 import {
-  fetchTenantEconomics, fetchTenantEconomicsDetail, periodToJstRangeIso,
+  fetchTenantEconomics, fetchTenantEconomicsDetail,
   type TenantBillingSnapshot, type PeriodInvoice,
 } from './tenantEconomics';
 import type { TenantUpsellFigures, SuperAdminUpsellFigures } from './upsellRenderer';
@@ -333,6 +333,16 @@ export async function buildTenantUpsellFigures(
  * 粗利の計算は fetchTenantEconomicsDetail(粗利ダッシュボードのドリルダウンが
  * 使う関数)をそのまま呼ぶ。集計 SQL をここに書き写さない
  * (src/api/admin/CLAUDE.md「同じ数値を2本目のクエリで集計しない」)。
+ *
+ * ★computeExpectedBilling を2回呼ばない★
+ * text_units/avatar_minutes は computeExpectedBilling の plan 引数に依存しない
+ * (plan は billed_units_weighted の倍率と starter 上限にのみ使われる。
+ * stripeSync.ts の SQL 参照)。したがって fetchTenantEconomicsDetail が内部で
+ * (fetchTenantBillingSnapshot 経由で)1回計算した値を超過量の算出にもそのまま
+ * 使ってよく、evidence の currentPlan で同じ計算をもう一度実行する必要はない。
+ * かつて2回呼んでいたのは重複なだけでなく、プラン変更後(呼び出し元の
+ * currentPlan が古い evidence の値)には2回目の呼び出しとテナントの実プランが
+ * 食い違いうる経路でもあった。
  */
 export async function buildSuperAdminUpsellFigures(
   db: any,
@@ -342,14 +352,7 @@ export async function buildSuperAdminUpsellFigures(
   recommendedPlan: string,
   periodYyyyMm: string,
 ): Promise<SuperAdminUpsellFigures> {
-  const { from, to } = periodToJstRangeIso(periodYyyyMm);
-
-  const [nameRow, billing, detail, currentBase, recommendedBase] = await Promise.all([
-    db.query(`SELECT name FROM tenants WHERE id = $1`, [tenantId]),
-    // 超過量は buildTenantUpsellFigures と同じ計算(computeExpectedBilling →
-    // computeQuotaOverage)を使う。tenantEconomics 側の text_units/avatar_minutes
-    // から再計算すると閾値表が2箇所に増える(第2の閾値表を作らない方針に反する)。
-    computeExpectedBilling(db, tenantId, from, to, currentPlan),
+  const [detail, currentBase, recommendedBase] = await Promise.all([
     fetchTenantEconomicsDetail(db, tenantId, periodYyyyMm, fetchTenantBillingSnapshot, null),
     (async () => {
       const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
@@ -363,14 +366,17 @@ export async function buildSuperAdminUpsellFigures(
     })(),
   ]);
 
-  const overage = computeQuotaOverage(currentPlan, billing.textUnits, billing.avatarMinutes, billing.adminConsults);
   const row = detail?.row;
+  // adminConsults は text_overage/avatar_overage_minutes の算出には使われない
+  // (computeQuotaOverage が返す adminOverage/textPriceQuantity はこの関数の
+  // 戻り値に含めていない)ため 0 で固定してよい。
+  const overage = computeQuotaOverage(currentPlan, row?.text_units ?? 0, row?.avatar_minutes ?? 0, 0);
 
   return {
     __audience: 'super_admin',
     signal,
     tenant_id: tenantId,
-    tenant_name: nameRow.rows[0]?.name ?? null,
+    tenant_name: row?.tenant_name ?? null,
     current_plan: currentPlan,
     recommended_plan: recommendedPlan,
     current_base_monthly_jpy: currentBase,
