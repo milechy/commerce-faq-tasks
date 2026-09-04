@@ -2590,12 +2590,13 @@
 
   function renderMessages() {
     // R0-②: エスカレーションボタンは会話開始前(空セッション)では無効。
-    // scriptedモード/Anamクライアント側LLM/通常の/api/chatのいずれの経路で
-    // assistant応答が来ても、ここで一元的に有効化する(escalated/pending中は
-    // setEscalateBtnState 側の表示を上書きしない)。
+    // サーバ側(escalateSession)は「来訪者が最低1通送っているか」で判定するため、
+    // 自動あいさつ(role: 'assistant', system: true)だけでは有効化しない。
+    // ここで来訪者の実発言(role === 'user')の有無を見て一元的に有効化する
+    // (escalated/pending中は setEscalateBtnState 側の表示を上書きしない)。
     if (!escalated && !escalatePending) {
-      var hasAssistantReply = messages.some(function (m) { return m.role === 'assistant'; });
-      escalateBtn.disabled = !hasAssistantReply;
+      var hasVisitorMessage = messages.some(function (m) { return m.role === 'user'; });
+      escalateBtn.disabled = !hasVisitorMessage;
     }
 
     // DOM再構築でscrollTopがリセットされるため、クリア前に最下部付近かどうかを保存
@@ -3247,6 +3248,19 @@
     startEscalatePolling();
   }
 
+  // エスカレーション失敗時、ボタンを戻すだけでは無言の失敗になるため、
+  // チャット欄にも短いお知らせを残す(markEscalatedの成功時メッセージと同じ形)。
+  function pushEscalateFailureMessage(content) {
+    messages.push({
+      id: generateMsgId(),
+      role: 'assistant',
+      content: content,
+      timestamp: Date.now(),
+      system: true, // 実際のAI回答ではないため評価対象にしない
+    });
+    renderMessages();
+  }
+
   escalateBtn.addEventListener('click', function () {
     if (escalated || escalatePending || escalateBtn.disabled) return;
     escalatePending = true;
@@ -3259,18 +3273,24 @@
       ),
       body: JSON.stringify({ sessionId: conversationId }),
     })
-      .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (data) {
+      .then(function (r) { return r.json().then(function (data) { return { status: r.status, data: data }; }).catch(function () { return { status: r.status, data: null }; }); })
+      .then(function (result) {
         escalatePending = false;
-        if (data && data.ok) {
+        if (result.data && result.data.ok) {
           markEscalated();
         } else {
           setEscalateBtnState('🙋 有人スタッフに相談する', false);
+          if (result.status === 404 && result.data && result.data.error === 'conversation_not_found') {
+            pushEscalateFailureMessage('少し会話をしてからもう一度お試しください。');
+          } else {
+            pushEscalateFailureMessage('接続できませんでした。もう一度お試しください。');
+          }
         }
       })
       .catch(function () {
         escalatePending = false;
         setEscalateBtnState('🙋 有人スタッフに相談する', false);
+        pushEscalateFailureMessage('接続できませんでした。もう一度お試しください。');
       });
   });
 
