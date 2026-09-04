@@ -5249,12 +5249,16 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.body.actions[0].result).toContain('1〜5件');
     });
 
-    it('suggest_faq_import_from_text: 20件上限で打ち切られても、カードのtotalに切り詰め前の件数が残る', async () => {
+    // GID 1218166713355914: 従量課金プランのため一括インポートに件数上限は設けない。
+    // 90件のような大量の生成結果でも、カードのfaqsに全件がそのまま残ること(黙って
+    // 間引かない)を固定する。人間向けテキスト要約は例示のみ(先頭3件)に留め、全件を
+    // 列挙しないことも合わせて確認する。
+    it('suggest_faq_import_from_text: 大量件数でも上限で打ち切らず、カードに全件を残す', async () => {
       mockFetch
         .mockResolvedValueOnce(toolCallResponse('call-fi-3t', 'suggest_faq_import_from_text', { text: '十分な長さの商品説明文です。'.repeat(5) }))
         .mockResolvedValueOnce(makeGroqResponse('プレビューを作成しました。'));
 
-      const manyFaqs = Array.from({ length: 25 }, (_, i) => ({
+      const manyFaqs = Array.from({ length: 90 }, (_, i) => ({
         question: `質問${i}`,
         answer: `回答${i}`,
         category: 'store_info',
@@ -5268,41 +5272,18 @@ describe('POST /v1/admin/agent/chat', () => {
 
       expect(res.status).toBe(200);
       const result = res.body.actions[0].result as string;
-      expect(result).toContain('上限(20件)を超えたため');
+      expect(result).not.toContain('上限');
+      expect(result).toContain('90件のFAQ案を作成しました');
+      // テキスト要約は全件を列挙せず、例示(先頭3件)のみに留める。
+      expect((result.match(/質問\d+/g) ?? []).length).toBe(3);
 
       const card = res.body.actions[0].card;
-      expect(card.total).toBe(25); // 切り詰め前の生成数(黙って切らない)
-      expect(card.faqs).toHaveLength(20); // 実際に登録対象になる件数
-      expect(card.truncated).toBe(true);
-    });
-
-    // H-5テスト強化: MAX_IMPORT_FAQS(20件)ちょうどは切り詰め対象に含まれない境界値。
-    // actionExecutor.ts の判定が `total > MAX_IMPORT_FAQS`(厳密不等号)であるため、
-    // 21件で発火することは上のテストで確認済みだが、20件ちょうどでtruncatedがtrueに
-    // ならないこと(off-by-oneで21件以上の条件が20件以上になっていないか)は未検証だった。
-    it('suggest_faq_import_from_text: ちょうど20件ならtruncatedにならない(切り詰め境界)', async () => {
-      mockFetch
-        .mockResolvedValueOnce(toolCallResponse('call-fi-3u', 'suggest_faq_import_from_text', { text: '十分な長さの商品説明文です。'.repeat(5) }))
-        .mockResolvedValueOnce(makeGroqResponse('プレビューを作成しました。'));
-
-      const exactlyTwenty = Array.from({ length: 20 }, (_, i) => ({
-        question: `質問${i}`,
-        answer: `回答${i}`,
-        category: 'store_info',
-        duplicate: null,
-      }));
-      mockGenerateTextFaqPreview.mockResolvedValueOnce(exactlyTwenty);
-
-      const res = await request(makeApp(CLIENT_ADMIN_USER))
-        .post('/v1/admin/agent/chat')
-        .send({ message: 'このテキストからFAQを作って', sessionId: 'sess-fi-03u' });
-
-      expect(res.status).toBe(200);
-      const card = res.body.actions[0].card;
-      expect(card.total).toBe(20);
-      expect(card.faqs).toHaveLength(20);
+      expect(card.total).toBe(90);
+      expect(card.faqs).toHaveLength(90); // 上限で間引かれない
       expect(card.truncated).toBe(false);
-      expect(res.body.actions[0].result as string).not.toContain('上限');
+
+      const staged = getStagedFaqImport('tenant-abc', 'sess-fi-03t');
+      expect(staged?.kind === 'text' && staged.faqs).toHaveLength(90); // commit_faq_import も全件対象
     });
 
     it('suggest_faq_import_from_urls: urlsが6件以上ならエラーを返しgenerateScrapeFaqPreviewは呼ばない', async () => {
