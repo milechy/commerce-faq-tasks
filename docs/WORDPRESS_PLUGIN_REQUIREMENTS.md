@@ -270,7 +270,7 @@ R2C 側がその URL を取得し、一致を確認する。これによりサ�
 |---|---|---|
 | C-1 | **サイト所有証明を通さずに API キーが発行できない** | 他人のドメインを申告して provision を叩き、キーが返らないこと。検証用 REST ルートが応答しないサイトでも同様。**逆に、サイト所有証明が通ればメール未確認でもキーは発行される**（D12。ここを「メールも必要」に戻すと導入が詰まる） |
 | C-2 | 発行されたキーで管理 API を叩けない | そのキーで `GET /v1/admin/my-tenant` 等を叩き 401/403 になること（D6・WP-4） |
-| C-3 | 発行されたキーが、登録された origin 以外から使えない | 別ドメインから同じキーで chat を叩き拒否されること。`tenant_api_keys.allowed_origins` が空でないこと（空は `originCheck.ts` の fail-open に落ちる） |
+| C-3 | 発行されたキーが、登録された origin 以外から使えない | 別ドメインから同じキーで chat を叩き拒否されること。**★2026-09-04 実装時に訂正: `tenant_api_keys.allowed_origins` はどこからも読まれていない（enforcement は `tenants.allowed_origins` 経由の `originCheck.ts` のみ）**。確認するのは `tenants.allowed_origins` が空でないこと（空は fail-open に落ちる。#1216 で発行と同時にテナント自身へ書く設計にした） |
 | C-4 | プロビジョニングトークンが `SUPABASE_JWT_SECRET` で署名されていない | 署名鍵と `purpose` クレームを確認（禁止27） |
 | C-5 | レート制限が認証前は IP キー、認証後はテナントキーの 2 段になっている | 単一バケットでないこと（禁止28）。`req.ip` ではなく `X-Real-IP` を見ていること |
 | C-6 | 管理画面でキーがマスク表示され、`autoload = false` で保存されている | `wp_options` を直接確認 |
@@ -363,9 +363,9 @@ D8 によりプラグインは別リポジトリに置くため**本要件の直
 | やること | 置き場所（既存） | 作ってはいけないもの |
 |---|---|---|
 | 公開プロビジョニング API | `src/api/widget/` 配下。`registerWidgetRoutes(app, db)` と同じ `register*Routes(app, db)` の形にし、`src/index.ts` の既存の登録列に `if (db) register...` で並べる | 新しい express app・新しいサーバプロセス |
-| **キーのドメイン束縛** | **既存の `tenant_api_keys.allowed_origins TEXT[]`**（`src/migrations/phase_security_level3.sql` でキー単位に追加済み。コメント: 「空=テナント設定に委譲」） | 第 2 のオリジン許可リスト |
+| **キーのドメイン束縛** | **`tenants.allowed_origins TEXT[]`**（テナント作成時に発行 origin を直接書く）。**★2026-09-04 実装時に訂正: 当初案の `tenant_api_keys.allowed_origins TEXT[]`（`phase_security_level3.sql`）はキー単位に列こそ存在するが、`originCheck.ts` を含めコード全体のどこからも SELECT されておらず enforcement に効いていなかった**。実際の enforcement は常にテナント単位（`tenants.allowed_origins`）だった | 第 2 のオリジン許可リスト |
 | Origin 検証 | 既存 `src/api/middleware/originCheck.ts` | **`src/middleware/` にも別のミドルウェア群があるので取り違えない**（`inputSanitizer` / `promptFirewall` 等はそちら） |
-| キーのスコープ列 | `tenant_api_keys` への列追加。`src/api/admin/tenants/migration.sql` と同じ作法（`ADD COLUMN IF NOT EXISTS` + `COMMENT ON COLUMN`） | 第 2 のキーテーブル |
+| キーのスコープ限定 | **追加実装は不要**（実装時に判明）。`/v1/admin/*` は本番で `x-api-key` を一切受け付けない（`supabaseAuthMiddleware` の `x-api-key` 分岐は `ALLOW_INSECURE_DEV_AUTH` の dev バイパスのみ）ため、`tenant_api_keys` から発行した widget キーは構造的に管理 API へ到達できない。**列を追加する必要はなかった** | 第 2 のキーテーブル・不要な列追加 |
 | **メール送信** | 既存 `supabaseAdmin.auth.admin.inviteUserByEmail`（`src/api/admin/tenants/routes.ts:1300` の招待経路）。**専用のメール基盤はこのリポジトリに存在しない** | nodemailer / SendGrid / Resend 等の新規導入 |
 | テナント・運用者への通知 | `src/lib/notifications.ts` の `createNotification`（`recipientRole` / `recipientTenantId` を必ず添える） | 新しい通知テーブル |
 | 原価の集計・アラート | 既存 `src/lib/billing/tenantEconomics.ts` | 新しい計測基盤（禁止32） |
