@@ -137,6 +137,14 @@ test.describe('Widget — 音声リンク型チャットUI(avatarMuteBtn)', () =
         const host = document.getElementById('faq-chat-widget-host') as HTMLElement | null;
         host?.shadowRoot?.querySelector('.panel')?.classList.add('avatar-active');
       });
+      // .messages には opacity 0.2s のtransitionが付いている(public/widget.js:861)。
+      // クラス付与直後は遷移中でopacityがまだ0に達していないため、実際に0になるまで待つ
+      // (固定sleepではなく実測でポーリングすることで、CI側の実行速度差に依存しない)。
+      await page.waitForFunction(() => {
+        const host = document.getElementById('faq-chat-widget-host') as HTMLElement | null;
+        const messages = host?.shadowRoot?.querySelector('.messages') as HTMLElement | null;
+        return !!messages && getComputedStyle(messages).opacity === '0';
+      }, { timeout: 2000 });
       const afterBoth = await getPanelMessagesState(page);
       expect(afterBoth.messagesVisuallyHidden).toBe(true);
     });
@@ -164,6 +172,12 @@ test.describe('Widget — 音声リンク型チャットUI(avatarMuteBtn)', () =
         panel?.classList.add('avatar-active');
         panel?.classList.add('history-hidden');
       });
+      // opacity 0.2s のtransitionが完了するまで待つ(上のテストと同じ理由)。
+      await page.waitForFunction(() => {
+        const host = document.getElementById('faq-chat-widget-host') as HTMLElement | null;
+        const messages = host?.shadowRoot?.querySelector('.messages') as HTMLElement | null;
+        return !!messages && getComputedStyle(messages).opacity === '0';
+      }, { timeout: 2000 });
 
       const state = await getPanelMessagesState(page);
       expect(state.messagesVisuallyHidden).toBe(true); // 前提: 履歴自体は隠れている
