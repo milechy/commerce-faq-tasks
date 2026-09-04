@@ -28,6 +28,8 @@ export type UpsellProposal = UpsellProposalRenderable | UpsellProposalUnrenderab
 
 export interface UpsellProposalsResponse {
   proposals: UpsellProposal[];
+  /** true なら上限件数(MAX_UPSELL_PROPOSALS_PER_REQUEST)で切られている。黙って一部だけ返さない。 */
+  truncated: boolean;
 }
 
 function isFiniteAndString(v: unknown): v is string {
@@ -77,5 +79,8 @@ export function parseUpsellProposalsResponse(input: unknown): UpsellProposalsRes
   if (!Array.isArray(d["proposals"])) {
     throw new Error("upsell-proposals: proposals が配列ではありません");
   }
-  return { proposals: d["proposals"].map((p, i) => parseOne(p, i)) };
+  return {
+    proposals: d["proposals"].map((p, i) => parseOne(p, i)),
+    truncated: d["truncated"] === true,
+  };
 }

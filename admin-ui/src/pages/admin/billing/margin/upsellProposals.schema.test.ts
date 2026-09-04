@@ -51,10 +51,20 @@ describe('parseUpsellProposalsResponse', () => {
   });
 
   it('空配列でも正常に処理する', () => {
-    expect(parseUpsellProposalsResponse({ proposals: [] })).toEqual({ proposals: [] });
+    expect(parseUpsellProposalsResponse({ proposals: [] })).toEqual({ proposals: [], truncated: false });
   });
 
   it('オブジェクトでない入力は throw', () => {
     expect(() => parseUpsellProposalsResponse(null)).toThrow();
+  });
+
+  it('truncated:true をそのまま伝える(P1a: 上限に当たったことを黙って落とさない)', () => {
+    const r = parseUpsellProposalsResponse({ proposals: [], truncated: true });
+    expect(r.truncated).toBe(true);
+  });
+
+  it('truncated が欠落・非真偽値なら false に倒す(0にはしないが、暴走UIも作らない)', () => {
+    expect(parseUpsellProposalsResponse({ proposals: [] }).truncated).toBe(false);
+    expect(parseUpsellProposalsResponse({ proposals: [], truncated: 'yes' }).truncated).toBe(false);
   });
 });
