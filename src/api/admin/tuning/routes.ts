@@ -5,7 +5,7 @@
 import { GPT_OSS_120B, groqReasoningParams } from '../../../config/groqModels';
 import type { Express, Request, Response } from "express";
 import type { AuthedReq } from "../../middleware/roleAuth";
-import { roleAuthMiddleware } from "../../middleware/roleAuth";
+import { roleAuthMiddleware, requireRole } from "../../middleware/roleAuth";
 import { z } from "zod";
 import { supabaseAuthMiddleware } from "../../../admin/http/supabaseAuthMiddleware";
 import {
@@ -271,15 +271,10 @@ export function registerTuningRoutes(app: Express): void {
 
   // ★super_admin 限定★ 原価・マージン倍率・粗利を同じ応答に含むため、
   // テナントには絶対に出さない(costCalculator.ts の原価開示方針 H-10)。
-  function requireSuperAdminForUpsell(req: Request, res: Response, next: () => void): void {
-    const su = (req as AuthedReq).supabaseUser;
-    const role = su?.app_metadata?.role;
-    if (role !== "super_admin") {
-      res.status(403).json({ error: "forbidden", message: "この操作はスーパー管理者のみ実行できます" });
-      return;
-    }
-    next();
-  }
+  // roleAuthMiddleware が req.supabaseUser から req.user.role を既に解決している
+  // (未知ロールは"anonymous"に正規化済み)ため、req.supabaseUser を直接読む
+  // 独自実装は持たず、既存の requireRole に合わせる。
+  const requireSuperAdminForUpsell = requireRole("super_admin");
 
   // -----------------------------------------------------------------------
   // GET /v1/admin/upsell-proposals
