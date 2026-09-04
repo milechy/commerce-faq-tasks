@@ -71,6 +71,7 @@ import { assertInternalSecretConfigured } from "./lib/startup/internalSecretGuar
 import { assertAuthSecretsConfigured } from "./lib/startup/authSecretsGuard";
 import { registerWidgetRoutes } from "./api/widget/routes";
 import { registerWpProvisionRoutes } from "./api/widget/wpProvisionRoutes";
+import { registerWpSettingsRoutes } from "./api/widget/wpSettingsRoutes";
 import { registerAuthRoutes } from "./api/auth/routes";
 import { registerLiveKitTokenRoutes } from "./api/avatar/livekitTokenRoutes";
 import { registerAnamRoutes } from "./api/avatar/anamRoutes";
@@ -745,6 +746,10 @@ registerWidgetRoutes(app, db);
 // registerWpProvisionRoutes 内の requireDb が 503 を返す(registerWidgetRoutes の
 // DB未接続時フォールバックとは異なり、静的版へのリダイレクト先が無いため)。
 registerWpProvisionRoutes(app, db);
+
+// WordPressプラグイン計画 WP-13: 設定の読み書きAPI(D9/§13.2)。
+// 真実は常にR2C側DBにあり、WPは遠隔操作であって権威ではない。
+registerWpSettingsRoutes(app, db);
 
 // Phase55: 行動イベント受信 API (Widget → Server)
 if (db) registerEventRoutes(app, apiStack, db);

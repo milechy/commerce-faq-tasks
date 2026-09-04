@@ -115,7 +115,10 @@ function blockEnterpriseSelfUpgrade(plan: string | undefined, res: Response): bo
 // 許可オリジンの検証。super_admin用(updateTenantSchema)と client_admin 自己申告用
 // (PATCH /v1/admin/my-tenant)で同一インスタンスを共有し、片方だけ緩いという事故を防ぐ。
 // 判定本体は originCheck.ts の isValidOriginPattern に置き、照合ロジックと同じ定義を使う。
-const allowedOriginsSchema = z
+// export: WP-13(src/api/widget/wpSettingsRoutes.ts)が同一インスタンスを再利用する
+// (WordPressプラグインからの入力にも super_admin/client_admin と同じ検証を通すため。
+// 第3の緩いバリデーションを作らない)。
+export const allowedOriginsSchema = z
   .array(
     z
       .string()
@@ -132,7 +135,8 @@ const allowedOriginsSchema = z
 // 状態を作らない)で単一インスタンスを共有する。判定本体は isValidExcludedPagePattern
 // (src/lib/excludedPagePattern.ts)に置き、チャットツール側(actionExecutor.ts)とも
 // 同じ定義を使う(allowed_originsのisValidOriginPatternと同じパターン)。
-const excludedPagePatternsSchema = z
+// export: WP-13(src/api/widget/wpSettingsRoutes.ts)が同一インスタンスを再利用する(上記と同じ理由)。
+export const excludedPagePatternsSchema = z
   .array(
     z
       .string()
