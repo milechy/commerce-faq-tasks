@@ -164,7 +164,18 @@ export async function countFreeAdBillableRequests(
  * 可用性の話であり、billing系の一時的な障害(pool未初期化・DB瞬断)で
  * 全テナントのチャットが止まるほうが実害が大きい。DB接続自体の障害時は
  * queryTenantPlan 内部のcatchで既に free_ad にfail-safeされる(意図どおり)ため、
- * ここで追加で捕まえるのは getPool() 自体が投げるケース(未初期化)のみ。
+ * plan取得・pool初期化のtry/catchで追加で捕まえるのは getPool() 自体が
+ * 投げるケース(未初期化)のみ。
+ *
+ * ★会話ベース集計とP0-4バックストップは互いに独立して評価する(2026-09-04是正)★
+ * 以前は2つの集計を同一try/catchで実行しており、会話ベース集計
+ * (countFreeAdBillableConversations)が例外を投げると、本来「session_idを
+ * 固定した回避」を塞ぐために追加したはずのバックストップ
+ * (countFreeAdBillableRequests)まで丸ごと評価されずにfail-openしていた。
+ * 典型例: migration_usage_logs_session_id が未適用の環境で会話ベース集計が
+ * 42703(undefined_column)を投げると、上限判定そのものが無条件で無効化される
+ * (GID 1217860595282376)。会話ベース集計の失敗はログに残した上でバックストップの
+ * 評価へ進み、バックストップ自体が失敗した場合のみ最終的にfail-openとする。
  *
  * 数え方は「このリクエストの前に何件あったか」。trackUsage は setImmediate の
  * fire-and-forget（本関数の呼び出し時点ではまだ当該行がINSERTされていない）ため、
@@ -186,27 +197,50 @@ async function isFreeAdQuotaExceededForTenant(
   // undefined のときのみ内部で取得する(既存の単独呼び出しとの後方互換)。
   preResolvedPlan?: string | null,
 ): Promise<boolean> {
+  let pool: ReturnType<typeof getPool>;
   try {
     const plan = preResolvedPlan !== undefined ? preResolvedPlan : await getTenantPlan(tenantId);
     if (plan !== "free_ad" && !forceCap) return false;
+    pool = getPool();
+  } catch (err) {
+    logger.warn({ tenantId, err }, "chat.request.free_ad_quota_check_failed");
+    return false;
+  }
 
-    const { monthStart, monthEnd } = getMonthRangeJst(now);
-    const pool = getPool();
+  const { monthStart, monthEnd } = getMonthRangeJst(now);
+
+  try {
     const currentMonthConversationCount = await countFreeAdBillableConversations(
       pool, tenantId, monthStart, monthEnd,
     );
     if (isFreeAdMonthlyQuotaExceeded(currentMonthConversationCount)) return true;
+  } catch (err) {
+    // 42703(undefined_column): migration未適用でこの集計自体が成立しない状態。
+    // 「上限に達していない」のではなく「判定できていない」ため、一過性の
+    // DB瞬断とは区別してerrorで出す(禁止20: 未適用と上限未到達を同じ挙動で
+    // 表現しない)。会話ベースの判定は諦めるが、下のバックストップは続けて
+    // 評価する(このtry/catchで打ち切らない)。
+    const pgErrorCode = (err as { code?: string } | null | undefined)?.code;
+    if (pgErrorCode === "42703") {
+      logger.error(
+        { tenantId, err },
+        "chat.request.free_ad_conversation_count_schema_missing"
+      );
+    } else {
+      logger.warn({ tenantId, err }, "chat.request.free_ad_conversation_count_failed");
+    }
+  }
 
-    // P0-4バックストップ: 会話ベースの上限をすり抜ける単発リクエストの
-    // 連発を、生リクエスト数の絶対上限で塞ぐ(countFreeAdBillableRequests
-    // のコメント参照)。既に会話ベースで上限超過なら、この追加クエリは不要
-    // なので上のearly returnで打ち切る。
+  // P0-4バックストップ: 会話ベースの上限をすり抜ける単発リクエストの連発、
+  // および直上の会話ベース集計そのものが失敗した場合の両方に対する、生
+  // リクエスト数の絶対上限。会話ベース集計の成否に関わらず必ず評価する。
+  try {
     const currentMonthRequestCount = await countFreeAdBillableRequests(
       pool, tenantId, monthStart, monthEnd,
     );
     return isFreeAdMonthlyQuotaExceeded(currentMonthRequestCount, FREE_AD_MONTHLY_REQUEST_LIMIT);
   } catch (err) {
-    logger.warn({ tenantId, err }, "chat.request.free_ad_quota_check_failed");
+    logger.warn({ tenantId, err }, "chat.request.free_ad_request_count_failed");
     return false;
   }
 }

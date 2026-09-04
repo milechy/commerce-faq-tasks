@@ -244,6 +244,41 @@ describe("POST /api/chat — free_ad プランの月次上限", () => {
     expect(mockRunDialogTurn).toHaveBeenCalledTimes(1);
   });
 
+  // GID 1217860595282376是正: 会話ベース集計(1本目)が例外を投げても、
+  // P0-4バックストップ(2本目)は同一try/catchに巻き込まれず独立して評価される。
+  // 以前は1本目の例外がバックストップごと無効化していた(migration未適用時に
+  // 上限判定そのものが丸ごと外れる退行)。
+  it("会話ベース集計(1本目)が例外を投げても、バックストップ(2本目)は独立して評価され、上限未満なら通る", async () => {
+    mockGetTenantPlan.mockResolvedValue("free_ad");
+    mockPoolQuery
+      .mockRejectedValueOnce(Object.assign(new Error("column \"session_id\" does not exist"), { code: "42703" }))
+      .mockResolvedValueOnce(countRow(5)); // 生リクエスト数: 上限未満
+
+    const res = await request(makeApp())
+      .post("/api/chat")
+      .send({ message: "こんにちは" });
+
+    expect(res.status).toBe(200);
+    expect(mockPoolQuery).toHaveBeenCalledTimes(2);
+    expect(mockRunDialogTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("会話ベース集計(1本目)が例外を投げても、バックストップ(2本目)が上限以上なら403で止まる", async () => {
+    mockGetTenantPlan.mockResolvedValue("free_ad");
+    mockPoolQuery
+      .mockRejectedValueOnce(Object.assign(new Error("column \"session_id\" does not exist"), { code: "42703" }))
+      .mockResolvedValueOnce(countRow(1000)); // 生リクエスト数: 上限ちょうど
+
+    const res = await request(makeApp())
+      .post("/api/chat")
+      .send({ message: "こんにちは" });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("plan_upgrade_required");
+    expect(mockPoolQuery).toHaveBeenCalledTimes(2);
+    expect(mockRunDialogTurn).not.toHaveBeenCalled();
+  });
+
   it("異常系(fail-open): getTenantPlanが例外を投げてもチャットは処理を続ける(全テナント停止を避ける)", async () => {
     mockGetTenantPlan.mockRejectedValue(new Error("pool not initialized"));
 
