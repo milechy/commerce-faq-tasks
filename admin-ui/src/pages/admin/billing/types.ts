@@ -95,7 +95,13 @@ export interface BillingQuota {
     overageMinutes: number;
   };
   /** 管理AIへの相談(Copilot UI)。単位は相談件数((session_id, JST暦日)のDISTINCT)。 */
-  admin: {
+  /**
+   * ★optional である理由★ admin-ui(Cloudflare Pages)は main への push で自動配信され、
+   * バックエンド(VPS)のデプロイは常にその後になる。その窓ではこのフィールドを持たない
+   * 旧レスポンスが返るため、UI 側は「無い」を許容し、無いときは管理AIの表示を出さない
+   * (「0件」と描くと利用実績を誤って伝える)。バックエンドの契約では必須。
+   */
+  admin?: {
     used: number;
     /** 込み枠(相談件数)。null=このプランに込み枠という概念が無い。 */
     included: number | null;
@@ -107,10 +113,10 @@ export interface BillingQuota {
     limit: number;
     remaining: number;
     /** free_ad の管理AI月次上限の当月消費件数。 */
-    adminUsed: number;
+    adminUsed?: number;
     /** free_ad の管理AI月次上限。 */
-    adminLimit: number;
+    adminLimit?: number;
     /** 上限までの残数。 */
-    adminRemaining: number;
+    adminRemaining?: number;
   } | null;
 }

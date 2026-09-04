@@ -282,18 +282,24 @@ export type BillingSummaryAgentActionCard = {
     plan: string | null;
     text: { used: number; included: number | null; overage: number };
     avatar: { usedMinutes: number; includedMinutes: number | null; overageMinutes: number };
-    /** 管理AIへの相談(Copilot UI)。単位は相談件数((session_id, JST暦日)のDISTINCT)。 */
-    admin: { used: number; included: number | null; overage: number };
+    /**
+     * 管理AIへの相談(Copilot UI)。単位は相談件数((session_id, JST暦日)のDISTINCT)。
+     * ★optional である理由★ admin-ui(Cloudflare Pages)は main への push で自動配信され、
+     * バックエンド(VPS)のデプロイは常にその後になる。その窓では admin を持たない旧レスポンスが
+     * 返るため、UI 側は「無い」を許容し、無いときは管理AIの表示を出さない
+     * (「0件」と描くと利用実績を誤って伝える)。サーバ側の契約では必須。
+     */
+    admin?: { used: number; included: number | null; overage: number };
     freeAd: {
       used: number;
       limit: number;
       remaining: number;
-      /** free_ad の管理AI月次上限の当月消費件数。 */
-      adminUsed: number;
+      /** free_ad の管理AI月次上限の当月消費件数。上と同じ理由で optional。 */
+      adminUsed?: number;
       /** free_ad の管理AI月次上限。 */
-      adminLimit: number;
+      adminLimit?: number;
       /** 上限までの残数。 */
-      adminRemaining: number;
+      adminRemaining?: number;
     } | null;
   } | null;
 };
