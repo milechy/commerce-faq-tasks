@@ -24,6 +24,7 @@ import {
   Sparkles,
   Menu,
   BookOpenCheck,
+  Coins,
 } from "lucide-react";
 import { useAuth } from "../auth/useAuth";
 import { NotificationBell } from "./common/NotificationBell";
@@ -98,6 +99,9 @@ const SUPER_ADMIN_SECTION: NavSection = {
   superAdminOnly: true,
   items: [
     { label: "テナント管理", path: "/admin/tenants", icon: Building2 },
+    // 全テナント横断の採算判断。superAdminOnly はセクション側で既にフィルタされる
+    // ため個別には付けない。
+    { label: "テナント別粗利", path: "/admin/billing/margin", icon: Coins },
     // GID 1217968284736841 (T9): 著者(赤嶺氏)専用画面。super_admin全体には無関係の
     // 機能だが、対象ユーザーがsuper_adminのため配置場所は他と揃える
     { label: "あなたの教えの実践", path: "/admin/author-loop", icon: BookOpenCheck },

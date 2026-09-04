@@ -11,6 +11,9 @@ import { createRoutesFromElements, matchRoutes } from "react-router-dom";
 import { ADMIN_ROUTES } from "./App";
 import TenantKnowledgePage from "./pages/admin/knowledge/[tenantId]";
 import KnowledgeIndexPage from "./pages/admin/knowledge/index";
+import MarginDashboardPage from "./pages/admin/billing/margin/index";
+import BillingPage from "./pages/admin/billing/index";
+import { SuperAdminRoute, AdminRoute } from "./components/RoleGuard";
 
 const routes = createRoutesFromElements(ADMIN_ROUTES);
 
@@ -58,5 +61,34 @@ describe("ADMIN_ROUTES — /admin/knowledge/*", () => {
   it("/admin/knowledge/booksxyz のような別名は :tenantId に解決される(booksだけの特別扱いではない)", () => {
     const match = resolve("/admin/knowledge/booksxyz");
     expect(match?.route.path).toBe("/admin/knowledge/:tenantId");
+  });
+});
+
+describe("ADMIN_ROUTES — /admin/billing/*", () => {
+  it("/admin/billing/margin は MarginDashboardPage に解決される", () => {
+    const match = resolve("/admin/billing/margin");
+    const inner = (match?.route.element as ReactElement<{ children?: ReactElement }>)?.props?.children;
+    expect(inner?.type).toBe(MarginDashboardPage);
+  });
+
+  it("★/admin/billing/margin は SuperAdminRoute でラップされている★", () => {
+    // 原価とマージン倍率を同時に描画する画面なので、ロールガードが外れると
+    // テナントに粗利率がそのまま漏れる。ガード漏れをここで捕まえる。
+    const match = resolve("/admin/billing/margin");
+    expect((match?.route.element as ReactElement)?.type).toBe(SuperAdminRoute);
+  });
+
+  it("親の /admin/billing は従来どおり AdminRoute(両ロール可)のまま", () => {
+    // 子だけ super_admin 限定にしたことで、親のロールを巻き添えで狭めていないこと。
+    const match = resolve("/admin/billing");
+    expect((match?.route.element as ReactElement)?.type).toBe(AdminRoute);
+    const inner = (match?.route.element as ReactElement<{ children?: ReactElement }>)?.props?.children;
+    expect(inner?.type).toBe(BillingPage);
+  });
+
+  it("/admin/billing/margin が親ルートに食われていない", () => {
+    // /admin/billing に動的セグメントを足したときに margin が飲み込まれると、
+    // 粗利画面が黙って請求画面になる。パスの一致を明示的に固定する。
+    expect(resolve("/admin/billing/margin")?.route.path).toBe("/admin/billing/margin");
   });
 });
