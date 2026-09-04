@@ -31,6 +31,7 @@ import { BillingMainContent } from "./BillingMainContent";
 import { AdminBillingModals } from "./AdminBillingModals";
 import { PlanSection } from "./PlanSection";
 import { TenantUpsellNotice } from "./TenantUpsellNotice";
+import { HermesConsentUpsellNotice } from "./HermesConsentUpsellNotice";
 import { QuotaSection } from "./QuotaSection";
 
 // ─── メインページ ─────────────────────────────────────────
@@ -796,6 +797,11 @@ export default function BillingPage() {
           順に並べたいが、コンポーネントの登場順は既存どおり PlanSection が先の
           ままなので、提案は PlanSection の直前に置いて先に目に入るようにする。 */}
       {!isSuperAdmin && <TenantUpsellNotice />}
+
+      {/* A2A/Hermes共有学習プールへの参加訴求(2026-09-05新設)。プランアップセルと
+          同じ「導線」の位置づけで、未同意テナントへ give-to-get の魅力を伝える。
+          ★super_admin には出さない★(TenantUpsellNoticeと同じ方針)。 */}
+      {!isSuperAdmin && <HermesConsentUpsellNotice />}
 
       {/* プラン変更（テナント自身の操作。super_admin は /admin/tenants/:id 側で行う） */}
       <PlanSection

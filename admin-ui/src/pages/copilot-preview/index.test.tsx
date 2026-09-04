@@ -5259,7 +5259,13 @@ describe("CopilotPreviewPage — 指示ルールの初回紹介(P6-1)", () => {
     vi.mocked(authFetch).mockImplementation((url: string) => {
       if (isBadgeUrl(url)) return mockEmptyBadges();
       if (String(url).includes("/v1/admin/my-tenant")) {
-        return mockOk({ onboarding_stage: ALL_STAGES_COMPLETE });
+        // [A2A-marketing] share=true(同意済み)にしておく — このdescribeは指示ルール
+        // 紹介(P6-1)の検証が目的で、Hermes同意勧誘チップの検証ではないため、
+        // 勧誘チップが割り込んで週次ブリーフィングへ進まなくなるのを防ぐ。
+        return mockOk({
+          onboarding_stage: ALL_STAGES_COMPLETE,
+          features: { learning: { learn: true, share: true } },
+        });
       }
       return mockOk({ reply: "今週も順調です。", actions: [] });
     });
@@ -5302,7 +5308,10 @@ describe("CopilotPreviewPage — 指示ルールの初回紹介(P6-1)", () => {
     vi.mocked(authFetch).mockImplementation((url: string) => {
       if (isBadgeUrl(url)) return mockEmptyBadges();
       if (String(url).includes("/v1/admin/tenants/tenant-preview")) {
-        return mockOk({ onboarding_stage: ALL_STAGES_COMPLETE });
+        return mockOk({
+          onboarding_stage: ALL_STAGES_COMPLETE,
+          features: { learning: { learn: true, share: true } },
+        });
       }
       return mockOk({ reply: "今週も順調です。", actions: [] });
     });
@@ -5313,6 +5322,135 @@ describe("CopilotPreviewPage — 指示ルールの初回紹介(P6-1)", () => {
     expect(window.localStorage.getItem("r2c_tuning_rule_intro_shown_tenant-preview")).toBe("true");
     // client_admin(tenant-a)側のフラグには影響しない
     expect(window.localStorage.getItem("r2c_tuning_rule_intro_shown_tenant-a")).toBeNull();
+  });
+});
+
+// [A2A-marketing] 共有学習プール(Hermes)への参加勧誘チップ。
+// プランアップセル(TenantUpsellNotice)と同じ「導線」の位置づけで、CopilotUI側にも
+// give-to-getの魅力を能動的に伝える。指示ルール紹介(P6-1)と同じセッション開始フックに
+// 相乗りするため、指示ルール紹介が「既に紹介済み」の状態を前提に検証する
+// (未紹介ならそちらが先に出て、このターンには出ない — 1ターンに複数提案を重ねない設計)。
+describe("CopilotPreviewPage — 共有学習プール(Hermes)への参加勧誘", () => {
+  const ALL_STAGES_COMPLETE = {
+    industryAnswered: true,
+    knowledgePublished: true,
+    widgetInstalled: true,
+    firstConversation: true,
+  };
+
+  function installFakeLocalStorage() {
+    const store = new Map<string, string>();
+    Object.defineProperty(window, "localStorage", {
+      configurable: true,
+      value: {
+        getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
+        setItem: (k: string, v: string) => void store.set(k, v),
+        removeItem: (k: string) => void store.delete(k),
+        clear: () => void store.clear(),
+      },
+    });
+  }
+
+  beforeEach(() => {
+    installFakeLocalStorage();
+    // 指示ルール紹介は「既に紹介済み」にしておく(本テストの対象外のため)。
+    window.localStorage.setItem("r2c_tuning_rule_intro_shown_tenant-a", "true");
+    window.localStorage.setItem("r2c_tuning_rule_intro_shown_tenant-preview", "true");
+    vi.mocked(authFetch).mockReset();
+    vi.mocked(restoreChatSession).mockReturnValue(null);
+  });
+
+  it("share:false のテナントには、週次ブリーフィングの代わりに参加勧誘チップが出る", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({
+          onboarding_stage: ALL_STAGES_COMPLETE,
+          features: { learning: { learn: true, share: false } },
+        });
+      }
+      return mockOk({ reply: "今週も順調です。", actions: [] });
+    });
+
+    renderPage();
+
+    expect(await screen.findByText(/他社の接客ノウハウを、無料でAIに取り込みませんか/)).toBeTruthy();
+    expect(screen.getByText("🌐 参加する")).toBeTruthy();
+    expect(screen.getByText("あとで")).toBeTruthy();
+    // 通常の週次ブリーフィングには進まない(このターンでは agent/chat を呼ばない)
+    const urls = vi.mocked(authFetch).mock.calls.map((c) => String(c[0]));
+    expect(urls.some((u) => u.includes("/v1/admin/agent/chat"))).toBe(false);
+  });
+
+  it("share:true のテナントには勧誘チップは出ず、通常どおり週次ブリーフィングが走る", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({
+          onboarding_stage: ALL_STAGES_COMPLETE,
+          features: { learning: { learn: true, share: true } },
+        });
+      }
+      return mockOk({ reply: "今週も順調です。", actions: [] });
+    });
+
+    renderPage();
+
+    expect(await screen.findByText("今週も順調です。")).toBeTruthy();
+    expect(screen.queryByText(/他社の接客ノウハウを、無料でAIに取り込みませんか/)).toBeNull();
+  });
+
+  it("旧フラグ hermes_raw_data_consent が無い(未設定)テナントにも勧誘チップが出る(後方互換のfail-safe側)", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_stage: ALL_STAGES_COMPLETE, features: {} });
+      }
+      return mockOk({ reply: "今週も順調です。", actions: [] });
+    });
+
+    renderPage();
+
+    expect(await screen.findByText(/他社の接客ノウハウを、無料でAIに取り込みませんか/)).toBeTruthy();
+  });
+
+  it("「🌐 参加する」を押すと、共有への同意をONにする自然文が実送信される", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({
+          onboarding_stage: ALL_STAGES_COMPLETE,
+          features: { learning: { learn: true, share: false } },
+        });
+      }
+      return mockOk({ reply: "承知しました。", actions: [] });
+    });
+
+    renderPage();
+    const chip = await screen.findByRole("button", { name: "🌐 参加する" });
+
+    fireEvent.click(chip);
+
+    await waitFor(() =>
+      expect(screen.getByText("学習データの共有(share)をONにしてください")).toBeTruthy(),
+    );
+  });
+
+  it("previewMode中のsuper_adminでも、対象テナントがshare:falseなら勧誘チップが出る", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/tenants/tenant-preview")) {
+        return mockOk({
+          onboarding_stage: ALL_STAGES_COMPLETE,
+          features: { learning: { learn: true, share: false } },
+        });
+      }
+      return mockOk({ reply: "今週も順調です。", actions: [] });
+    });
+
+    renderPage(SUPER_ADMIN_IN_PREVIEW);
+
+    expect(await screen.findByText(/他社の接客ノウハウを、無料でAIに取り込みませんか/)).toBeTruthy();
   });
 });
 

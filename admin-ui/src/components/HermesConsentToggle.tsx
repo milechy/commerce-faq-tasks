@@ -32,11 +32,7 @@
 import { useEffect, useState } from "react";
 import { authFetch, API_BASE } from "../lib/api";
 import { useLang } from "../i18n/LangContext";
-
-interface LearningConsent {
-  learn: boolean;
-  share: boolean;
-}
+import { resolveShare, type LearningConsent } from "../lib/hermesShare";
 
 interface TenantFeatures {
   avatar: boolean;
@@ -49,13 +45,6 @@ interface TenantFeatures {
 }
 
 type Plan = "free_ad" | "starter" | "standard" | "growth" | "enterprise" | null;
-
-/** features.learning があればそちらを優先し、無ければ旧フラグから解決する(後方互換)。 */
-function resolveShare(features: TenantFeatures | null): boolean {
-  if (!features) return false;
-  if (features.learning) return features.learning.share;
-  return features.hermes_raw_data_consent === true;
-}
 
 interface HermesConsentToggleProps {
   // super_adminの「クライアントビューで見る」プレビュー中のテナントID。

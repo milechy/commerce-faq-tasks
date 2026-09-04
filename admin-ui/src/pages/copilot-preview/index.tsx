@@ -25,6 +25,7 @@ import {
 } from "../../lib/chatSessionStore";
 import { priorityToTier } from "../../lib/tuningPriority";
 import { hasShownTuningRuleIntro, markTuningRuleIntroShown } from "../../lib/tuningRuleIntro";
+import { resolveShare, type TenantFeaturesLike } from "../../lib/hermesShare";
 import {
   AGENT_CHAT_AUTH_REQUIRED_MESSAGE,
   AGENT_CHAT_HISTORY_MAX_ENTRIES,
@@ -1269,6 +1270,9 @@ export default function CopilotPreviewPage() {
     opts: { hasRestoredConversation: boolean; loadingText: string; force?: boolean; fromLegacy?: boolean },
   ) => {
     let stage: OnboardingStageFlags | null = null;
+    // [A2A-marketing] 同意勧誘チップ(下記)の判定に使う。onboarding_stageと
+    // 同じレスポンスに features が乗っているため、フェッチを増やさず相乗りする。
+    let learningFeatures: TenantFeaturesLike | null = null;
     // Asana 1217040568430944(P7): super_adminのクライアントビュー(previewMode)からも
     // オンボーディングの「次の一手」提示を使えるようにする(docs/ONBOARDING_FIRST_LOGIN.md 決定D)。
     // previewMode中はJWTのtenant_idを見るmy-tenantではなくtargetTenantId明示の
@@ -1277,14 +1281,22 @@ export default function CopilotPreviewPage() {
       if (previewMode && previewTenantId) {
         const res = await authFetch(`${API_BASE}/v1/admin/tenants/${previewTenantId}`);
         if (res.ok) {
-          const data = (await res.json()) as { onboarding_stage?: OnboardingStageFlags };
+          const data = (await res.json()) as {
+            onboarding_stage?: OnboardingStageFlags;
+            features?: TenantFeaturesLike;
+          };
           stage = data.onboarding_stage ?? null;
+          learningFeatures = data.features ?? null;
         }
       } else if (!previewMode && user?.role === "client_admin") {
         const res = await authFetch(`${API_BASE}/v1/admin/my-tenant`);
         if (res.ok) {
-          const data = (await res.json()) as { onboarding_stage?: OnboardingStageFlags };
+          const data = (await res.json()) as {
+            onboarding_stage?: OnboardingStageFlags;
+            features?: TenantFeaturesLike;
+          };
           stage = data.onboarding_stage ?? null;
+          learningFeatures = data.features ?? null;
         }
       }
     } catch {
@@ -1316,6 +1328,23 @@ export default function CopilotPreviewPage() {
         "指示ルールも使えます。お客様への受け答えを1つずつAIチャットボットに教えられる機能です。最初のルールを作ってみますか？",
         [
           { label: "🎛️ 作ってみる", action: "__real:指示ルールを初めて作ります。何をどう伝えればいいか教えてください", tone: "primary" },
+          { label: "あとで", action: "__real:あとでにします", tone: "ghost" },
+        ],
+      ));
+      return;
+    }
+
+    // [A2A-marketing] 共有学習プール(Hermes)への参加勧誘。指示ルール紹介(直上)と
+    // 同じセッション開始時に出すと1ターンに2つ提案が重なるため、指示ルール紹介の
+    // 「あと」(=紹介済みで上のifを通過した回)にだけ出す。tuningRuleIntroと違い
+    // 「一度きり」の抑制フラグは持たない — share=false の間は毎セッション出続ける
+    // (現状の課題は導線の弱さで同意ゼロが続いていたこと。抑制すると同じ轍を踏む)。
+    // stage が無い(=super_adminの通常ダッシュボード等)場合は出さない。
+    if (stage && scopedTenantId && !resolveShare(learningFeatures)) {
+      push(say(
+        "🌐 他社の接客ノウハウを、無料でAIに取り込みませんか？\n会話データの共有にご協力いただくと、他社の会話から見つかった改善が「グローバルルール」として貴社のAIにも自動で反映されます。追加費用はかかりません。共有されるのは匿名化された会話ログ・行動データのみで、金額情報は含まれず、いつでもOFFに戻せます。",
+        [
+          { label: "🌐 参加する", action: "__real:学習データの共有(share)をONにしてください", tone: "primary" },
           { label: "あとで", action: "__real:あとでにします", tone: "ghost" },
         ],
       ));
