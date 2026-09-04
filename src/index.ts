@@ -123,12 +123,13 @@ app.locals.db = db;
 // ---------------------------------------------------------------------------
 // Seed tenant registry: env vars first, then DB (env takes precedence)
 // ---------------------------------------------------------------------------
+// seedTenantsFromEnv() は同期・即時完了するためここでよいが、DB側の読み込みは
+// startServer() 内で await し、app.listen() より前に完了させる(2026-09-04是正・
+// GID 1218171750803663)。以前はここでfire-and-forget(.catchのみ)していたため、
+// テナント登録が終わる前でもリクエストを受け付けられる構造になっており、
+// 起動直後の一過性の欠落(seedTenantsFromDB側の二重読み取りで別途対処)と
+// 組み合わさると、登録漏れテナントの認証が起動直後の窓の間だけ失敗し得た。
 seedTenantsFromEnv();
-if (db) {
-  seedTenantsFromDB(db, logger).catch((err) =>
-    logger.warn({ err }, "seedTenantsFromDB failed at startup")
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Global middleware (applied to ALL requests, order matters)
@@ -851,6 +852,15 @@ async function startServer() {
     warn: (msg) => logger.warn(msg),
     fatal: (msg) => logger.fatal(msg),
   });
+
+  // DB側のテナント登録(APIキー・プラン等)をリクエスト受付開始前に完了させる
+  // (2026-09-04是正・GID 1218171750803663)。以前はモジュール直下でfire-and-forget
+  // していたため、この完了を待たずにapp.listen()以降へ進んでいた。
+  if (db) {
+    await seedTenantsFromDB(db, logger).catch((err) => {
+      logger.warn({ err }, "seedTenantsFromDB failed at startup");
+    });
+  }
 
   const server = app.listen(port, () => {
     logger.info({ port, env: process.env.NODE_ENV }, "server listening");

@@ -616,9 +616,16 @@ describe("seedTenantsFromDB — 起動時のin-memory復元", () => {
   const fakePool = (rows: SeedRow[]) =>
     ({ query: jest.fn().mockResolvedValue({ rows, rowCount: rows.length }) }) as unknown as Parameters<typeof seedTenantsFromDB>[0];
 
+  // このdescribe配下の既存テストは全て retryDelayMs=0 で呼ぶ(二重読み取りの
+  // 待機時間をテストで待たない)。二重読み取り自体の挙動は専用のテストで検証する。
+  const seed = (
+    pool: Parameters<typeof seedTenantsFromDB>[0],
+    logger?: Parameters<typeof seedTenantsFromDB>[1],
+  ) => seedTenantsFromDB(pool, logger, 0);
+
   it("1テナントに複数のアクティブキーがある場合、全キーを復元する（再起動でローテーションキーが消えない）", async () => {
     const TENANT = "seed-multi-key-tenant";
-    await seedTenantsFromDB(
+    await seed(
       fakePool([
         row({ tenant_id: TENANT, key_hash: "seed-key-newest" }),
         row({ tenant_id: TENANT, key_hash: "seed-key-older" }),
@@ -634,7 +641,7 @@ describe("seedTenantsFromDB — 起動時のin-memory復元", () => {
 
   it("SQLの先頭行(ORDER BYで最新)が主キーになる — 復元後の主キーが非決定的にならない", async () => {
     const TENANT = "seed-primary-order-tenant";
-    await seedTenantsFromDB(
+    await seed(
       fakePool([
         row({ tenant_id: TENANT, key_hash: "seed-primary-expected" }),
         row({ tenant_id: TENANT, key_hash: "seed-primary-not-expected" }),
@@ -650,7 +657,7 @@ describe("seedTenantsFromDB — 起動時のin-memory復元", () => {
   // 同型のバグ)。fail-safeの落とし先が最も制限の強い free_ad になっていることを固定する。
   it("plan='free_ad'の行はそのままfree_adとして復元される（starterへ昇格しない）", async () => {
     const TENANT = "seed-free-ad-tenant";
-    await seedTenantsFromDB(
+    await seed(
       fakePool([row({ tenant_id: TENANT, key_hash: "seed-free-ad-key", plan: "free_ad" })])
     );
 
@@ -659,7 +666,7 @@ describe("seedTenantsFromDB — 起動時のin-memory復元", () => {
 
   it("未知のplan文字列は最も制限の強いfree_adへ倒れる（starterへ昇格しない）", async () => {
     const TENANT = "seed-unknown-plan-tenant";
-    await seedTenantsFromDB(
+    await seed(
       fakePool([row({ tenant_id: TENANT, key_hash: "seed-unknown-plan-key", plan: "typo-plan" })])
     );
 
@@ -668,7 +675,7 @@ describe("seedTenantsFromDB — 起動時のin-memory復元", () => {
 
   it("plan列がnull/未設定の行もfree_adへ倒れる", async () => {
     const TENANT = "seed-null-plan-tenant";
-    await seedTenantsFromDB(
+    await seed(
       fakePool([row({ tenant_id: TENANT, key_hash: "seed-null-plan-key", plan: null as unknown as string })])
     );
 
@@ -678,13 +685,13 @@ describe("seedTenantsFromDB — 起動時のin-memory復元", () => {
   it("既知の4値(free_ad/starter/growth/enterprise)はすべてそのまま復元される", async () => {
     for (const plan of ["free_ad", "starter", "growth", "enterprise"] as const) {
       const TENANT = `seed-plan-${plan}-tenant`;
-      await seedTenantsFromDB(fakePool([row({ tenant_id: TENANT, key_hash: `seed-${plan}-key`, plan })]));
+      await seed(fakePool([row({ tenant_id: TENANT, key_hash: `seed-${plan}-key`, plan })]));
       expect(getTenantConfig(TENANT)?.plan).toBe(plan);
     }
   });
 
   it("複数テナントを取り違えずに復元する（キーがテナント間で混ざらない）", async () => {
-    await seedTenantsFromDB(
+    await seed(
       fakePool([
         row({ tenant_id: "seed-tenant-a", key_hash: "seed-a-key1" }),
         row({ tenant_id: "seed-tenant-a", key_hash: "seed-a-key2" }),
@@ -699,7 +706,7 @@ describe("seedTenantsFromDB — 起動時のin-memory復元", () => {
 
   it("追加キーは行ごとの expires_at を保持する（期限切れの追加キーは復元後も認証できない）", async () => {
     const TENANT = "seed-expiry-tenant";
-    await seedTenantsFromDB(
+    await seed(
       fakePool([
         row({ tenant_id: TENANT, key_hash: "seed-expiry-primary" }),
         row({ tenant_id: TENANT, key_hash: "seed-expiry-valid", expires_at: new Date(Date.now() + 600_000).toISOString() }),
@@ -723,7 +730,7 @@ describe("seedTenantsFromDB — 起動時のin-memory復元", () => {
       enabled: true,
     });
 
-    await seedTenantsFromDB(
+    await seed(
       fakePool([
         row({ tenant_id: TENANT, key_hash: "db-key-should-be-ignored", name: "From DB", plan: "starter" }),
       ])
@@ -739,11 +746,80 @@ describe("seedTenantsFromDB — 起動時のin-memory復元", () => {
       query: jest.fn().mockRejectedValue(new Error("connection refused")),
     } as unknown as Parameters<typeof seedTenantsFromDB>[0];
 
-    await expect(seedTenantsFromDB(failingPool)).resolves.toBeUndefined();
+    await expect(seed(failingPool)).resolves.toBeUndefined();
   });
 
   it("0件でも例外を投げない", async () => {
-    await expect(seedTenantsFromDB(fakePool([]))).resolves.toBeUndefined();
+    await expect(seed(fakePool([]))).resolves.toBeUndefined();
+  });
+
+  // GID 1218171750803663是正: 2026-09-04に本番で「DBは正しいのに起動直後の
+  // 読み取りだけ件数が減る」事象が実測された。二重読み取りで多い方を採用し、
+  // 食い違いをerrorログに残すことを固定する。
+  describe("二重読み取り(2026-09-04是正)", () => {
+    /** 呼び出しごとに異なる行配列を返すフェイクpool(1回目と2回目で結果を変える) */
+    const flakyPool = (firstRows: SeedRow[], secondRows: SeedRow[]) => {
+      const query = jest
+        .fn()
+        .mockResolvedValueOnce({ rows: firstRows, rowCount: firstRows.length })
+        .mockResolvedValueOnce({ rows: secondRows, rowCount: secondRows.length });
+      return { query } as unknown as Parameters<typeof seedTenantsFromDB>[0];
+    };
+
+    it("1回目が少なく2回目が正しい件数なら、2回目(多い方)を採用して復元する", async () => {
+      const TENANT_A = "seed-flaky-tenant-a";
+      const TENANT_B = "seed-flaky-tenant-b";
+      const full = [
+        row({ tenant_id: TENANT_A, key_hash: "seed-flaky-a-key" }),
+        row({ tenant_id: TENANT_B, key_hash: "seed-flaky-b-key" }),
+      ];
+      const partial = [row({ tenant_id: TENANT_A, key_hash: "seed-flaky-a-key" })];
+
+      await seedTenantsFromDB(flakyPool(partial, full), undefined, 0);
+
+      expect(getTenantByApiKeyHash("seed-flaky-a-key")?.tenantId).toBe(TENANT_A);
+      expect(getTenantByApiKeyHash("seed-flaky-b-key")?.tenantId).toBe(TENANT_B);
+    });
+
+    it("1回目が正しく2回目が少ない件数でも、多い方(1回目)を採用して復元する", async () => {
+      const TENANT_A = "seed-flaky-reverse-tenant-a";
+      const TENANT_B = "seed-flaky-reverse-tenant-b";
+      const full = [
+        row({ tenant_id: TENANT_A, key_hash: "seed-flaky-reverse-a-key" }),
+        row({ tenant_id: TENANT_B, key_hash: "seed-flaky-reverse-b-key" }),
+      ];
+      const partial = [row({ tenant_id: TENANT_A, key_hash: "seed-flaky-reverse-a-key" })];
+
+      await seedTenantsFromDB(flakyPool(full, partial), undefined, 0);
+
+      expect(getTenantByApiKeyHash("seed-flaky-reverse-a-key")?.tenantId).toBe(TENANT_A);
+      expect(getTenantByApiKeyHash("seed-flaky-reverse-b-key")?.tenantId).toBe(TENANT_B);
+    });
+
+    it("2回の件数が食い違った場合、errorログに両方の件数を残す", async () => {
+      const errorSpy = jest.fn();
+      const testLogger = { warn: jest.fn(), info: jest.fn(), error: errorSpy } as unknown as Parameters<typeof seedTenantsFromDB>[1];
+      const TENANT = "seed-flaky-log-tenant";
+      const full = [row({ tenant_id: TENANT, key_hash: "seed-flaky-log-key" })];
+
+      await seedTenantsFromDB(flakyPool([], full), testLogger, 0);
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ firstCount: 0, secondCount: 1 }),
+        expect.stringContaining("食い違った")
+      );
+    });
+
+    it("2回とも同じ件数なら、errorログを出さない", async () => {
+      const errorSpy = jest.fn();
+      const testLogger = { warn: jest.fn(), info: jest.fn(), error: errorSpy } as unknown as Parameters<typeof seedTenantsFromDB>[1];
+      const TENANT = "seed-stable-log-tenant";
+      const rows = [row({ tenant_id: TENANT, key_hash: "seed-stable-log-key" })];
+
+      await seedTenantsFromDB(flakyPool(rows, rows), testLogger, 0);
+
+      expect(errorSpy).not.toHaveBeenCalled();
+    });
   });
 });
 

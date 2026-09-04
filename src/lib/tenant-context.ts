@@ -276,48 +276,78 @@ export function seedTenantsFromEnv(): void {
   }
 }
 
+type SeedTenantRow = {
+  tenant_id: string;
+  name: string;
+  plan: string;
+  is_active: boolean;
+  features: Record<string, boolean>;
+  allowed_origins: string[];
+  key_hash: string;
+  rate_limit: number | null;
+  expires_at: string | null;
+};
+
+/** seedTenantsFromDB の1回分の読み取り。テナント単位にまとめたMapを返す。 */
+async function fetchActiveTenantRows(pool: Pool): Promise<Map<string, SeedTenantRow[]>> {
+  const result = await pool.query<SeedTenantRow>(`
+    SELECT
+      t.id            AS tenant_id,
+      t.name,
+      t.plan,
+      t.is_active,
+      t.features,
+      t.allowed_origins,
+      k.key_hash,
+      k.expires_at,
+      NULL::int       AS rate_limit
+    FROM tenant_api_keys k
+    JOIN tenants t ON t.id = k.tenant_id
+    WHERE k.is_active = true
+      AND (k.expires_at IS NULL OR k.expires_at > NOW())
+      AND t.is_active = true
+    ORDER BY t.id, k.created_at DESC, k.key_hash
+  `);
+
+  // このSELECTは「アクティブなキー1本につき1行」を返すため、N本のキーを持つ
+  // テナントはN行に現れる。テナント単位にまとめてから登録する。
+  const rowsByTenant = new Map<string, SeedTenantRow[]>();
+  for (const row of result.rows) {
+    const rows = rowsByTenant.get(row.tenant_id);
+    if (rows) rows.push(row);
+    else rowsByTenant.set(row.tenant_id, [row]);
+  }
+  return rowsByTenant;
+}
+
 // ---------------------------------------------------------------------------
 // Seed from DB (tenant_api_keys + tenants JOIN) — call once at startup
 // ---------------------------------------------------------------------------
-export async function seedTenantsFromDB(pool: Pool, logger?: Logger): Promise<void> {
+/**
+ * @param retryDelayMs 2回目の読み取りまでの待機時間。テストから0を渡して
+ *   高速化できるようにしている（既定値はテストでの実待機を避けるため未指定時
+ *   のみ実際に使われる）。
+ */
+export async function seedTenantsFromDB(pool: Pool, logger?: Logger, retryDelayMs = 300): Promise<void> {
   try {
-    const result = await pool.query<{
-      tenant_id: string;
-      name: string;
-      plan: string;
-      is_active: boolean;
-      features: Record<string, boolean>;
-      allowed_origins: string[];
-      key_hash: string;
-      rate_limit: number | null;
-      expires_at: string | null;
-    }>(`
-      SELECT
-        t.id            AS tenant_id,
-        t.name,
-        t.plan,
-        t.is_active,
-        t.features,
-        t.allowed_origins,
-        k.key_hash,
-        k.expires_at,
-        NULL::int       AS rate_limit
-      FROM tenant_api_keys k
-      JOIN tenants t ON t.id = k.tenant_id
-      WHERE k.is_active = true
-        AND (k.expires_at IS NULL OR k.expires_at > NOW())
-        AND t.is_active = true
-      ORDER BY t.id, k.created_at DESC, k.key_hash
-    `);
-
-    // このSELECTは「アクティブなキー1本につき1行」を返すため、N本のキーを持つ
-    // テナントはN行に現れる。テナント単位にまとめてから登録する。
-    const rowsByTenant = new Map<string, typeof result.rows>();
-    for (const row of result.rows) {
-      const rows = rowsByTenant.get(row.tenant_id);
-      if (rows) rows.push(row);
-      else rowsByTenant.set(row.tenant_id, [row]);
+    // ★二重読み取り(2026-09-04是正・GID 1218171750803663)★
+    // 2026-09-04の本番デプロイで、DB側のデータは正しいのに起動直後のこの
+    // クエリだけが一過性でテナントを取りこぼす事象が実測された(11回中1回、
+    // 原因未特定)。同じクエリを短い間隔を空けてもう一度実行し、件数が
+    // 少ない方ではなく多い方を採用する。一致していれば追加コストはこの
+    // 1クエリ+短い待機のみ(起動時に一度だけ)。
+    const first = await fetchActiveTenantRows(pool);
+    if (retryDelayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
     }
+    const second = await fetchActiveTenantRows(pool);
+    if (second.size !== first.size) {
+      logger?.error(
+        { firstCount: first.size, secondCount: second.size },
+        "seedTenantsFromDB: 2回の読み取りでテナント件数が食い違った(起動直後の一過性欠落の疑い)。多い方を採用する"
+      );
+    }
+    const rowsByTenant = second.size >= first.size ? second : first;
 
     let tenantCount = 0;
     let keyCount = 0;
