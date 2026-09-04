@@ -61,10 +61,6 @@ import { fetchUnreadNotificationsByType } from '../../../lib/notifications';
 import { isOnboardingIndustry, ONBOARDING_INDUSTRY_LABELS, INDUSTRY_FAQ_TEMPLATES } from './industryFaqTemplates';
 import { buildPlacementAttributes, validateWidgetPlacement } from './widgetPlacement';
 
-// チャットでの一括インポートで一度に生成・コミットできるFAQ数の上限。
-// POST /v1/admin/knowledge/text/commit・/scrape/commit の zod スキーマ(max 20)と揃える。
-const MAX_IMPORT_FAQS = 20;
-
 // 有人返信1件の最大文字数。POST /v1/admin/chat-history/sessions/:id/reply の
 // zod スキーマ(z.string().min(1).max(2000))と揃える。
 const MAX_OPERATOR_REPLY_LENGTH = 2000;
@@ -555,9 +551,9 @@ export type KnowledgeGapsListCardPayload = {
 export type FaqImportPreviewCardPayload = {
   kind: 'faq_import_preview';
   source: 'text' | 'urls';
-  // MAX_IMPORT_FAQS(20件)上限で切り詰める前の生成件数。表示は「全total件中faqs.length件」
-  // (D3の教訓: 黙って切ってはならない)。
+  // 生成されたFAQ案の総数(上限なし。faqs.length と常に一致する)。
   total: number;
+  // 常にfalse(切り詰めは廃止済み)。互換のためフィールドは残す。
   truncated: boolean;
   faqs: Array<{
     question: string;
@@ -3463,21 +3459,19 @@ export async function executeToolCall(
       }
 
       try {
-        let faqs = await generateTextFaqPreview(db, tenantId, text, category);
+        const faqs = await generateTextFaqPreview(db, tenantId, text, category);
         if (faqs.length === 0) {
           return truncate('FAQを生成できませんでした。テキストをもう少し詳しく入力してみてください');
         }
 
         const total = faqs.length;
-        const truncated = total > MAX_IMPORT_FAQS;
-        if (truncated) faqs = faqs.slice(0, MAX_IMPORT_FAQS);
 
         setStagedFaqImport(tenantId, sessionId, {
           kind: 'text',
           tenantId,
           faqs,
           categoryOverride: category,
-          truncated,
+          truncated: false,
           createdAt: Date.now(),
         });
 
@@ -3488,14 +3482,13 @@ export async function executeToolCall(
             (dupCount > 0 ? `うち${dupCount}件は既存と重複のため登録時にスキップされます。` : ''),
           `例: ${examples}`,
         ];
-        if (truncated) lines.push(`※ 生成数が上限(${MAX_IMPORT_FAQS}件)を超えたため、先頭${MAX_IMPORT_FAQS}件のみを対象にしています。`);
         lines.push('登録してよろしければお知らせください。');
 
         const card: FaqImportPreviewCardPayload = {
           kind: 'faq_import_preview',
           source: 'text',
           total,
-          truncated,
+          truncated: false,
           faqs: faqs.map((f) => ({
             question: f.question,
             answer: f.answer,
@@ -3534,7 +3527,7 @@ export async function executeToolCall(
 
       try {
         const items = await generateScrapeFaqPreview(db, tenantId, urls, category);
-        let totalFaqs = items.reduce((sum, item) => sum + item.faqs.length, 0);
+        const totalFaqs = items.reduce((sum, item) => sum + item.faqs.length, 0);
         const errorItems = items.filter((item) => item.error);
 
         if (totalFaqs === 0) {
@@ -3542,28 +3535,12 @@ export async function executeToolCall(
           return truncate(`指定されたURLからFAQを生成できませんでした${detail}`);
         }
 
-        // カードの「全N件中M件」表示は切り詰め前の生成数を使う(D3の教訓: 黙って切らない)。
-        const originalTotalFaqs = totalFaqs;
-
-        // 20件上限は item をまたいで先頭から詰める（末尾の item・faq から間引く）
-        let truncated = false;
-        if (totalFaqs > MAX_IMPORT_FAQS) {
-          truncated = true;
-          let remaining = MAX_IMPORT_FAQS;
-          for (const item of items) {
-            if (remaining <= 0) { item.faqs = []; continue; }
-            if (item.faqs.length > remaining) item.faqs = item.faqs.slice(0, remaining);
-            remaining -= item.faqs.length;
-          }
-          totalFaqs = MAX_IMPORT_FAQS;
-        }
-
         setStagedFaqImport(tenantId, sessionId, {
           kind: 'scrape',
           tenantId,
           items,
           categoryOverride: category,
-          truncated,
+          truncated: false,
           createdAt: Date.now(),
         });
 
@@ -3578,14 +3555,13 @@ export async function executeToolCall(
           `例: ${examples}`,
         ];
         if (errorItems.length > 0) lines.push(`取得できなかったURL: ${errorItems.length}件`);
-        if (truncated) lines.push(`※ 生成数が上限(${MAX_IMPORT_FAQS}件)を超えたため、先頭${MAX_IMPORT_FAQS}件のみを対象にしています。`);
         lines.push('登録してよろしければお知らせください。');
 
         const card: FaqImportPreviewCardPayload = {
           kind: 'faq_import_preview',
           source: 'urls',
-          total: originalTotalFaqs,
-          truncated,
+          total: totalFaqs,
+          truncated: false,
           faqs: allFaqs.map((f) => ({
             question: f.question,
             answer: f.answer,
