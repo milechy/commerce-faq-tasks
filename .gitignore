@@ -32,6 +32,10 @@ admin-ui/.env.production
 admin-ui/dist/
 admin-ui/testsprite_tests/
 avatar-agent/__pycache__/
+avatar-agent/.venv/
+# 使用量レポートの再送キュー(GID 1218172937812482)。実行時に生成されるローカル
+# データで、フラッシュ中は *.flushing.<pid> のサフィックスが付く。
+avatar-agent/pending_usage_reports.jsonl*
 **/__pycache__/
 **/*.pyc
 CLAUDE.md.backup-pre-openwolf

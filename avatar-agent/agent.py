@@ -268,24 +268,156 @@ def resolve_avatar_identity(
     return None
 
 
+# --- 使用量レポートの再送・永続化キュー ---------------------------------------
+# 2026-09-04(Asana GID 1218172937812482): TTS/アバターの使用量レポートは
+# fire-and-forgetで、本体API側の障害(INTERNAL_API_HMAC_SECRET欠落・ネットワーク
+# 瞬断等)時にレポートが失われ計上漏れになることを実測で確認した(2026-09-04、
+# tenant=accept、TTS 4件が"non-critical"扱いのwarningログに埋もれて消えた)。
+# 従量課金で上限を設けない方針(project_usage_based_billing_no_caps)のため、
+# 守るべきは trackUsage の計上そのもの。
+#
+# 対策は二段構え:
+#   1. 短いバックオフ付きでその場で再試行する(ネットワーク瞬断・一時的な
+#      5xxなど、数秒〜十数秒で解消する障害に強い)。
+#   2. それでも失敗したペイロードはローカルファイルに永続化し、次に起動する
+#      別のジョブプロセスの entrypoint 冒頭で再送を試みる(このプロセス自身が
+#      すぐ終了しても計上漏れが確定しない)。全プロセス停止中に起きた障害は
+#      次のセッションが来るまで送れないが、それでも「二度と送られない」より
+#      大幅に良い。
+#
+# 複数ジョブプロセスが同時にキューファイルへ触りうる(LiveKit Agentsは
+# セッションごとに別プロセスで entrypoint を実行しうる)ため:
+#   - 追記(_enqueue_pending_usage_report): open(..., "a") での1回の write() は
+#     POSIX上atomicなため、ロック無しで安全(1行が短い前提)。
+#   - フラッシュ(flush_pending_usage_reports): os.rename() のatomic性を使って
+#     「フラッシュ権」を1プロセスだけに与える。renameが失敗する(相手が
+#     既に処理中/ファイルが存在しない)場合は黙ってスキップする。
+
+_PENDING_USAGE_REPORTS_PATH = Path(os.environ.get(
+    "AVATAR_PENDING_USAGE_REPORTS_PATH",
+    str(_here / "pending_usage_reports.jsonl"),
+))
+# TTS(fire-and-forgetで誰も待たない)は長めに粘る。アバターセッション終了時の
+# 課金(下記_report_avatar_usage)はshutdownフックの中でawaitされるため、
+# プロセスがそのまま終了してもキューへ確実に落とせるよう短く抑える。
+_TTS_USAGE_RETRY_DELAYS_SEC = [1.0, 3.0, 9.0]
+_AVATAR_USAGE_RETRY_DELAYS_SEC = [1.0]
+
+
+async def _post_usage_payload(api_url: str, payload: dict) -> None:
+    """/api/internal/usage へ1回だけPOSTする(リトライ・キューは呼び出し元の責務)。"""
+    hmac_headers = _internal_hmac_headers(payload)
+    async with aiohttp.ClientSession() as http_session:
+        async with http_session.post(
+            f"{api_url}/api/internal/usage",
+            headers={"X-Internal-Request": "1", "Content-Type": "application/json", **hmac_headers},
+            json=payload,
+            timeout=aiohttp.ClientTimeout(total=5),
+        ) as resp:
+            resp.raise_for_status()
+
+
+def _enqueue_pending_usage_report(payload: dict) -> None:
+    """リトライを使い切っても送れなかった使用量ペイロードをローカルに永続化する。"""
+    try:
+        line = json.dumps(payload, ensure_ascii=False) + "\n"
+        with open(_PENDING_USAGE_REPORTS_PATH, "a", encoding="utf-8") as f:
+            f.write(line)
+    except Exception as e:
+        # 永続化そのものが失敗した場合、これ以上できることが無い最終防衛ライン。
+        logger.error(f"[usage] failed to persist pending usage report (data loss): {e}")
+
+
+async def _report_usage_with_retry(payload: dict, report_label: str, retry_delays_sec: list[float]) -> None:
+    """使用量レポートを短いバックオフ付きで再試行し、それでも失敗したらローカルに
+    キューして次回のプロセス起動時の再送(flush_pending_usage_reports)に委ねる。
+    """
+    api_url = os.environ.get("RAJIUCE_API_URL", "http://localhost:3100")
+    last_err: Exception | None = None
+    for attempt, delay in enumerate([0.0, *retry_delays_sec]):
+        if delay:
+            await asyncio.sleep(delay)
+        try:
+            await _post_usage_payload(api_url, payload)
+            if attempt > 0:
+                logger.info(f"[usage] {report_label} usage report succeeded on retry {attempt}: {payload}")
+            else:
+                logger.debug(f"[usage] {report_label} usage reported: {payload}")
+            return
+        except Exception as e:
+            last_err = e
+    # リトライを使い切っても送れなかった。以前はwarningでnon-critical扱いされ
+    # 埋もれていたため、可視性のためerrorに格上げしローカルへキューする。
+    logger.error(
+        f"[usage] {report_label} usage report failed after {len(retry_delays_sec)} retries, "
+        f"queued locally for later retry: {last_err}"
+    )
+    _enqueue_pending_usage_report({**payload, "_reportLabel": report_label})
+
+
+async def flush_pending_usage_reports() -> None:
+    """前回以前に送れなかった使用量レポートの再送を試みる。ジョブプロセスの
+    entrypoint冒頭で毎回呼ぶ想定(呼び出し側でfire-and-forgetにし、このセッション
+    自体の開始を遅らせないこと)。
+    """
+    if not _PENDING_USAGE_REPORTS_PATH.exists():
+        return
+    claimed_path = _PENDING_USAGE_REPORTS_PATH.with_name(
+        f"{_PENDING_USAGE_REPORTS_PATH.name}.flushing.{os.getpid()}"
+    )
+    try:
+        os.rename(_PENDING_USAGE_REPORTS_PATH, claimed_path)
+    except FileNotFoundError:
+        return  # 他プロセスが既に処理中、またはその間に空になった
+    except Exception as e:
+        logger.warning(f"[usage] pending usage report flush: rename failed (non-fatal): {e}")
+        return
+
+    try:
+        with open(claimed_path, "r", encoding="utf-8") as f:
+            lines = [line for line in f if line.strip()]
+    except Exception as e:
+        logger.error(f"[usage] pending usage report flush: failed to read queue file: {e}")
+        return
+
+    api_url = os.environ.get("RAJIUCE_API_URL", "http://localhost:3100")
+    still_pending: list[str] = []
+    flushed_count = 0
+    for line in lines:
+        try:
+            payload = json.loads(line)
+        except Exception:
+            logger.error(f"[usage] pending usage report flush: dropping unparsable line: {line!r}")
+            continue
+        report_label = payload.pop("_reportLabel", "unknown")
+        try:
+            await _post_usage_payload(api_url, payload)
+            flushed_count += 1
+        except Exception as e:
+            logger.warning(f"[usage] pending usage report flush: still failing, re-queueing: {e}")
+            still_pending.append(json.dumps({**payload, "_reportLabel": report_label}, ensure_ascii=False) + "\n")
+
+    if still_pending:
+        with open(_PENDING_USAGE_REPORTS_PATH, "a", encoding="utf-8") as f:
+            f.writelines(still_pending)
+
+    try:
+        os.remove(claimed_path)
+    except FileNotFoundError:
+        pass
+
+    if flushed_count or still_pending:
+        logger.info(
+            f"[usage] pending usage report flush: {flushed_count} sent, {len(still_pending)} still pending"
+        )
+
+
 # --- Fish Audio TTS ---
 
 async def _report_tts_usage(tenant_id: str, tts_text_bytes: int, tts_model: str) -> None:
-    """TTS使用量をRAJIUCE APIに非同期レポート（fire-and-forget）。"""
-    api_url = os.environ.get("RAJIUCE_API_URL", "http://localhost:3100")
-    try:
-        payload = {"tenantId": tenant_id, "ttsTextBytes": tts_text_bytes, "ttsModel": tts_model}
-        hmac_headers = _internal_hmac_headers(payload)
-        async with aiohttp.ClientSession() as http_session:
-            await http_session.post(
-                f"{api_url}/api/internal/usage",
-                headers={"X-Internal-Request": "1", "Content-Type": "application/json", **hmac_headers},
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=5),
-            )
-        logger.debug(f"[usage] TTS usage reported: tenant={tenant_id} bytes={tts_text_bytes} model={tts_model}")
-    except Exception as e:
-        logger.warning(f"[usage] TTS usage report failed (non-critical): {e}")
+    """TTS使用量をRAJIUCE APIにレポートする(リトライ+失敗時はローカルキュー、fire-and-forget)。"""
+    payload = {"tenantId": tenant_id, "ttsTextBytes": tts_text_bytes, "ttsModel": tts_model}
+    await _report_usage_with_retry(payload, "TTS", _TTS_USAGE_RETRY_DELAYS_SEC)
 
 
 # LemonSlice は約24.5クレジット/分消費（料金表の割当 1000credit/41min・5400/220・15000/610 から逆算）。
@@ -293,7 +425,8 @@ LEMONSLICE_CREDITS_PER_MINUTE = 24.5
 
 
 async def _report_avatar_usage(tenant_id: str, session_ms: int) -> None:
-    """LemonSlice アバターのセッション課金をRAJIUCE APIへ非同期レポート（fire-and-forget）。
+    """LemonSlice アバターのセッション課金をRAJIUCE APIへレポートする
+    (リトライ+失敗時はローカルキュー。呼び出し元でawaitされるshutdownフック)。
 
     セッション時間（ms）→ 分 → クレジット換算（約24.5credit/分）で avatarCredits を報告する。
     本体側 costCalculator が avatarCredits × $0.007/credit で原価計上する。
@@ -302,23 +435,8 @@ async def _report_avatar_usage(tenant_id: str, session_ms: int) -> None:
         return
     minutes = session_ms / 60000.0
     credits = math.ceil(minutes * LEMONSLICE_CREDITS_PER_MINUTE)
-    api_url = os.environ.get("RAJIUCE_API_URL", "http://localhost:3100")
-    try:
-        payload = {"tenantId": tenant_id, "avatarCredits": credits, "avatarSessionMs": session_ms}
-        hmac_headers = _internal_hmac_headers(payload)
-        async with aiohttp.ClientSession() as http_session:
-            await http_session.post(
-                f"{api_url}/api/internal/usage",
-                headers={"X-Internal-Request": "1", "Content-Type": "application/json", **hmac_headers},
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=5),
-            )
-        logger.info(
-            f"[usage] LemonSlice avatar usage reported: tenant={tenant_id} "
-            f"session_ms={session_ms} credits={credits}"
-        )
-    except Exception as e:
-        logger.warning(f"[usage] avatar usage report failed (non-critical): {e}")
+    payload = {"tenantId": tenant_id, "avatarCredits": credits, "avatarSessionMs": session_ms}
+    await _report_usage_with_retry(payload, "avatar", _AVATAR_USAGE_RETRY_DELAYS_SEC)
 
 
 def _build_agent_reply_payload(text: str) -> bytes:
@@ -381,6 +499,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     logger.info("=== ENTRYPOINT CALLED ===")
     logger.info(f"[entrypoint] room.name={ctx.room.name}")
+
+    # 2026-09-04(GID 1218172937812482): 前回以前に送れなかった使用量レポートの
+    # 再送を試みる。このセッション自体の開始を遅らせないようfire-and-forgetにする。
+    asyncio.ensure_future(flush_pending_usage_reports())
 
     await ctx.connect(auto_subscribe=agents.AutoSubscribe.SUBSCRIBE_ALL)
     logger.info("=== CONNECTED TO ROOM ===")
