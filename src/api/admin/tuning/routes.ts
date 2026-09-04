@@ -45,6 +45,15 @@ function isAllowedTuningRole(role: unknown): role is AllowedTuningRole {
          (ALLOWED_TUNING_ROLES as readonly string[]).includes(role);
 }
 
+/**
+ * GET /v1/admin/upsell-proposals が1リクエストで文面をレンダリングする
+ * pending 提案の上限。tenantEconomics.ts の MAX_TENANTS_PER_ECONOMICS_REQUEST
+ * と同じ考え方(1件あたり DB 2回 + Stripe 2回を直列で叩くため、上限が無いと
+ * レスポンスタイムが件数に比例して伸び続ける)。超過分は truncated:true で
+ * 切り損なった旨を返す(黙って一部だけ返さない)。
+ */
+const MAX_UPSELL_PROPOSALS_PER_REQUEST = 50;
+
 // ---------------------------------------------------------------------------
 // Groq 8b: ルール提案
 // ---------------------------------------------------------------------------
@@ -282,6 +291,13 @@ export function registerTuningRoutes(app: Express): void {
   //
   // ★原価・粗利は保存済みの値ではなく、その場で計算する★
   // 保存すると価格改定・利用量の変化で数字が古くなる。
+  //
+  // ★直列で処理する・上限を設ける★
+  // 1件あたり buildSuperAdminUpsellFigures が DB 2回 + Stripe 2回を呼ぶ。
+  // かつては rows.map + Promise.all で全件を完全並列実行しており、pending
+  // 提案が N件あれば最大 4N 回の外部/DB呼び出しが同時発生していた。
+  // tenantEconomics.ts の fetchTenantEconomics(MAX_TENANTS_PER_ECONOMICS_REQUEST)
+  // と同じ方針で、for...of による直列処理 + 上限件数に揃える。
   // -----------------------------------------------------------------------
   app.get(
     "/v1/admin/upsell-proposals",
@@ -291,60 +307,70 @@ export function registerTuningRoutes(app: Express): void {
     async (_req: Request, res: Response) => {
       try {
         const rows = await listRules(undefined, { proposalType: "upsell", status: "pending" });
+        const truncated = rows.length > MAX_UPSELL_PROPOSALS_PER_REQUEST;
+        const target = rows.slice(0, MAX_UPSELL_PROPOSALS_PER_REQUEST);
 
-        const proposals = await Promise.all(
-          rows.map(async (row) => {
-            const evidence = row.evidence as { upsell?: Record<string, unknown> } | null | undefined;
-            const upsell = evidence?.upsell;
-            const signal = upsell?.["signal"];
-            const currentPlan = upsell?.["current_plan"];
-            const recommendedPlan = upsell?.["recommended_plan"];
-            const periodYyyyMm = upsell?.["period_yyyymm"];
+        const proposals: Array<{
+          proposal_id: string;
+          tenant_id: string;
+          renderable: boolean;
+          headline?: string;
+          lines?: string[];
+          created_at: unknown;
+        }> = [];
 
-            // evidence が壊れている行(手動編集・移行漏れ等)は、誤った文面を
-            // 出すより「レンダリング不可」として素通しする(黙って落とさない)。
-            if (
-              !isValidUpsellSignal(signal) ||
-              typeof currentPlan !== "string" ||
-              typeof recommendedPlan !== "string" ||
-              typeof periodYyyyMm !== "string"
-            ) {
-              return {
-                proposal_id: String(row.id),
-                tenant_id: row.tenant_id,
-                renderable: false as const,
-                created_at: row.created_at,
-              };
-            }
+        for (const row of target) {
+          const evidence = row.evidence as { upsell?: Record<string, unknown> } | null | undefined;
+          const upsell = evidence?.upsell;
+          const signal = upsell?.["signal"];
+          const currentPlan = upsell?.["current_plan"];
+          const recommendedPlan = upsell?.["recommended_plan"];
+          const periodYyyyMm = upsell?.["period_yyyymm"];
 
-            try {
-              const pool = getPool();
-              const figures = await buildSuperAdminUpsellFigures(
-                pool, row.tenant_id, signal, currentPlan, recommendedPlan, periodYyyyMm,
-              );
-              const rendered = renderUpsellForSuperAdmin(figures);
-              return {
-                proposal_id: String(row.id),
-                tenant_id: row.tenant_id,
-                renderable: true as const,
-                headline: rendered.headline,
-                lines: rendered.lines,
-                created_at: row.created_at,
-              };
-            } catch (err) {
-              // 1件の計算失敗(Stripe到達不可等)で一覧全体を落とさない。
-              logger.warn("[GET /v1/admin/upsell-proposals] figures failed", err);
-              return {
-                proposal_id: String(row.id),
-                tenant_id: row.tenant_id,
-                renderable: false as const,
-                created_at: row.created_at,
-              };
-            }
-          }),
-        );
+          // evidence が壊れている行(手動編集・移行漏れ等)は、誤った文面を
+          // 出すより「レンダリング不可」として素通しする(黙って落とさない)。
+          if (
+            !isValidUpsellSignal(signal) ||
+            typeof currentPlan !== "string" ||
+            typeof recommendedPlan !== "string" ||
+            typeof periodYyyyMm !== "string"
+          ) {
+            proposals.push({
+              proposal_id: String(row.id),
+              tenant_id: row.tenant_id,
+              renderable: false,
+              created_at: row.created_at,
+            });
+            continue;
+          }
 
-        return res.json({ proposals });
+          try {
+            const pool = getPool();
+            const figures = await buildSuperAdminUpsellFigures(
+              pool, row.tenant_id, signal, currentPlan, recommendedPlan, periodYyyyMm,
+            );
+            const rendered = renderUpsellForSuperAdmin(figures);
+            proposals.push({
+              proposal_id: String(row.id),
+              tenant_id: row.tenant_id,
+              renderable: true,
+              headline: rendered.headline,
+              lines: rendered.lines,
+              created_at: row.created_at,
+            });
+          } catch (err) {
+            // 1件の計算失敗(Stripe到達不可等)で一覧全体を落とさない。
+            logger.warn("[GET /v1/admin/upsell-proposals] figures failed", err);
+            proposals.push({
+              proposal_id: String(row.id),
+              tenant_id: row.tenant_id,
+              renderable: false,
+              created_at: row.created_at,
+            });
+          }
+        }
+
+        return res.json({ proposals, truncated });
       } catch (err) {
         logger.warn("[GET /v1/admin/upsell-proposals]", err);
         return res.status(500).json({ error: "internal_error" });

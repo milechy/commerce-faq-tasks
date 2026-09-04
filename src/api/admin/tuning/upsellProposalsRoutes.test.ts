@@ -120,6 +120,57 @@ describe('GET /v1/admin/upsell-proposals', () => {
     expect(res.body.proposals).toHaveLength(1);
     expect(res.body.proposals[0].renderable).toBe(true);
     expect(res.body.proposals[0].headline).toBe('アップセル候補');
+    expect(res.body.truncated).toBe(false);
+  });
+
+  it('★上限(50件)を超えるpending提案は truncated:true で切り、figures計算も上限件数までしか行わない(P1a)★', async () => {
+    const rows = Array.from({ length: 55 }, (_, i) => ({
+      id: i + 1, tenant_id: `t${i + 1}`, trigger_pattern: `upsell:202609:text_overage:${i}`,
+      expected_behavior: 'Growthへの変更を提案', is_active: false, proposal_type: 'upsell',
+      status: 'pending', created_at: '2026-09-04T00:00:00Z', updated_at: '2026-09-04T00:00:00Z',
+      created_by: null, source_message_id: null,
+      evidence: { upsell: { signal: 'text_overage', current_plan: 'standard', recommended_plan: 'growth', period_yyyymm: '202609' } },
+    }));
+    mockListRules.mockResolvedValue(rows);
+
+    const res = await request(makeApp('super_admin')).get('/v1/admin/upsell-proposals');
+    expect(res.status).toBe(200);
+    expect(res.body.truncated).toBe(true);
+    expect(res.body.proposals).toHaveLength(50);
+    // 切り捨てた5件については figures を計算しない(無駄な DB/Stripe 呼び出しを作らない)
+    expect(mockBuildFigures).toHaveBeenCalledTimes(50);
+  });
+
+  it('★1件ずつ直列に処理する(複数の figures 計算が同時に走らない)★(P1a)', async () => {
+    const rows = ['a', 'b', 'c'].map((id, i) => ({
+      id: i + 1, tenant_id: id, trigger_pattern: `x${i}`, expected_behavior: 'y',
+      is_active: false, proposal_type: 'upsell', status: 'pending',
+      created_at: 'x', updated_at: 'x', created_by: null, source_message_id: null,
+      evidence: { upsell: { signal: 'text_overage', current_plan: 'standard', recommended_plan: 'growth', period_yyyymm: '202609' } },
+    }));
+    mockListRules.mockResolvedValue(rows);
+
+    let concurrent = 0;
+    let maxConcurrent = 0;
+    mockBuildFigures.mockImplementation(async () => {
+      concurrent += 1;
+      maxConcurrent = Math.max(maxConcurrent, concurrent);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      concurrent -= 1;
+      return {
+        __audience: 'super_admin', signal: 'text_overage', tenant_id: 't', tenant_name: 'T',
+        current_plan: 'standard', recommended_plan: 'growth',
+        current_base_monthly_jpy: null, recommended_base_monthly_jpy: null,
+        text_overage: 0, avatar_overage_minutes: 0,
+        revenue_estimate_jpy: null, cost_base_jpy: null, gross_profit_jpy: null, gross_margin_pct: null,
+        as_of: 'x',
+      };
+    });
+
+    const res = await request(makeApp('super_admin')).get('/v1/admin/upsell-proposals');
+    expect(res.status).toBe(200);
+    expect(res.body.proposals).toHaveLength(3);
+    expect(maxConcurrent).toBe(1);
   });
 
   it('★listRules に proposalType=upsell, status=pending が渡る★', async () => {

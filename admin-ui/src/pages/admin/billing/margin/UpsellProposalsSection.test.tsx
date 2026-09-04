@@ -144,6 +144,20 @@ describe('UpsellProposalsSection', () => {
     expect((window as unknown as { __xss_upsell?: boolean }).__xss_upsell).toBeUndefined();
   });
 
+  it('★truncated:true のとき上限に達した旨を表示する(P1a: 黙って一部だけ返さない)★', async () => {
+    mockAuthFetch.mockResolvedValue(jsonResponse(200, { proposals: [PROPOSAL], truncated: true }));
+    render(<UpsellProposalsSection />);
+    await screen.findByText('アップセル候補');
+    expect(screen.getByText(/上限に達しています/)).toBeTruthy();
+  });
+
+  it('truncated:false(既定)のときは上限メッセージを出さない', async () => {
+    mockAuthFetch.mockResolvedValue(jsonResponse(200, { proposals: [PROPOSAL] }));
+    render(<UpsellProposalsSection />);
+    await screen.findByText('アップセル候補');
+    expect(screen.queryByText(/上限に達しています/)).toBeNull();
+  });
+
   it('複数提案が同時に表示され、片方だけ操作しても他方に影響しない', async () => {
     const p2 = { ...PROPOSAL, proposal_id: '2', tenant_id: 't2', headline: '提案B' };
     mockAuthFetch

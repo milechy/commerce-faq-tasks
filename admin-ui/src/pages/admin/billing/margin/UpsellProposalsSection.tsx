@@ -16,6 +16,7 @@ import type { UpsellProposal } from "./upsellProposals.schema";
 
 export function UpsellProposalsSection() {
   const [proposals, setProposals] = useState<UpsellProposal[]>([]);
+  const [truncated, setTruncated] = useState(false);
   const [status, setStatus] = useState<"loading" | "error" | "ready">("loading");
   const [actingId, setActingId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -30,6 +31,7 @@ export function UpsellProposalsSection() {
       }
       const parsed = parseUpsellProposalsResponse(await res.json());
       setProposals(parsed.proposals);
+      setTruncated(parsed.truncated);
       setStatus("ready");
     } catch {
       setStatus("error");
@@ -71,6 +73,13 @@ export function UpsellProposalsSection() {
       <p style={{ margin: "0 0 16px", fontSize: 12, color: "var(--muted-foreground)" }}>
         Hermes が利用状況から検出した営業候補です。採否は下の粗利表と合わせて判断してください。
       </p>
+
+      {truncated && (
+        // 黙って切らない。上限に当たったことを画面に出す(marginダッシュボードの truncated 表示と同じ作法)。
+        <p role="status" style={{ margin: "0 0 16px", fontSize: 12, color: "var(--muted-foreground)" }}>
+          ※ 表示件数が上限に達しています。一部の提案は表示されていません。
+        </p>
+      )}
 
       {proposals.map((p) => (
         <div
