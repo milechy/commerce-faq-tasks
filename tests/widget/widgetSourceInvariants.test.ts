@@ -592,37 +592,6 @@ describe('public/widget.js エスカレーションボタンの不変条件(PR #
   });
 });
 
-// PR #1179: 音声リンク型チャットUI(avatarMuteBtn によるヒストリー表示切替)。
-//
-// このリポジトリでは過去に「ほぼ同一の2経路(Anam SDK / LiveKit)のうち片方だけ
-// 修正して片方を壊す」事故が実際に起きているため、両方の click ハンドラが
-// 同じ3行(ミュート状態反転→history-hiddenトグル→aria-hidden反映)を
-// 持っていることを機械的に固定する。
-describe('public/widget.js 音声リンク型チャットUIの不変条件(PR #1179)', () => {
-  it('.panel.avatar-active.history-hidden .messages というセレクタが「両クラス必須」の組み合わせのまま存在する(片方だけの .history-hidden .messages への緩和を防止)', () => {
-    expect(WIDGET_SRC).toContain("'.panel.avatar-active.history-hidden .messages {'");
-  });
-
-  it('"history-hidden" という文字列は CSSセレクタ1箇所 + JSのトグル2箇所(Anam/LiveKit)の合計3箇所にのみ存在する(第3の書き込み経路が増えていないこと、および.input-area等への横流れ防止)', () => {
-    const matches = WIDGET_SRC.match(/history-hidden/g) || [];
-    expect(matches.length).toBe(3);
-  });
-
-  it('Anam SDK経路(connectAnam)の avatarMuteBtn クリックハンドラは avatarMuted 反転→history-hiddenトグル→aria-hidden反映の3行を持つ', () => {
-    const idx = WIDGET_SRC.indexOf('function connectAnam(sessionToken) {');
-    expect(idx).toBeGreaterThan(-1);
-    const block = WIDGET_SRC.slice(idx, idx + 4000);
-    expect(block).toMatch(
-      /avatarMuteBtn\.addEventListener\('click', function \(\) \{\s*avatarMuted = !avatarMuted;\s*\/\/[^\n]*\n\s*panel\.classList\.toggle\('history-hidden', !avatarMuted\);\s*messagesArea\.setAttribute\('aria-hidden', String\(!avatarMuted\)\);/
-    );
-  });
-
-  it('LiveKit経路(_connectLiveKitAfterCleanup)の avatarMuteBtn クリックハンドラも同じ3行を持つ(Anam経路と実装が分岐/漂流していないこと)', () => {
-    const idx = WIDGET_SRC.indexOf('function _connectLiveKitAfterCleanup() {');
-    expect(idx).toBeGreaterThan(-1);
-    const block = WIDGET_SRC.slice(idx, idx + 6000);
-    expect(block).toMatch(
-      /avatarMuteBtn\.addEventListener\('click', function \(\) \{\s*avatarMuted = !avatarMuted;\s*\/\/[^\n]*\n\s*panel\.classList\.toggle\('history-hidden', !avatarMuted\);\s*messagesArea\.setAttribute\('aria-hidden', String\(!avatarMuted\)\);/
-    );
-  });
-});
+// PR #1179 は撤回された(2026-09-04)。音声中でも「自分が何を話したか分かるように」
+// 会話履歴は常時表示する方針に変更されたため、history-hidden 関連の不変条件テストは
+// 撤去した(対象の機能自体が存在しない)。
