@@ -1826,6 +1826,20 @@ export async function executeToolCall(
             `アバターの有効化に失敗しました: ${res.error ?? '不明なエラー'}。get_avatar_list で ID を確認してください`,
           );
         }
+        // avatar-agent が参照する GET /api/internal/avatar-config は
+        // INTERNAL_API_HMAC_SECRET 未設定だと fail-closed で 500 になり
+        // （src/lib/crypto/hmacVerifier.ts）、設定が解決できないまま
+        // 無関係な第三者アバターへ無言でフォールバックする(docs/AVATAR_CONFIG_500_RECOVERY.md)。
+        // DB の is_active はこの直前で立てたばかりで必ず真になるため、
+        // 配信経路が実際に機能するかはこの環境変数の有無でしか判定できない。
+        if (!process.env.INTERNAL_API_HMAC_SECRET) {
+          // DB の is_active はここまでで確定しているため tenant_settings_history への
+          // 記録(agentRoutes.ts の AUDITED_SETTINGS_TOOLS.activate_avatar)は継続させたい。
+          // successMarker 'を有効化しました' に一致する文言を保つ。
+          return truncate(
+            `アバター（ID: ${id}）を有効化しましたが、アバターの配信設定を解決できませんでした。管理者にお問い合わせください`,
+          );
+        }
         return truncate(`アバター（ID: ${id}）を有効化しました`);
       } catch (err) {
         // 不正な形式のID（UUIDでない文字列）もここに来る。500にはせず日本語で返す。
