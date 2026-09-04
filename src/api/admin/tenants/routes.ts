@@ -571,8 +571,8 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       const { monthStart, monthEnd } = getMonthRangeJst(new Date());
       const from = monthStart.toISOString();
       const to = monthEnd.toISOString();
-      const { textUnits, avatarMinutes } = await computeExpectedBilling(db, tenantId, from, to, currentPlan);
-      const signalResult = computeUpsellSignals({ plan: currentPlan, textUnits, avatarMinutes });
+      const { textUnits, avatarMinutes, adminConsults } = await computeExpectedBilling(db, tenantId, from, to, currentPlan);
+      const signalResult = computeUpsellSignals({ plan: currentPlan, textUnits, avatarMinutes, adminConsults });
 
       if (signalResult.signals.length === 0 || !signalResult.nextPlanCandidate) {
         // ★訴求すること自体がないのを 200 + available:false で表現する★
