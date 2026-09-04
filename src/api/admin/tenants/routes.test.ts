@@ -868,13 +868,38 @@ describe("PATCH /v1/admin/my-tenant — avatar/voice plan ゲート", () => {
 // 400 invalid_requestで拒否される(型はコンパイルが通るのに実行時に壊れる典型例)。
 // 型チェック・lintでは検出できず、実機で初めて気づいた。二度と壊さないための回帰テスト。
 describe("PATCH /v1/admin/tenants/:id — free_ad プラン受理(P0回帰)", () => {
-  // S5b(共有学習プールの参加モデル・D1決定案)により、free_adは消費者向け同意バナー
-  // 実装まで一時的に403でブロックされるようになった。ただしこのテストの本来の目的
-  // (zodのplanValuesにfree_adが登録されておらず400 invalid_requestで弾かれる、という
-  // P0バグの再発防止)は今も生きている: 403(S5bの意図的なブロック)と400(スキーマが
-  // 値自体を知らない)は全く別の失敗であり、後者に戻っていないことを確認する。
-  it("plan='free_ad' はスキーマ未知の値としては拒否されない(400にはならない。S5bにより403でブロックされる)", async () => {
-    const dbQuery = jest.fn();
+  // S5b(共有学習プールの参加モデル・D1決定案)による一時ブロックは
+  // 2026-09-04 に解除済み(WordPressプラグイン計画 WP-1。routes.ts の
+  // blockFreeAdTransition 冒頭コメント参照)。このテストの本来の目的
+  // (zodのplanValuesにfree_adが登録されておらず400 invalid_requestで弾かれる、
+  // という P0バグの再発防止)は今も生きているため、403アサーションを外し
+  // 実際に更新が完了することまで確認する形に変える。
+  it("plan='free_ad' はスキーマ未知の値としては拒否されず、DBまで到達して更新できる", async () => {
+    const TENANT_ROW = {
+      id: "tenant-a",
+      name: "テストテナント",
+      plan: "free_ad",
+      is_active: true,
+      allowed_origins: [],
+      system_prompt: null,
+      billing_enabled: false,
+      billing_free_from: null,
+      billing_free_until: null,
+      features: { avatar: false, voice: false, rag: true },
+      lemonslice_agent_id: null,
+      conversion_types: [],
+      tenant_contact_email: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValueOnce({
+        rows: [{ id: "tenant-a", plan: "starter", features: { avatar: false, voice: false, rag: true }, billing_enabled: false, is_active: true }],
+        rowCount: 1,
+      })
+      .mockResolvedValueOnce({ rows: [TENANT_ROW], rowCount: 1 })
+      .mockResolvedValue({ rows: [], rowCount: 1 });
     const db = { query: dbQuery };
 
     const res = await request(makeApp(db, "super_admin"))
@@ -882,9 +907,9 @@ describe("PATCH /v1/admin/tenants/:id — free_ad プラン受理(P0回帰)", ()
       .send({ plan: "free_ad" });
 
     expect(res.status).not.toBe(400);
-    expect(res.status).toBe(403);
-    expect(res.body.error).toBe("free_ad_plan_not_yet_available");
-    expect(dbQuery).not.toHaveBeenCalled();
+    expect(res.status).toBe(200);
+    expect(res.body.plan).toBe("free_ad");
+    expect(dbQuery).toHaveBeenCalled();
   });
 
   it("存在しないプラン文字列('gold'等)は引き続き400で拒否する(何でも通す壊れ方をしていない)", async () => {
@@ -935,9 +960,22 @@ describe("PATCH /v1/admin/tenants/:id — free_ad プラン受理(P0回帰)", ()
 });
 
 describe("POST /v1/admin/tenants — free_ad プラン受理(P0回帰)", () => {
-  // S5bにより新規作成時点でのfree_ad指定は403でブロックされる(理由は上記PATCH側と同じ)。
-  it("plan='free_ad' を指定したテナント作成はスキーマ未知の値としては拒否されない(S5bにより403でブロックされる)", async () => {
-    const dbQuery = jest.fn();
+  // S5bの一時ブロックは2026-09-04解除済み(WP-1)。plan='free_ad'は
+  // 400(スキーマが値を知らない)でも403(旧ブロック)でもなく、実際にDBへ到達して
+  // 作成できることまで確認する。
+  it("plan='free_ad' を指定したテナント作成はスキーマ未知の値としては拒否されず、作成できる", async () => {
+    const CREATED_ROW = {
+      id: "new-tenant",
+      name: "新規テナント",
+      plan: "free_ad",
+      is_active: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [CREATED_ROW], rowCount: 1 })
+      .mockResolvedValue({ rows: [], rowCount: 1 });
     const db = { query: dbQuery };
 
     const res = await request(makeApp(db, "super_admin"))
@@ -945,9 +983,8 @@ describe("POST /v1/admin/tenants — free_ad プラン受理(P0回帰)", () => {
       .send({ id: "new-tenant", name: "新規テナント", plan: "free_ad" });
 
     expect(res.status).not.toBe(400);
-    expect(res.status).toBe(403);
-    expect(res.body.error).toBe("free_ad_plan_not_yet_available");
-    expect(dbQuery).not.toHaveBeenCalled();
+    expect(res.status).toBe(201);
+    expect(res.body.plan).toBe("free_ad");
   });
 
   it("plan省略時のデフォルトは引き続きstarterであり、free_adへは自動で倒れない(新規テナントは既定で有料想定)", async () => {
@@ -1234,19 +1271,22 @@ describe("PUT /v1/admin/my-tenant/plan", () => {
     expect(res.body.changed).toBe(true);
   });
 
-  // S5b(#918): free_ad への遷移は同意バナー基盤が整うまで全経路でブロック中。
-  // テナント自己申告が super_admin 経路のガードを素通りしないことを固定する。
-  // ブロック撤去時は blockFreeAdTransition の中身を変えれば全経路に効く。
-  it("free_ad への降格は S5b ブロック中のため 403（DB接続すら確立しない）", async () => {
-    const { db, connect } = makePlanTxDb({ beforeRow: { plan: "starter" } });
+  // S5b(#918)の一時ブロックは2026-09-04解除済み(WP-1)。ブロックの目的
+  // (エンドユーザーへの開示バナーが無いままfree_adテナントが増えるのを防ぐ)は
+  // S5a(ウィジェット側の開示バナー)の実装完了で既に満たされているため、
+  // テナント自己申告での free_ad への降格も他の2経路(super_admin POST/PATCH)
+  // と同様に通ることを固定する。
+  it("free_ad への降格は通る(S5aの開示バナー実装により旧ブロックは解除済み)", async () => {
+    const { db } = makePlanTxDb({ beforeRow: { plan: "starter" } });
     const res = await request(makeApp(db, "client_admin"))
       .put("/v1/admin/my-tenant/plan")
       .set("Authorization", "Bearer dummy")
       .send({ plan: "free_ad" });
 
-    expect(res.status).toBe(403);
-    expect(res.body.error).toBe("free_ad_plan_not_yet_available");
-    expect(connect).not.toHaveBeenCalled();
+    expect(res.status).toBe(200);
+    expect(res.body.plan).toBe("free_ad");
+    expect(res.body.previous_plan).toBe("starter");
+    expect(res.body.changed).toBe(true);
   });
 
   it("プラン変更は tenant_settings_history に field_name='plan' で記録される", async () => {
@@ -1418,10 +1458,11 @@ describe("PUT /v1/admin/my-tenant/plan — 停止中テナントのブロック(
   });
 
   // ★イレギュラーな操作: 停止中に free_ad へ「降格」しようとする★
-  // free_ad ブロック(blockFreeAdTransition)は DB接続前に弾くため、is_active
-  // チェック(DB接続後)より先に評価される。停止中テナントでも free_ad拒否の
-  // メッセージが優先されることを固定する(2つのガードの優先順位を明示)。
-  it("停止中かつfree_adへの変更では、free_adブロックがis_activeチェックより先に評価される", async () => {
+  // free_ad ブロック(blockFreeAdTransition)は2026-09-04解除済み(WP-1)のため、
+  // DB接続後の is_active チェック(changeTenantPlan.ts)まで到達する。
+  // 停止中テナントはプラン変更そのものが拒否されることを固定する
+  // (free_ad固有のガードではなく、どのプラン変更にも共通する一般ガード)。
+  it("停止中テナントは free_ad への変更も拒否される(tenant_inactive)", async () => {
     const { db, connect } = makePlanTxDb({ beforeRow: { plan: "starter", is_active: false } });
     const res = await request(makeApp(db, "client_admin"))
       .put("/v1/admin/my-tenant/plan")
@@ -1429,8 +1470,8 @@ describe("PUT /v1/admin/my-tenant/plan — 停止中テナントのブロック(
       .send({ plan: "free_ad" });
 
     expect(res.status).toBe(403);
-    expect(res.body.error).toBe("free_ad_plan_not_yet_available");
-    expect(connect).not.toHaveBeenCalled(); // DB接続すら発生しない
+    expect(res.body.error).toBe("tenant_inactive");
+    expect(connect).toHaveBeenCalled(); // is_active チェックのため接続は発生する
   });
 });
 
@@ -1664,19 +1705,19 @@ describe("PUT /v1/admin/my-tenant/plan — 境界・異常系", () => {
     expect(connect).not.toHaveBeenCalled();
   });
 
-  // ★free_ad ブロックは DB に触れる前に効くこと★
-  // 後段に置くと、ブロックされた要求でも接続確立が走り、
-  // 「弾いたのにDB負荷はかかる」状態になる。
-  it("free_ad への降格は接続すら確立せずに 403", async () => {
+  // "free_ad" は上の it.each の不正値テーブルとは違い、zod スキーマが受理する
+  // 正当な値であることの対比。free_ad ブロック(blockFreeAdTransition)は
+  // 2026-09-04解除済み(WP-1)のため、他の正当なプラン値と同じく接続まで進む
+  // (詳細な成功アサーションは describe("PUT /v1/admin/my-tenant/plan") 側で確認済み)。
+  it("free_ad は不正な値ではなく、接続まで進む(上のit.eachの対比)", async () => {
     const { db, connect } = makePlanTxDb({ beforeRow: { plan: "starter" } });
     const res = await request(makeApp(db, "client_admin"))
       .put("/v1/admin/my-tenant/plan")
       .set("Authorization", "Bearer dummy")
       .send({ plan: "free_ad" });
 
-    expect(res.status).toBe(403);
-    expect(res.body.error).toBe("free_ad_plan_not_yet_available");
-    expect(connect).not.toHaveBeenCalled();
+    expect(res.status).not.toBe(400);
+    expect(connect).toHaveBeenCalled();
   });
 
   it("監査の changed_by は JWT の email。無ければ空文字で落ちない", async () => {

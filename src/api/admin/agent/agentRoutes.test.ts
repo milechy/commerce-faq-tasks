@@ -11318,7 +11318,9 @@ describe('POST /v1/admin/agent/chat', () => {
         .send({ message: 'Freeプランにして', sessionId: 'sess-cp-03' });
 
       expect(res.status).toBe(200);
-      expect(res.body.actions[0].result).toContain('同意バナー');
+      // free_adはこのツールでは選択不可(SELF_SERVICE_PLAN_VALUESから除外・isFreeAdTransition)。
+      // 除外理由は2026-09-04にS5bブロック解除に伴い変更されたため、メッセージも追随した。
+      expect(res.body.actions[0].result).toContain('free_ad');
       expect(mockQuery).not.toHaveBeenCalled();
       expect(mockConnect).not.toHaveBeenCalled();
     });

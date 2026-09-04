@@ -5092,7 +5092,7 @@ export async function executeToolCall(
       // ★判定基準の値("free_ad"/"enterprise")はroutes.ts側の純関数だけが持つ★
       // ここに書き写さない(2箇所に値を持つと除外対象を増やしたときの追随漏れが起きる)。
       if (isFreeAdTransition(planArg)) {
-        return truncate('free_adプランは消費者向け同意バナー実装まで新規発行できません。旧UI(管理画面)でも選択できません');
+        return truncate('free_adへの変更はこのツールでは行えません。プランのアップグレード相談は担当までお問い合わせください');
       }
       if (isEnterpriseSelfUpgrade(planArg)) {
         return truncate('Enterprise は個別契約です。担当までお問い合わせください（チャットからは変更できません）');
