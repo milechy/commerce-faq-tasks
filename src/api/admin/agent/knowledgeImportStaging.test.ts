@@ -5,6 +5,7 @@ import {
   setStagedFaqImport,
   getStagedFaqImport,
   clearStagedFaqImport,
+  selectFromStagedFaqImport,
   __resetKnowledgeImportStagingForTest,
   type StagedFaqImport,
 } from './knowledgeImportStaging';
@@ -85,5 +86,93 @@ describe('knowledgeImportStaging', () => {
     expect(getStagedFaqImport('t200', 's1')).not.toBeNull();
     // 直近のエントリ(t199)はまだ残っている
     expect(getStagedFaqImport('t199', 's1')).not.toBeNull();
+  });
+});
+
+// GID 1218166714484055: 件単位選択インポート(commit-selected)が使う純関数。
+// フラット順indexの解決・境界値(範囲外/負/重複)を、HTTPルートを経由せずここで固定する。
+describe('selectFromStagedFaqImport', () => {
+  const faqA = { question: 'Q-A', answer: 'A-A', duplicate: null };
+  const faqB = { question: 'Q-B', answer: 'A-B', duplicate: null };
+  const faqC = { question: 'Q-C', answer: 'A-C', duplicate: { existingQuestion: 'Q-A?', existingAnswer: 'A-A' } };
+
+  function textStaged(faqs = [faqA, faqB, faqC]): StagedFaqImport {
+    return { kind: 'text', tenantId: 't1', faqs, categoryOverride: null, truncated: false, createdAt: Date.now() };
+  }
+
+  it('text: 選択したindexのFAQのみを返す', () => {
+    const result = selectFromStagedFaqImport(textStaged(), [0, 2]);
+    expect(result).toEqual({ kind: 'text', faqs: [faqA, faqC] });
+  });
+
+  it('text: selectedIndicesが空配列なら空配列を返す(全件へのフォールバックはしない)', () => {
+    const result = selectFromStagedFaqImport(textStaged(), []);
+    expect(result).toEqual({ kind: 'text', faqs: [] });
+  });
+
+  it('text: 範囲外・負のindexは無視される(クラッシュしない)', () => {
+    const result = selectFromStagedFaqImport(textStaged(), [1, 999, -1]);
+    expect(result).toEqual({ kind: 'text', faqs: [faqB] });
+  });
+
+  it('text: 同じindexを複数回渡しても対応するFAQは1回しか含まれない', () => {
+    const result = selectFromStagedFaqImport(textStaged(), [0, 0, 0]);
+    expect(result).toEqual({ kind: 'text', faqs: [faqA] });
+  });
+
+  it('scrape: 複数URLをまたぐflat indexで選択を解決する(URL単位ではなく通し番号)', () => {
+    const staged: StagedFaqImport = {
+      kind: 'scrape',
+      tenantId: 't1',
+      items: [
+        { url: 'https://example.com/p/1', faqs: [faqA, faqB] },
+        { url: 'https://example.com/p/2', faqs: [faqC] },
+      ],
+      categoryOverride: null,
+      truncated: false,
+      createdAt: Date.now(),
+    };
+    // flat index: 0=faqA(p/1), 1=faqB(p/1), 2=faqC(p/2)
+    const result = selectFromStagedFaqImport(staged, [1, 2]);
+    expect(result).toEqual({
+      kind: 'scrape',
+      items: [
+        { url: 'https://example.com/p/1', faqs: [faqB] },
+        { url: 'https://example.com/p/2', faqs: [faqC] },
+      ],
+    });
+  });
+
+  it('scrape: あるURLグループの選択が0件になった場合、そのURLは結果から除外される(空グループを残さない)', () => {
+    const staged: StagedFaqImport = {
+      kind: 'scrape',
+      tenantId: 't1',
+      items: [
+        { url: 'https://example.com/p/1', faqs: [faqA, faqB] },
+        { url: 'https://example.com/p/2', faqs: [faqC] },
+      ],
+      categoryOverride: null,
+      truncated: false,
+      createdAt: Date.now(),
+    };
+    // p/1(index 0,1)は選ばず、p/2(index 2)のみ選択する
+    const result = selectFromStagedFaqImport(staged, [2]);
+    expect(result).toEqual({
+      kind: 'scrape',
+      items: [{ url: 'https://example.com/p/2', faqs: [faqC] }],
+    });
+  });
+
+  it('scrape: 何も選択しなければitemsは空配列になる', () => {
+    const staged: StagedFaqImport = {
+      kind: 'scrape',
+      tenantId: 't1',
+      items: [{ url: 'https://example.com/p/1', faqs: [faqA] }],
+      categoryOverride: null,
+      truncated: false,
+      createdAt: Date.now(),
+    };
+    const result = selectFromStagedFaqImport(staged, []);
+    expect(result).toEqual({ kind: 'scrape', items: [] });
   });
 });

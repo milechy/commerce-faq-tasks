@@ -3060,6 +3060,111 @@ describe("CopilotPreviewPage — FAQ取込プレビューカード(H-5)", () => 
     // 新しいFAQ取込カードは増えていない(同じ質問文が1回だけ表示されたまま)
     expect(screen.getAllByText("送料はいくらですか？")).toHaveLength(1);
   });
+
+  // GID 1218166714484055: チェックボックスから件単位でPOST /faq-import/commit-selected を
+  // 直叩きする経路(__real:チップ経由のcommit_faq_importとは別配線)。重複既定未選択・
+  // 選択indexの送信内容・連打時の二重送信防止までをここで検証する。
+  describe("チェックボックスからの件単位登録(commit-selected)", () => {
+    function mockAgentWithCommitSelected(commitSelectedResponder: () => Promise<Response>) {
+      vi.mocked(authFetch).mockReset();
+      mockNavigate.mockReset();
+      let agentCalls = 0;
+      vi.mocked(authFetch).mockImplementation((url: string) => {
+        if (isBadgeUrl(url)) return mockEmptyBadges();
+        if (String(url).includes("/v1/admin/my-tenant")) {
+          return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+        }
+        if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
+        if (String(url).includes("/faq-import/commit-selected")) return commitSelectedResponder();
+        agentCalls += 1;
+        if (agentCalls === 1) return mockOk({ reply: "今週のまとめです。", actions: [] });
+        return mockOk({
+          reply: "2件のFAQ案を作成しました。",
+          actions: [{ tool: "suggest_faq_import_from_text", result: "2件のFAQ案を作成しました。", card: textCard }],
+        });
+      });
+    }
+
+    it("重複は既定で未選択のまま、選択した項目のindexだけをcommit-selectedに送信し成功メッセージを表示する", async () => {
+      mockAgentWithCommitSelected(() =>
+        Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true, inserted: 1, skipped: 0 }) } as Response),
+      );
+
+      await send("この説明文からFAQを作って");
+      await screen.findByText(/全2件中2件/);
+
+      const checkboxes = screen.getAllByRole("checkbox") as HTMLInputElement[];
+      expect(checkboxes).toHaveLength(2);
+      // textFaqs[0]は非重複(既定で選択済み)、textFaqs[1]は重複(既定で未選択)
+      expect(checkboxes[0].checked).toBe(true);
+      expect(checkboxes[1].checked).toBe(false);
+
+      const submitButton = screen.getByRole("button", { name: /選択した1件を登録して/ });
+      fireEvent.click(submitButton);
+
+      expect(await screen.findByText(/1件を登録しました/)).toBeTruthy();
+
+      const call = vi.mocked(authFetch).mock.calls.find(([u]) => String(u).includes("/faq-import/commit-selected"));
+      expect(call).toBeTruthy();
+      const body = JSON.parse(String((call![1] as RequestInit).body)) as { sessionId?: string; selectedIndices?: number[] };
+      // 選択されなかった重複項目(index=1)は送信内容に含まれない
+      expect(body.selectedIndices).toEqual([0]);
+      expect(typeof body.sessionId).toBe("string");
+      expect(body.sessionId?.length).toBeGreaterThan(0);
+    });
+
+    // GID 1218166714484055 (二重登録防止): fal/generateの連打防止テストと同じ手法で、
+    // 応答を意図的に遅延させ、1回目が返る前に2回目をクリックしてもネットワーク呼び出しが
+    // 1回しか発生しないことを検証する。
+    it("「選択したN件を登録して」を連打しても、登録中はcommit-selectedが1回しか呼ばれない", async () => {
+      let resolveCommit: (() => void) | null = null;
+      const pending = new Promise<Response>((resolve) => {
+        resolveCommit = () =>
+          resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true, inserted: 1, skipped: 0 }) } as Response);
+      });
+      mockAgentWithCommitSelected(() => pending);
+
+      await send("この説明文からFAQを作って");
+      const submitButton = await screen.findByRole("button", { name: /選択した1件を登録して/ });
+      fireEvent.click(submitButton);
+
+      // 1回目の応答がまだ解決していない間に2回目をクリックする
+      await waitFor(() => expect((submitButton as HTMLButtonElement).disabled).toBe(true));
+      fireEvent.click(submitButton);
+
+      const callsWhileInFlight = vi
+        .mocked(authFetch)
+        .mock.calls.filter(([u]) => String(u).includes("/faq-import/commit-selected")).length;
+      expect(callsWhileInFlight).toBe(1);
+
+      resolveCommit!();
+      await waitFor(() => expect(screen.getByText(/1件を登録しました/)).toBeTruthy());
+      // 解決後も合計1回のまま(遅延クリックが後から発火していない)
+      expect(
+        vi.mocked(authFetch).mock.calls.filter(([u]) => String(u).includes("/faq-import/commit-selected")).length,
+      ).toBe(1);
+    });
+
+    it("選択を全て外すと登録ボタンが無効化され、commit-selectedは一切呼ばれない(全件フォールバックしない)", async () => {
+      mockAgent({
+        reply: "2件のFAQ案を作成しました。",
+        actions: [{ tool: "suggest_faq_import_from_text", result: "2件のFAQ案を作成しました。", card: textCard }],
+      });
+
+      await send("この説明文からFAQを作って");
+      const checkboxes = await screen.findAllByRole("checkbox") as HTMLInputElement[];
+      // 既定で唯一選択済みのindex0(非重複)を外して選択0件にする
+      fireEvent.click(checkboxes[0]);
+
+      const submitButton = screen.getByRole("button", { name: /選択した0件を登録して/ });
+      expect((submitButton as HTMLButtonElement).disabled).toBe(true);
+
+      fireEvent.click(submitButton);
+      expect(
+        vi.mocked(authFetch).mock.calls.some(([u]) => String(u).includes("/faq-import/commit-selected")),
+      ).toBe(false);
+    });
+  });
 });
 
 // アバター画像候補の生成・採用は、エージェントツール経由にせずチャットから直接
