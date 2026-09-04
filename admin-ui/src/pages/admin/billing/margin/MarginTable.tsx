@@ -60,9 +60,11 @@ export interface MarginTableProps {
   onSort: (key: string) => void;
   /** 原価の円換算に使ったレート。列見出しに出して概算だと分かるようにする。 */
   usdJpy: number;
+  /** テナント名クリックで Stripe 実請求とのドリルダウンを開く。 */
+  onDrilldown: (tenantId: string, tenantName: string | null) => void;
 }
 
-export function MarginTable({ rows, sortBy, sortOrder, onSort, usdJpy }: MarginTableProps) {
+export function MarginTable({ rows, sortBy, sortOrder, onSort, usdJpy, onDrilldown }: MarginTableProps) {
   if (rows.length === 0) {
     return (
       <section style={{ ...CARD }}>
@@ -107,8 +109,18 @@ export function MarginTable({ rows, sortBy, sortOrder, onSort, usdJpy }: MarginT
           <tbody>
             {rows.map((r) => (
               <tr key={r.tenant_id} style={{ borderBottom: "1px solid rgba(31,41,55,0.5)" }}>
-                <td style={{ ...TD, color: "#60a5fa", fontWeight: 600 }}>
-                  {r.tenant_name ?? r.tenant_id}
+                <td style={TD}>
+                  <button
+                    onClick={() => onDrilldown(r.tenant_id, r.tenant_name)}
+                    style={{
+                      background: "transparent", border: "none", padding: 0,
+                      color: "#60a5fa", fontWeight: 600, fontSize: 14, cursor: "pointer",
+                      textDecoration: "underline", textUnderlineOffset: 3,
+                    }}
+                    title="Stripe実請求との突合を見る"
+                  >
+                    {r.tenant_name ?? r.tenant_id}
+                  </button>
                 </td>
                 <td style={TD}>{r.plan ?? "未設定"}</td>
                 <td style={TD}>{fmtNum(r.total_requests)}</td>

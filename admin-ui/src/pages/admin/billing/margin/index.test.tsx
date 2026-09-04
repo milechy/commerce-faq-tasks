@@ -273,4 +273,50 @@ describe('MarginDashboardPage — イレギュラー操作・XSS耐性', () => {
     const btn = screen.getByText('CSVで書き出す') as HTMLButtonElement;
     expect(btn.disabled).toBe(true);
   });
+
+  it('★テナント名をクリックするとドリルダウンが開き、選択中の月(period)で突合を叩く★(P1b)', async () => {
+    // MarginDashboardPage は UpsellProposalsSection(GET /v1/admin/upsell-proposals)と
+    // 自身の economics 一覧取得を両方 authFetch で叩くため、calls[0]/[1] はその2本。
+    // クリック後のドリルダウン用リクエストは calls[2] に来る。
+    mockAuthFetch
+      .mockResolvedValueOnce(jsonResponse(200, { proposals: [], truncated: false }))
+      .mockResolvedValueOnce(jsonResponse(200, body()))
+      .mockResolvedValueOnce(jsonResponse(200, {
+        row: ROW,
+        period_yyyymm: '202609', period_from: 'x', period_to: 'y', boundary: 'jst_calendar_month',
+        margin_assumed: 10, fx: { usd_jpy: 150, source: 'default', basis: 'fixed_rate_estimate' },
+        cost_basis: 'variable_only',
+        invoiced: {
+          amount_jpy: 23_000, status: 'paid', invoice_id: 'in_1', hosted_invoice_url: null,
+          finalized: true, reason: null,
+        },
+        variance_jpy: 700,
+      }));
+    renderPage();
+    await screen.findByText('Acme');
+
+    fireEvent.click(screen.getByTitle('Stripe実請求との突合を見る'));
+
+    await waitFor(() => {
+      const call = mockAuthFetch.mock.calls[2]!;
+      expect(call[0]).toBe('http://localhost:3100/v1/admin/billing/economics/acme?period=202609&reconcile=stripe');
+    });
+    expect(await screen.findByText(/¥23,000/)).toBeTruthy();
+  });
+
+  it('ドリルダウンを閉じても背後の一覧はそのまま残る', async () => {
+    mockAuthFetch
+      .mockResolvedValueOnce(jsonResponse(200, { proposals: [], truncated: false }))
+      .mockResolvedValueOnce(jsonResponse(200, body()))
+      .mockResolvedValueOnce(jsonResponse(500, {}));
+    renderPage();
+    await screen.findByText('Acme');
+
+    fireEvent.click(screen.getByTitle('Stripe実請求との突合を見る'));
+    await screen.findByText(/取得に失敗しました/);
+
+    fireEvent.click(screen.getByLabelText('閉じる'));
+    expect(screen.queryByText(/取得に失敗しました/)).toBeNull();
+    expect(screen.getByText('Acme')).toBeTruthy();
+  });
 });

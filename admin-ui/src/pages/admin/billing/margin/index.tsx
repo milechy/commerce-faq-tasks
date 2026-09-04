@@ -18,6 +18,7 @@ import { supabase } from "../../../../lib/supabaseClient";
 import { LoadErrorBanner } from "../../../../components/common/LoadErrorBanner";
 import { CARD, BTN_LINK } from "../utils";
 import { MarginTable } from "./MarginTable";
+import { MarginDrilldown } from "./MarginDrilldown";
 import { UpsellProposalsSection } from "./UpsellProposalsSection";
 import { parseMarginSummaryResponse } from "./marginSummary.schema";
 import {
@@ -43,6 +44,8 @@ export default function MarginDashboardPage() {
   // ★既定は粗利率の昇順(採算の悪い順)★ 手を打つ相手が上に来る。
   const [sortBy, setSortBy] = useState<MarginSortKey>("margin");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
+
+  const [drilldown, setDrilldown] = useState<{ tenantId: string; tenantName: string | null } | null>(null);
 
   const load = useCallback(async () => {
     setStatus("loading");
@@ -160,6 +163,7 @@ export default function MarginDashboardPage() {
             sortOrder={sortOrder}
             onSort={onSort}
             usdJpy={data.fx.usd_jpy}
+            onDrilldown={(tenantId, tenantName) => setDrilldown({ tenantId, tenantName })}
           />
 
           <p style={{ marginTop: 12, fontSize: 12, color: "var(--muted-foreground)" }}>
@@ -167,6 +171,15 @@ export default function MarginDashboardPage() {
             原価の逆算に使ったマージン倍率: ×{data.margin_assumed}
           </p>
         </>
+      )}
+
+      {drilldown && (
+        <MarginDrilldown
+          tenantId={drilldown.tenantId}
+          tenantName={drilldown.tenantName}
+          periodYyyyMm={monthToPeriod(month)}
+          onClose={() => setDrilldown(null)}
+        />
       )}
     </div>
   );
