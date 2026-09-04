@@ -792,3 +792,214 @@ describe("POST /v1/hermes-mcp/proposals（アップセル）", () => {
     expect(res.status).toBe(500);
   });
 });
+
+// ---------------------------------------------------------------------------
+// POST /proposals — 境界値・イレギュラー操作（2026-09-04 テスト強化）
+// ---------------------------------------------------------------------------
+describe("POST /v1/hermes-mcp/proposals — 境界値・イレギュラー操作", () => {
+  beforeEach(() => {
+    mockIsConsentGranted.mockResolvedValue(true);
+    mockQuery.mockReset().mockResolvedValue({ rows: [{ id: 1 }] });
+  });
+
+  it("title がちょうど MAX_TEXT_LEN(2000) は許可される", async () => {
+    const res = await authedPost("/v1/hermes-mcp/proposals", {
+      ...VALID_TENANT_PROPOSAL, title: "あ".repeat(2000),
+    });
+    expect(res.status).toBe(201);
+  });
+
+  it("★title が MAX_TEXT_LEN+1(2001) は拒否される★(境界値のオフバイワン)", async () => {
+    const res = await authedPost("/v1/hermes-mcp/proposals", {
+      ...VALID_TENANT_PROPOSAL, title: "あ".repeat(2001),
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_title");
+  });
+
+  it("title が空白のみは拒否される(trim後に空)", async () => {
+    const res = await authedPost("/v1/hermes-mcp/proposals", {
+      ...VALID_TENANT_PROPOSAL, title: "   　　  ",
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("★proposal_type の大文字小文字違いは invalid として拒否する(既定 behavior へ緩く倒さない)★", async () => {
+    const res = await authedPost("/v1/hermes-mcp/proposals", {
+      ...VALID_TENANT_PROPOSAL, proposal_type: "Behavior",
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_proposal_type");
+  });
+
+  it("proposal_type が配列(型混同攻撃)は invalid_proposal_type", async () => {
+    const res = await authedPost("/v1/hermes-mcp/proposals", {
+      ...VALID_TENANT_PROPOSAL, proposal_type: ["upsell"],
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_proposal_type");
+  });
+
+  it("dedup_key が空文字は拒否される", async () => {
+    const res = await authedPost("/v1/hermes-mcp/proposals", { ...VALID_TENANT_PROPOSAL, dedup_key: "" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_dedup_key");
+  });
+
+  it("tenant_id に SQL インジェクション風の文字列が来ても 400/403 に倒れる(パラメータ化クエリで実害なし)", async () => {
+    const res = await authedPost("/v1/hermes-mcp/proposals", {
+      ...VALID_TENANT_PROPOSAL, tenant_id: "'; DROP TABLE tuning_rules; --",
+    });
+    // 同意チェックで弾かれる(このテナントIDは isHermesDataConsentGranted のモックが
+    // true を返すため通り、INSERT まで到達するが、パラメータ化されているので
+    // 文字列としてそのまま扱われるだけで実害は無い)。500 にならないことを確認する。
+    expect([201, 403]).toContain(res.status);
+  });
+
+  it("evidence がネストの深いオブジェクトでもクラッシュしない(JSON.stringify可能な範囲)", async () => {
+    let deep: Record<string, unknown> = { leaf: true };
+    for (let i = 0; i < 50; i++) deep = { nested: deep };
+    const res = await authedPost("/v1/hermes-mcp/proposals", {
+      ...VALID_TENANT_PROPOSAL, evidence: deep,
+    });
+    expect(res.status).toBe(201);
+  });
+
+  it("evidence が配列(オブジェクトでない)なら invalid_evidence", async () => {
+    const res = await authedPost("/v1/hermes-mcp/proposals", {
+      ...VALID_TENANT_PROPOSAL, evidence: ["not", "an", "object"],
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_evidence");
+  });
+
+  it("body が完全に空でも 400 で落ち着く(500 にならない)", async () => {
+    const res = await authedPost("/v1/hermes-mcp/proposals", {});
+    expect(res.status).toBe(400);
+  });
+
+  it("body が null 相当(空文字列)でもクラッシュしない", async () => {
+    const res = await request(makeApp())
+      .post("/v1/hermes-mcp/proposals")
+      .set("Authorization", `Bearer ${API_KEY}`)
+      .set("Content-Type", "application/json")
+      .send("");
+    expect([400, 415]).toContain(res.status);
+  });
+
+  it("title に制御文字(改行・タブ)が混ざっていても拒否せず通す(表示側の責務)", async () => {
+    const res = await authedPost("/v1/hermes-mcp/proposals", {
+      ...VALID_TENANT_PROPOSAL, title: "行1\n行2\tタブ",
+    });
+    expect(res.status).toBe(201);
+  });
+
+  it("scope が数値(型違反)なら invalid_scope", async () => {
+    const res = await authedPost("/v1/hermes-mcp/proposals", { ...VALID_TENANT_PROPOSAL, scope: 1 });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_scope");
+  });
+
+  it("scope が 'Tenant'(大文字違い)は invalid_scope として拒否する", async () => {
+    const res = await authedPost("/v1/hermes-mcp/proposals", { ...VALID_TENANT_PROPOSAL, scope: "Tenant" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_scope");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// アップセル検証の境界値・イレギュラー操作
+// ---------------------------------------------------------------------------
+describe("POST /v1/hermes-mcp/proposals（アップセル）— 境界値・イレギュラー操作", () => {
+  const UPSELL_BASE = {
+    scope: "tenant", tenant_id: "carnation",
+    title: "会話が込み枠を超えています", rationale: "根拠",
+    suggested_action: "Growthプランへの変更を提案する",
+    dedup_key: "tenant:carnation:upsell:202609",
+    proposal_type: "upsell",
+    upsell: {
+      signal: "text_overage", current_plan: "standard",
+      recommended_plan: "growth", period_yyyymm: "202609",
+    },
+  };
+
+  beforeEach(() => {
+    mockIsConsentGranted.mockResolvedValue(true);
+    mockQuery.mockReset()
+      .mockResolvedValueOnce({ rows: [{ plan: "standard" }] })
+      .mockResolvedValue({ rows: [{ id: 7 }] });
+  });
+
+  it("period_yyyymm が 13月(不正な月)は invalid_period", async () => {
+    const res = await authedPost("/v1/hermes-mcp/proposals", {
+      ...UPSELL_BASE, upsell: { ...UPSELL_BASE.upsell, period_yyyymm: "202613" },
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_period");
+  });
+
+  it("period_yyyymm が 0月は invalid_period", async () => {
+    const res = await authedPost("/v1/hermes-mcp/proposals", {
+      ...UPSELL_BASE, upsell: { ...UPSELL_BASE.upsell, period_yyyymm: "202600" },
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("current_plan が recommended_plan と同一(現状維持の提案)でも許可される", async () => {
+    mockQuery.mockReset()
+      .mockResolvedValueOnce({ rows: [{ plan: "standard" }] })
+      .mockResolvedValue({ rows: [{ id: 7 }] });
+    const res = await authedPost("/v1/hermes-mcp/proposals", {
+      ...UPSELL_BASE, upsell: { ...UPSELL_BASE.upsell, recommended_plan: "standard" },
+    });
+    // 意味的には奇妙(同一プランへの「アップセル」)だが、allowlist上は妥当なので
+    // バリデーションでは弾かない(意味検証まではしない範囲)ことを確認する。
+    expect(res.status).toBe(201);
+  });
+
+  it("★current_plan が PLAN_LADDER に無い未知の値なら invalid_plan★", async () => {
+    const res = await authedPost("/v1/hermes-mcp/proposals", {
+      ...UPSELL_BASE, upsell: { ...UPSELL_BASE.upsell, current_plan: "platinum-plus" },
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_plan");
+  });
+
+  it("signal が既知の名前に大文字を混ぜた変種は invalid_upsell_signal(allowlist は完全一致)", async () => {
+    const res = await authedPost("/v1/hermes-mcp/proposals", {
+      ...UPSELL_BASE, upsell: { ...UPSELL_BASE.upsell, signal: "Text_Overage" },
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_upsell_signal");
+  });
+
+  it("upsell が null(オブジェクトでない)なら upsell_required", async () => {
+    const res = await authedPost("/v1/hermes-mcp/proposals", { ...UPSELL_BASE, upsell: null });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("upsell_required");
+  });
+
+  it("upsell に signal が欠落していれば invalid_upsell_signal", async () => {
+    const { signal: _signal, ...rest } = UPSELL_BASE.upsell;
+    void _signal;
+    const res = await authedPost("/v1/hermes-mcp/proposals", { ...UPSELL_BASE, upsell: rest });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_upsell_signal");
+  });
+
+  it("period_yyyymm が数値型(文字列でない)なら invalid_period", async () => {
+    const res = await authedPost("/v1/hermes-mcp/proposals", {
+      ...UPSELL_BASE, upsell: { ...UPSELL_BASE.upsell, period_yyyymm: 202609 },
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_period");
+  });
+
+  it("★scope='tenant' で tenant_id 省略時は tenant_id required が先に効く(upsell検証より前)★", async () => {
+    const { tenant_id: _t, ...rest } = UPSELL_BASE;
+    void _t;
+    const res = await authedPost("/v1/hermes-mcp/proposals", rest);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("tenant_id required for scope=tenant");
+  });
+});

@@ -424,6 +424,17 @@ const NEGATIVE_GUARD_FIELDS: ReadonlyArray<keyof UsageRecord> = [
  * @throws inputTokens / outputTokens / NEGATIVE_GUARD_FIELDS が負の場合
  */
 function _computeTotalCostUsd(usage: UsageRecord): number {
+  // ★NaN/Infinity は `< 0` を素通りする★(2026-09-04 テスト強化で追加)。
+  // `NaN < 0` は false、`Infinity < 0` も false なので、上流(LLM APIのレスポンス
+  // 異常・パース失敗等)から NaN/Infinity が来ると原価計算全体が NaN汚染される。
+  // NaN は DB の INTEGER 列へ書き込もうとすると driver がエラーを投げるため、
+  // ここで弾いて呼び出し元(usageTracker.ts)の catch で 0 にフォールバックさせる方が、
+  // 「原価計算そのものが失敗する」より安全(計上ゼロ円は目に見えて気づける)。
+  if (!Number.isFinite(usage.inputTokens) || !Number.isFinite(usage.outputTokens)) {
+    throw new Error(
+      `Invalid token counts: input=${usage.inputTokens}, output=${usage.outputTokens}`
+    );
+  }
   if (usage.inputTokens < 0 || usage.outputTokens < 0) {
     throw new Error(
       `Invalid token counts: input=${usage.inputTokens}, output=${usage.outputTokens}`
@@ -431,7 +442,7 @@ function _computeTotalCostUsd(usage: UsageRecord): number {
   }
   for (const field of NEGATIVE_GUARD_FIELDS) {
     const value = usage[field];
-    if (typeof value === 'number' && value < 0) {
+    if (typeof value === 'number' && (!Number.isFinite(value) || value < 0)) {
       throw new Error(`Invalid ${field}: ${value}`);
     }
   }

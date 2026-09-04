@@ -23,11 +23,14 @@
 /**
  * USD/JPY レート。env `USD_JPY_RATE` で上書き可能、既定 150。
  *
- * `Number(...) || 150` は NaN と 0 の両方を既定へ倒す。0 を許すと原価が
- * 全額 0 円になり「原価ゼロで粗利＝売上」という嘘の数字が出るため、
- * 0 は設定ミスとして扱う。
+ * 0・NaN・★負の値★は設定ミスとして既定へ倒す(2026-09-04 テスト強化で追加)。
+ * 0 を許すと原価が全額 0 円になり「原価ゼロで粗利＝売上」という嘘の数字が出る。
+ * 負の値は `Number('-100') || 150` だと -100 が truthy なのでそのまま通ってしまい、
+ * 原価が負の円に変換され「粗利が売上を超える」架空の増益を表示しうる
+ * (env のタイプミス — 桁の前にマイナスを付け忘れた等 — で容易に混入する値)。
  */
-export const USD_JPY_RATE = Number(process.env.USD_JPY_RATE ?? '150') || 150;
+const _rawRate = Number(process.env.USD_JPY_RATE ?? '150');
+export const USD_JPY_RATE = Number.isFinite(_rawRate) && _rawRate > 0 ? _rawRate : 150;
 
 /**
  * USD → JPY（整数）。

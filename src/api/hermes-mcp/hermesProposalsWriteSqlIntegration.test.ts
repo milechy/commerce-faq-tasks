@@ -331,3 +331,202 @@ d("D8-2: アップセル提案は承認しても本番プロンプトに入ら�
     expect(rows[0].n).toBe(0);
   });
 });
+
+/**
+ * 並行リクエストの実DB競合検証(2026-09-04 テスト強化)。
+ *
+ * routes.test.ts(モックDB)は「1回目成功→2回目 mockRejectedValueOnce で
+ * 23505」という順序を人為的に作っているだけで、実際に2つのリクエストが
+ * "同時に" 実行されたとき ON CONFLICT が本当に排他制御として機能するかは
+ * 検証していない。Hermes は無人 cron から複数プロセス/複数タイミングで
+ * 同じ提案を送りうるため、Promise.all で本物の競合を作って確認する。
+ */
+d("POST /v1/hermes-mcp/proposals — 並行リクエストの実DB競合", () => {
+  beforeAll(() => {
+    db = new Pool({ connectionString: DB_URL, options: "-c timezone=UTC" });
+  });
+
+  afterAll(async () => {
+    await db.end();
+  });
+
+  beforeEach(async () => {
+    await db.query("TRUNCATE tuning_rules RESTART IDENTITY CASCADE");
+    await db.query("TRUNCATE tenants CASCADE");
+    await db.query(
+      `INSERT INTO tenants (id, name, features) VALUES ('carnation', 'carnation', $1::jsonb)`,
+      [JSON.stringify({ learning: { learn: true, share: true } })],
+    );
+    process.env.HERMES_MCP_API_KEY = API_KEY;
+  });
+
+  afterEach(() => {
+    delete process.env.HERMES_MCP_API_KEY;
+  });
+
+  const PROPOSAL = {
+    scope: "tenant", tenant_id: "carnation",
+    title: "保証訴求の改善", rationale: "根拠",
+    suggested_action: "保証訴求を初回応答に含める",
+    dedup_key: "tenant:carnation:concurrent-test",
+  };
+
+  it("★同一 dedup_key を同時に10並列でPOSTしても、成功は1件だけで行も1件だけ★", async () => {
+    // ★同一 app インスタンスに対して並行させる★
+    // testServer ヘルパーは「異なる app への同時リクエスト」を検出すると例外を
+    // 投げる安全装置を持つ(後勝ちで転送先が入れ替わり、誤った結果を静かに返す
+    // 事故を防ぐため)。authedPost が呼び出しごとに makeApp() する実装のままだと
+    // これに抵触するので、ここでは1つの app を使い回す。
+    const app = makeApp();
+    const post = (body: object) =>
+      request(app).post("/v1/hermes-mcp/proposals").set("Authorization", `Bearer ${API_KEY}`).send(body);
+    const results = await Promise.all(
+      Array.from({ length: 10 }, () => post(PROPOSAL)),
+    );
+
+    const succeeded = results.filter((r) => r.status === 201 && r.body.duplicate === false);
+    const duplicated = results.filter((r) => r.status === 200 && r.body.duplicate === true);
+
+    expect(succeeded).toHaveLength(1);
+    expect(duplicated).toHaveLength(9);
+    // 500 が1件も無いこと(23505 が duplicate として正しく吸収されている)
+    expect(results.every((r) => r.status !== 500)).toBe(true);
+
+    const { rows } = await db.query(
+      `SELECT count(*)::int AS n FROM tuning_rules WHERE dedup_key = $1`,
+      [PROPOSAL.dedup_key],
+    );
+    expect(rows[0].n).toBe(1);
+  });
+
+  it("異なる dedup_key を同時に5並列でPOSTすると全件成功し、5行とも保存される", async () => {
+    const app = makeApp();
+    const post = (body: object) =>
+      request(app).post("/v1/hermes-mcp/proposals").set("Authorization", `Bearer ${API_KEY}`).send(body);
+    // ★title(=trigger_pattern)も一意にする★
+    // uniq_tuning_rules_tenant_trigger (tenant_id, trigger_pattern) が別途効いており、
+    // dedup_key を変えても trigger_pattern が同じなら 23505 → duplicate に丸められる
+    // (これは既存仕様。routes.ts の該当コメント参照)。ここで確認したいのは
+    // dedup_key 経路の並行成功なので、意図的に trigger_pattern も分ける。
+    const results = await Promise.all(
+      Array.from({ length: 5 }, (_, i) =>
+        post({
+          ...PROPOSAL,
+          title: `保証訴求の改善-${i}`,
+          dedup_key: `tenant:carnation:concurrent-${i}`,
+        })),
+    );
+    expect(results.every((r) => r.status === 201)).toBe(true);
+
+    const { rows } = await db.query(`SELECT count(*)::int AS n FROM tuning_rules`);
+    expect(rows[0].n).toBe(5);
+  });
+});
+
+/**
+ * 二重承認・二重却下の実DB競合検証(2026-09-04 テスト強化)。
+ *
+ * 管理画面で承認ボタンを二度連打する、または複数タブで同じ提案を開いて
+ * 別々に承認するユーザー操作は現実的に起こりうる。approveTuningRule /
+ * rejectTuningRule は「承認済みのものをもう一度承認する」を想定しているか、
+ * 同時実行で不整合(is_active と status が食い違う等)が起きないかを確認する。
+ */
+d("D8-2: 承認/却下の二重実行（実DB）", () => {
+  beforeAll(() => {
+    db = new Pool({ connectionString: DB_URL, options: "-c timezone=UTC" });
+  });
+
+  afterAll(async () => {
+    await db.end();
+  });
+
+  beforeEach(async () => {
+    await db.query("TRUNCATE tuning_rules RESTART IDENTITY CASCADE");
+    await db.query("TRUNCATE tenants CASCADE");
+    await db.query(
+      `INSERT INTO tenants (id, name, plan, features) VALUES ('carnation', 'carnation', 'standard', $1::jsonb)`,
+      [JSON.stringify({ learning: { learn: true, share: true } })],
+    );
+    process.env.HERMES_MCP_API_KEY = API_KEY;
+  });
+
+  afterEach(() => {
+    delete process.env.HERMES_MCP_API_KEY;
+  });
+
+  it("★同じ upsell 提案を10並列で承認しても is_active は常に false のまま(CHECK制約 + D8-2導出が競合下でも守る)★", async () => {
+    const { approveTuningRule } = await import("../admin/evaluations/evaluationsRepository");
+
+    const post = await authedPost("/v1/hermes-mcp/proposals", {
+      scope: "tenant", tenant_id: "carnation",
+      title: "会話が込み枠を超えています", rationale: "根拠",
+      suggested_action: "Growthプランへの変更を提案する",
+      dedup_key: "tenant:carnation:upsell:concurrent-approve",
+      proposal_type: "upsell",
+      upsell: { signal: "text_overage", current_plan: "standard", recommended_plan: "growth", period_yyyymm: "202609" },
+    });
+    const id = Number(post.body.proposal_id);
+
+    const results = await Promise.all(
+      Array.from({ length: 10 }, () => approveTuningRule(id, "carnation")),
+    );
+
+    // 全呼び出しが成功し、どの結果を見ても is_active=false(upsellが有効化されない)
+    expect(results.every((r) => r !== null)).toBe(true);
+    expect(results.every((r) => r!.is_active === false)).toBe(true);
+
+    const { rows } = await db.query(`SELECT is_active, status FROM tuning_rules WHERE id = $1`, [id]);
+    expect(rows[0]).toEqual({ is_active: false, status: "active" });
+  });
+
+  it("behavior 提案を承認→却下→承認と連続実行しても最終状態と is_active が食い違わない", async () => {
+    const { approveTuningRule, rejectTuningRule } = await import("../admin/evaluations/evaluationsRepository");
+
+    const post = await authedPost("/v1/hermes-mcp/proposals", {
+      scope: "tenant", tenant_id: "carnation",
+      title: "保証訴求の改善", rationale: "根拠",
+      suggested_action: "保証訴求を初回応答に含める",
+      dedup_key: "tenant:carnation:toggle-test",
+    });
+    const id = Number(post.body.proposal_id);
+
+    await approveTuningRule(id, "carnation");
+    await rejectTuningRule(id, "carnation");
+    const final = await approveTuningRule(id, "carnation");
+
+    expect(final!.status).toBe("active");
+    expect(final!.is_active).toBe(true);
+
+    const { rows } = await db.query(
+      `SELECT is_active, status, approved_at, rejected_at FROM tuning_rules WHERE id = $1`, [id]);
+    // D8: 最終的に承認状態なら rejected_at は NULL に戻っていること(承認↔却下の対称性)
+    expect(rows[0].is_active).toBe(true);
+    expect(rows[0].status).toBe("active");
+    expect(rows[0].rejected_at).toBeNull();
+    expect(rows[0].approved_at).not.toBeNull();
+  });
+
+  it("存在しないIDの承認は null を返し、例外を投げない(操作ミス・二重クリックで既に削除済み等)", async () => {
+    const { approveTuningRule } = await import("../admin/evaluations/evaluationsRepository");
+    const result = await approveTuningRule(999999, "carnation");
+    expect(result).toBeNull();
+  });
+
+  it("他テナントのIDを承認しようとすると null(越境防止)", async () => {
+    const { approveTuningRule } = await import("../admin/evaluations/evaluationsRepository");
+    const post = await authedPost("/v1/hermes-mcp/proposals", {
+      scope: "tenant", tenant_id: "carnation",
+      title: "保証訴求の改善", rationale: "根拠",
+      suggested_action: "保証訴求を初回応答に含める",
+      dedup_key: "tenant:carnation:cross-tenant-test",
+    });
+    const id = Number(post.body.proposal_id);
+
+    const result = await approveTuningRule(id, "other-tenant-not-owner");
+    expect(result).toBeNull();
+
+    // 越境試行後も元の行は pending のまま変化していない
+    const { rows } = await db.query(`SELECT status, is_active FROM tuning_rules WHERE id = $1`, [id]);
+    expect(rows[0]).toEqual({ status: "pending", is_active: false });
+  });
+});

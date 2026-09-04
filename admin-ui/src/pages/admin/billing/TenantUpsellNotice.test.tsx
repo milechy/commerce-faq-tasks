@@ -78,3 +78,34 @@ describe("TenantUpsellNotice", () => {
     expect(container.textContent).toBe("");
   });
 });
+
+describe('TenantUpsellNotice — XSS耐性', () => {
+  it('★headline/lines に <script> タグが混ざっても実行可能なDOMとして解釈されない★', async () => {
+    mockAuthFetch.mockResolvedValue(jsonResponse(200, {
+      available: true,
+      headline: '<script>window.__xss_headline = true</script>プランのご提案',
+      lines: ['<img src=x onerror="window.__xss_line=true">超過しています'],
+    }));
+    const { container } = render(<TenantUpsellNotice />);
+    await screen.findByText(/プランのご提案/);
+
+    // React は {expr} 経由のテキストをエスケープしてレンダーする(dangerouslySetInnerHTML不使用)。
+    // <script> や <img> が実際の DOM 要素として生成されていないことを確認する。
+    expect(container.querySelector('script')).toBeNull();
+    expect(container.querySelector('img')).toBeNull();
+    expect((window as unknown as { __xss_headline?: boolean }).__xss_headline).toBeUndefined();
+    expect((window as unknown as { __xss_line?: boolean }).__xss_line).toBeUndefined();
+
+    // テキストとしてはそのまま(エスケープされて)表示されている
+    expect(container.textContent).toContain('<script>');
+  });
+
+  it('サーバがオブジェクト形式のheadline(型違反)を返してもクラッシュしない', async () => {
+    mockAuthFetch.mockResolvedValue(jsonResponse(200, {
+      available: true, headline: { malicious: 'object' }, lines: [],
+    }));
+    const { container } = render(<TenantUpsellNotice />);
+    await waitFor(() => expect(mockAuthFetch).toHaveBeenCalled());
+    expect(container.textContent).toBe('');
+  });
+});

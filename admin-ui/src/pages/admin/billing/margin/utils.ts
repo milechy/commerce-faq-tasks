@@ -107,7 +107,18 @@ export function exportMarginCsv(rows: TenantMarginRow[], month: string, usdJpy: 
     "粗利_推計_JPY", "粗利率_%", "原価の確からしさ", "非課金原価_USD",
   ].join(",");
 
-  const esc = (v: string) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
+  // ★CSV Formula Injection 対策(2026-09-04 テスト強化で追加)★
+  // tenant_id / tenant_name は DB 由来でテナント管理者が設定できる値であり、
+  // セルが "=" / "+" / "-" / "@" / タブ / CR で始まると Excel/Google Sheets が
+  // 数式として評価する(例: tenant_name = "=cmd|'/c calc'!A1" や外部URL読み込み
+  // 数式による情報持ち出し)。CSV は「営業リストとして社外の目にも触れうる」
+  // 前提のファイルなので、先頭にシングルクォートを付けて文字列強制する
+  // (Excel/Sheets 双方で有効な対策。表示上は見えない)。
+  const FORMULA_PREFIX = /^[=+\-@\t\r]/;
+  const esc = (v: string) => {
+    const safe = FORMULA_PREFIX.test(v) ? `'${v}` : v;
+    return /[",\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
+  };
   const body = rows.map((r) =>
     [
       esc(r.tenant_id),
