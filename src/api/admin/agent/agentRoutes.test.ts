@@ -15403,16 +15403,23 @@ describe('POST /v1/admin/agent/chat', () => {
     // 専用クライアントを取る(注入済み db.query = mockQuery とは別チャネル)。
     // 呼び出し順は必ず: lock → count → (allowed かつ 新規なら) 予約INSERT → unlock。
     /** getTenantPlanをfree_adにし、db.connect()経由のロック+カウントクエリ応答を積む */
+    // BEGIN → SET LOCAL lock_timeout → pg_advisory_xact_lock → count →
+    // (新規予約なら)INSERT → COMMIT/ROLLBACK。トランザクションスコープの
+    // ロック(pg_advisory_xact_lock)なのでCOMMIT/ROLLBACKで自動解放され、
+    // 明示的なunlock呼び出しは無い(2026-09-04レビュー是正: P1)。
     function mockFreeAdAndConsultCount(count: number, countedToday: boolean) {
       mockQueryTenantPlanResult.mockResolvedValueOnce('free_ad');
       const blocked = !countedToday && count >= 30;
       const willReserve = !countedToday && !blocked;
-      const clientQuery = jest.fn().mockResolvedValueOnce({ rows: [] }); // pg_advisory_lock
+      const clientQuery = jest.fn()
+        .mockResolvedValueOnce({ rows: [] }) // BEGIN
+        .mockResolvedValueOnce({ rows: [] }) // SET LOCAL lock_timeout
+        .mockResolvedValueOnce({ rows: [] }); // pg_advisory_xact_lock
       clientQuery.mockResolvedValueOnce({ rows: [{ count: String(count), counted_today: countedToday }] }); // count
       if (willReserve) {
         clientQuery.mockResolvedValueOnce({ rows: [] }); // 予約INSERT
       }
-      clientQuery.mockResolvedValueOnce({ rows: [] }); // pg_advisory_unlock
+      clientQuery.mockResolvedValueOnce({ rows: [] }); // COMMIT または ROLLBACK
       mockConnect.mockResolvedValueOnce({ query: clientQuery, release: jest.fn() });
       return clientQuery;
     }
@@ -15582,8 +15589,11 @@ describe('POST /v1/admin/agent/chat', () => {
       mockQueryTenantPlanResult.mockResolvedValueOnce('free_ad');
       const release = jest.fn();
       const clientQuery = jest.fn()
-        .mockResolvedValueOnce({ rows: [] }) // pg_advisory_lock は成功
-        .mockRejectedValueOnce(new Error('DB down')); // 集計クエリが失敗
+        .mockResolvedValueOnce({ rows: [] }) // BEGIN
+        .mockResolvedValueOnce({ rows: [] }) // SET LOCAL lock_timeout
+        .mockResolvedValueOnce({ rows: [] }) // pg_advisory_xact_lock は成功
+        .mockRejectedValueOnce(new Error('DB down')) // 集計クエリが失敗
+        .mockResolvedValueOnce({ rows: [] }); // catch節のROLLBACK
       mockConnect.mockResolvedValueOnce({ query: clientQuery, release });
       mockFetch.mockResolvedValueOnce(makeGroqResponse('お答えします。'));
 
@@ -15599,10 +15609,14 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(release).toHaveBeenCalledTimes(1);
     });
 
-    it('ロック獲得(pg_advisory_lock)自体が失敗しても相談は止まらない(fail-open)', async () => {
+    it('ロック獲得(pg_advisory_xact_lock)自体が失敗しても相談は止まらない(fail-open)', async () => {
       mockQueryTenantPlanResult.mockResolvedValueOnce('free_ad');
       const release = jest.fn();
-      const clientQuery = jest.fn().mockRejectedValueOnce(new Error('DB down'));
+      const clientQuery = jest.fn()
+        .mockResolvedValueOnce({ rows: [] }) // BEGIN
+        .mockResolvedValueOnce({ rows: [] }) // SET LOCAL lock_timeout
+        .mockRejectedValueOnce(new Error('lock timeout')) // pg_advisory_xact_lock が失敗
+        .mockResolvedValueOnce({ rows: [] }); // catch節のROLLBACK
       mockConnect.mockResolvedValueOnce({ query: clientQuery, release });
       mockFetch.mockResolvedValueOnce(makeGroqResponse('お答えします。'));
 
@@ -15634,9 +15648,12 @@ describe('POST /v1/admin/agent/chat', () => {
       mockQueryTenantPlanResult.mockResolvedValueOnce('free_ad');
       const release = jest.fn();
       const clientQuery = jest.fn()
-        .mockResolvedValueOnce({ rows: [] }) // pg_advisory_lock
+        .mockResolvedValueOnce({ rows: [] }) // BEGIN
+        .mockResolvedValueOnce({ rows: [] }) // SET LOCAL lock_timeout
+        .mockResolvedValueOnce({ rows: [] }) // pg_advisory_xact_lock
         .mockResolvedValueOnce({ rows: [{ count: '5', counted_today: false }] }) // count
-        .mockRejectedValueOnce(new Error('DB down')); // 予約INSERTが失敗
+        .mockRejectedValueOnce(new Error('DB down')) // 予約INSERTが失敗
+        .mockResolvedValueOnce({ rows: [] }); // catch節のROLLBACK
       mockConnect.mockResolvedValueOnce({ query: clientQuery, release });
       mockFetch.mockResolvedValueOnce(makeGroqResponse('お答えします。'));
 

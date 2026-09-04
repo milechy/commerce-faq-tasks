@@ -947,16 +947,6 @@ const ADMIN_AGENT_FREE_AD_LIMIT_MESSAGE =
   `無料プランでは今月分はここまでとなりますが、来月になるとまたご相談いただけます。` +
   `今月中にもっと相談したい場合は、プランを変更するとそのままお使いいただけます。`;
 
-/**
- * 当月(JST暦月)の管理AI相談件数と、今日(JST暦日)この session_id が既に計上済みかを
- * 1クエリで取得する。相談の数え方は (session_id, JST暦日) のDISTINCT
- * (docs/ADMIN_AGENT_COST_REQUIREMENTS.md §4-1)。
- *
- * created_at の月範囲比較は getMonthRangeJst が返す UTC 境界をそのまま使う
- * （CLAUDE.md 絶対にやってはいけないこと16「AT TIME ZONE を片側だけ書く」を避けるため、
- * 境界比較には AT TIME ZONE を使わない）。AT TIME ZONE は JST 暦日を取り出す
- * （グルーピング用の日付キーを作る）ためだけに使う。
- */
 /** shiftToJstWallClock(now) から 'YYYY-MM-DD'(JST暦日)の文字列を作る。 */
 function todayJstDateString(now: Date): string {
   const shifted = shiftToJstWallClock(now);
@@ -978,14 +968,49 @@ function adminConsultReservationRequestId(tenantId: string, sessionId: string, n
   return `admin-agent-slot-${tenantId}-${sessionId}-${todayJstDateString(now)}`;
 }
 
+/**
+ * 当月(JST暦月)の管理AI相談件数と、今日(JST暦日)この session_id が既に計上済みかを
+ * 1クエリで取得する。相談の数え方は (session_id, JST暦日) のDISTINCT
+ * (docs/ADMIN_AGENT_COST_REQUIREMENTS.md §4-1)。stripeSync.ts の
+ * computeExpectedBilling(admin_units CTE)と同じ判定であり、意図的に別実装にしている。
+ *
+ * ★なぜ computeExpectedBilling を共有せず、ここで数え直すのか★
+ * src/api/chat/route.ts の countFreeAdBillableConversations(テキスト会話の
+ * free_ad上限判定)と同じ理由・同じ設計。computeExpectedBilling は Stripe への
+ * 実請求(billedQuantity)の唯一の出どころであり、この無料枠ガード(可用性のソフトな
+ * 足切り)のためにそちらのSQLへ手を入れるリスクを負いたくない。両者が完全に一致
+ * しなくても、このガードはもともと安全側の近似でよい設計(countFreeAdBillableConversations
+ * のコメント参照)。
+ *
+ * ★この重複が意味する既知のリスク★ admin_units CTE(stripeSync.ts)の判定ロジックを
+ * 変更してもこちらは自動では追随しない。乖離すると「請求上のadminConsults」と
+ * 「free_adの月次上限が数える件数」がズレる(例: 前者だけ判定条件を変えると、
+ * 請求画面の残量表示とチャットのブロック挙動が食い違って見える)。
+ * billingSqlIntegration.test.ts の「computeExpectedBillingとcountFreeAdAdminConsults
+ * の一致」テストが、同一フィクスチャに対する両者の結果を実Postgresで突き合わせて
+ * この乖離を検知する(2026-09-04追加。テキスト次元側にはまだこの種のテストが無い —
+ * 同じ穴が既存パターンにも残っている)。
+ *
+ * ★実際に見つかっている既知の乖離が1件ある★ session_id が NULL の admin_agent 行
+ * (migration適用前・配線漏れ等のlegacy行。現在のchatSchemaはsessionId必須なので
+ * 新規には作られない)は、admin_units側は row_units フォールバックで1行=1単位として
+ * 数えるが、この関数は`session_id IS NOT NULL`のため一切数えない。fail-open側
+ * (上限判定が数え漏れる方向)の乖離なので店主を誤って止める事故にはならないが、
+ * 「両者は常に一致する」という前提で実装を触らないこと(該当テスト参照)。
+ *
+ * created_at の月範囲比較は getMonthRangeJst が返す UTC 境界をそのまま使う
+ * （CLAUDE.md 絶対にやってはいけないこと16「AT TIME ZONE を片側だけ書く」を避けるため、
+ * 境界比較には AT TIME ZONE を使わない）。AT TIME ZONE は JST 暦日を取り出す
+ * （グルーピング用の日付キーを作る）ためだけに使う。
+ *
+ * db は Pool でも PoolClient(トランザクション/ロック中の専用接続)でも渡せるよう
+ * query() だけを要求する形にしている(reserveAdminConsultSlotIfWithinLimit が
+ * ロック保持中のclientを直接渡すため)。
+ */
 // export: billingSqlIntegration.test.ts が実 Postgres に対してこの関数を直接呼び、
 // JS側(shiftToJstWallClock)とSQL側(AT TIME ZONE 'Asia/Tokyo')のJST日付計算が
 // 実際に一致することを検証する(src/api/chat/route.ts の
 // countFreeAdBillableConversations と同じ理由・同じ作法)。
-//
-// db は Pool でも PoolClient(トランザクション/ロック中の専用接続)でも渡せるよう
-// query() だけを要求する形にしている(reserveAdminConsultSlotIfWithinLimit が
-// ロック保持中のclientを直接渡すため)。
 export async function countFreeAdAdminConsults(
   db: Pick<Pool, 'query'>,
   tenantId: string,
@@ -1025,7 +1050,7 @@ export async function countFreeAdAdminConsults(
  * 同じ「まだ29件」を読んで全部素通りし、月内の合計が上限をわずかに超える
  * (連打・複数タブでの同時送信が典型)。
  *
- * ★対処: テナント単位の pg_advisory_lock で「数える→予約行を書く」を直列化する★
+ * ★対処: テナント単位の advisory lock で「数える→予約行を書く」を直列化する★
  * 予約行は原価0円・billable=true の usage_logs 行で、request_id は
  * adminConsultReservationRequestId((tenantId, sessionId, JST暦日)から決定的に導出)。
  * これにより:
@@ -1038,10 +1063,19 @@ export async function countFreeAdAdminConsults(
  *   - ロックは「数える→予約行を書く」の短い区間だけ保持し、Groq呼び出しの
  *     数秒〜十数秒は保持しない(その間は解放済みなので、同じテナントの
  *     無関係な別セッションの応答を無駄に足止めしない)。
- * pg_advisory_lock はセッション(=このコネクション)単位のロックなので、
- * lock/unlock は同一クライアントで行う(subscriptionSync.ts の
- * syncSubscriptionItemsForTenant と同じ作法。プールが別コネクションへ
- * 振り分けると解放されず全体を巻き込んで詰まるため)。
+ *
+ * ★lock_timeoutを明示する(2026-09-04レビュー是正: P1)★
+ * 同一テナントへの同時アクセスが集中すると、advisory lock の待機は
+ * Postgres標準では無期限になる。changeTenantPlan.ts と同じ作法
+ * (BEGIN → SET LOCAL lock_timeout → ロック → COMMIT/ROLLBACK)で
+ * トランザクションスコープの pg_advisory_xact_lock を使う。
+ * トランザクションスコープにする副次的な利点: COMMIT/ROLLBACK で
+ * ロックが自動解放されるため、pg_advisory_unlock の手動呼び出しを
+ * 呼び忘れる(=セッション単位のロックがコネクションプールへ返却後も
+ * 残り続ける)リスクが構造的に無くなる。
+ * lock_timeout超過はエラーとしてcatchへ落ち、呼び出し元
+ * (isAdminAgentFreeAdLimitReached)のfail-openでblocked:falseに丸められる
+ * (待てないなら止めない、という既存のfail-open方針と同じ向き)。
  *
  * fail-open: ロック獲得・カウント・予約行のいずれが失敗しても呼び出し元の
  * try/catch がまとめて拾い、店主の相談を止めない(既存方針を維持)。
@@ -1066,33 +1100,42 @@ export async function reserveAdminConsultSlotIfWithinLimit(
 ): Promise<{ blocked: boolean; reservationRequestId: string | null }> {
   const client = await pool.connect();
   try {
-    await client.query('SELECT pg_advisory_lock(hashtext($1))', [`admin_agent_consult:${tenantId}`]);
-    try {
-      const { count, countedToday } = await countFreeAdAdminConsults(client, tenantId, sessionId, now);
-      if (countedToday) return { blocked: false, reservationRequestId: null };
-      if (isFreeAdAdminConsultQuotaExceeded(count)) return { blocked: true, reservationRequestId: null };
+    await client.query('BEGIN');
+    await client.query("SET LOCAL lock_timeout = '3s'");
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`admin_agent_consult:${tenantId}`]);
 
-      // ロックを保持したまま、この(session, 今日)分の予約を書く。ここまでがロックの
-      // 目的(次の同時リクエストのカウントに即座に反映させる)。実際のGroq呼び出しは
-      // ロック解放後(呼び出し元)で行う。
-      //
-      // ★created_at は NOW()(DBサーバの実時刻)ではなく引数の now を束縛する★
-      // countFreeAdAdminConsults の月範囲・JST暦日はどちらも引数の now から計算している。
-      // NOW() を使うとDBサーバの実時刻がその月範囲の外にずれた瞬間(例えばテストで過去日を
-      // 指定した場合や、僅かなクロックドリフトがある場合)、この予約行が期間条件
-      // (created_at >= $3 AND created_at < $4)に一致せず、後続の同時リクエストの
-      // カウントに一切反映されない(=ロックの意味が消える)。
-      const reservationRequestId = adminConsultReservationRequestId(tenantId, sessionId, now);
-      await client.query(
-        `INSERT INTO usage_logs (tenant_id, request_id, session_id, feature_used, billable, created_at)
-         VALUES ($1, $2, $3, 'admin_agent', true, $4)
-         ON CONFLICT (request_id) DO NOTHING`,
-        [tenantId, reservationRequestId, sessionId, now],
-      );
-      return { blocked: false, reservationRequestId };
-    } finally {
-      await client.query('SELECT pg_advisory_unlock(hashtext($1))', [`admin_agent_consult:${tenantId}`]);
+    const { count, countedToday } = await countFreeAdAdminConsults(client, tenantId, sessionId, now);
+    if (countedToday) {
+      await client.query('COMMIT'); // 書き込みは無いのでROLLBACKと等価。ロック解放のみ。
+      return { blocked: false, reservationRequestId: null };
     }
+    if (isFreeAdAdminConsultQuotaExceeded(count)) {
+      await client.query('ROLLBACK');
+      return { blocked: true, reservationRequestId: null };
+    }
+
+    // ロックを保持したまま、この(session, 今日)分の予約を書く。ここまでがロックの
+    // 目的(次の同時リクエストのカウントに即座に反映させる)。実際のGroq呼び出しは
+    // ロック解放後(呼び出し元)で行う。
+    //
+    // ★created_at は NOW()(DBサーバの実時刻)ではなく引数の now を束縛する★
+    // countFreeAdAdminConsults の月範囲・JST暦日はどちらも引数の now から計算している。
+    // NOW() を使うとDBサーバの実時刻がその月範囲の外にずれた瞬間(例えばテストで過去日を
+    // 指定した場合や、僅かなクロックドリフトがある場合)、この予約行が期間条件
+    // (created_at >= $3 AND created_at < $4)に一致せず、後続の同時リクエストの
+    // カウントに一切反映されない(=ロックの意味が消える)。
+    const reservationRequestId = adminConsultReservationRequestId(tenantId, sessionId, now);
+    await client.query(
+      `INSERT INTO usage_logs (tenant_id, request_id, session_id, feature_used, billable, created_at)
+       VALUES ($1, $2, $3, 'admin_agent', true, $4)
+       ON CONFLICT (request_id) DO NOTHING`,
+      [tenantId, reservationRequestId, sessionId, now],
+    );
+    await client.query('COMMIT');
+    return { blocked: false, reservationRequestId };
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
   } finally {
     client.release();
   }
