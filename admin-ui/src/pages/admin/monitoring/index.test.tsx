@@ -723,3 +723,114 @@ describe("MonitoringPage — Gate 0 の計器(4往復以上率)", () => {
     expect(screen.getByText("(6 / 30件)")).toBeTruthy();
   });
 });
+
+// WP-15(D11/§13.5): free_ad総量ガード(D7/WP-5)の発火実績カード。
+// 禁止50「監視対象が0件のときに『異常なし』と報告しない」を、0件のときに
+// 中立文言(「まだ流入がありません」)を出すことで満たしているかを固定する。
+describe("MonitoringPage — WordPress経由テナントの総量ガード", () => {
+  const BASE_HEALTH = {
+    sourceBreakdown: [{ source: "user", count: 13 }],
+    emptySessionCount: 0,
+    cvSessionLinkRate: { numerator: 0, denominator: 0, rate: null },
+    outcomeRecordRate: { numerator: 0, denominator: 0, rate: null, autoRecorded: 0 },
+    validUserSessionCount: 13,
+  };
+
+  it("0件のとき、緑の「正常」のような表示ではなく中立文言を表示する", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
+      if (url.includes("/measurement-health")) return mockOk(BASE_HEALTH);
+      if (url.includes("/wp-provisioning-stats")) {
+        return mockOk({
+          active_free_ad_tenants: 0,
+          active_free_ad_tenant_cap: 100,
+          today_new_provisions: 0,
+          today_new_provision_cap: 30,
+          current_month_free_ad_cost_jpy: 0,
+          cost_alert_threshold_jpy: 20000,
+          cost_alert_triggered: false,
+        });
+      }
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("まだWordPress経由の流入がありません(プラグインからの新規発行が0件)。")).toBeTruthy();
+    });
+    expect(screen.queryByText("異常なし")).toBeNull();
+    expect(screen.getByText("0 / 100")).toBeTruthy();
+    expect(screen.getByText("0 / 30")).toBeTruthy();
+  });
+
+  it("実績がある場合は件数と原価を表示する", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
+      if (url.includes("/measurement-health")) return mockOk(BASE_HEALTH);
+      if (url.includes("/wp-provisioning-stats")) {
+        return mockOk({
+          active_free_ad_tenants: 12,
+          active_free_ad_tenant_cap: 100,
+          today_new_provisions: 3,
+          today_new_provision_cap: 30,
+          current_month_free_ad_cost_jpy: 1500,
+          cost_alert_threshold_jpy: 20000,
+          cost_alert_triggered: false,
+        });
+      }
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("12 / 100")).toBeTruthy();
+    });
+    expect(screen.getByText("3 / 30")).toBeTruthy();
+    expect(screen.getByText("¥1,500")).toBeTruthy();
+  });
+
+  it("原価がアラート閾値に到達している場合は警告文を表示する", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
+      if (url.includes("/measurement-health")) return mockOk(BASE_HEALTH);
+      if (url.includes("/wp-provisioning-stats")) {
+        return mockOk({
+          active_free_ad_tenants: 40,
+          active_free_ad_tenant_cap: 100,
+          today_new_provisions: 5,
+          today_new_provision_cap: 30,
+          current_month_free_ad_cost_jpy: 25000,
+          cost_alert_threshold_jpy: 20000,
+          cost_alert_triggered: true,
+        });
+      }
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText(/当月原価がアラート閾値/)).toBeTruthy();
+    });
+  });
+
+  it("client_admin(APIが403を返す)のときカード自体を出さない", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
+      if (url.includes("/measurement-health")) return mockOk(BASE_HEALTH);
+      if (url.includes("/wp-provisioning-stats")) {
+        return Promise.resolve({ ok: false, status: 403, json: () => Promise.resolve({}) } as Response);
+      }
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("会話完了率")).toBeTruthy();
+    });
+    expect(screen.queryByText("WordPress経由テナントの総量ガード")).toBeNull();
+  });
+});

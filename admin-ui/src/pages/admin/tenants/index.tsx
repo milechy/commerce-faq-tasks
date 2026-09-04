@@ -19,6 +19,8 @@ interface Tenant {
   billing_enabled?: boolean;
   billing_free_from?: string | null;
   billing_free_until?: string | null;
+  // WP-15(D11): 流入元。manual(既定)なら特に何も表示しない。
+  provisioning_source?: "manual" | "wordpress_plugin";
 }
 
 // ─── 認証ヘルパー ─────────────────────────────────────────────────────────────
@@ -585,6 +587,12 @@ export default function TenantsPage() {
                         </span>
                       );
                     })()}
+                    {/* 流入元バッジ(WP-15/D11): manualは既定で無表示、識別できれば十分 */}
+                    {tenant.provisioning_source === "wordpress_plugin" && (
+                      <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: "rgba(59,130,246,0.15)", color: "#60a5fa", border: "1px solid rgba(96,165,250,0.3)" }}>
+                        WordPress
+                      </span>
+                    )}
                   </div>
                   <div style={{ fontSize: 13, color: "var(--muted-foreground)" }}>
                     slug: <span style={{ fontFamily: "monospace", color: "var(--muted-foreground)" }}>{tenant.id}</span>

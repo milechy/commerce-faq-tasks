@@ -24,9 +24,21 @@ import { isValidExcludedPagePattern } from "../../../lib/excludedPagePattern";
 import { purgeTenantChatData } from "../chat-history/retentionRepository";
 import { computeExpectedBilling } from "../../../lib/billing/stripeSync";
 import { getMonthRangeJst } from "../../../lib/billing/planQuota";
+import {
+  FREE_AD_MAX_ACTIVE_TENANTS,
+  FREE_AD_MAX_DAILY_PROVISIONS,
+  FREE_AD_COST_ALERT_JPY,
+  isFreeAdCostAlertTriggered,
+} from "../../../lib/billing/planQuota";
 import { computeUpsellSignals, type UpsellSignal } from "../../../lib/billing/upsellSignals";
-import { buildTenantUpsellFigures } from "../../../lib/billing/billingApi";
+import { buildTenantUpsellFigures, fetchTenantBillingSnapshot } from "../../../lib/billing/billingApi";
 import { renderUpsellForTenant } from "../../../lib/billing/upsellRenderer";
+import { fetchTenantEconomics, currentJstPeriodYyyyMm } from "../../../lib/billing/tenantEconomics";
+import {
+  countProvisionedWpTenants,
+  countWpProvisioningsCreatedSince,
+} from "../../widget/wpProvisionRepository";
+import { getDayStartJst } from "../../../lib/date/jstOffset";
 
 // free_ad(starterより下の最下段。広告原資の無料プラン)と
 // standard(starter と growth の間。既定アバターの利用を開放する段)を含む5値。
@@ -718,7 +730,7 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
       const result = await db.query(
         `SELECT t.id, t.name, t.plan, t.is_active, t.allowed_origins, t.system_prompt,
                 t.billing_enabled, t.billing_free_from, t.billing_free_until, t.features,
-                t.conversion_types, t.created_at, t.updated_at,
+                t.conversion_types, t.provisioning_source, t.created_at, t.updated_at,
                 (SELECT COUNT(*)::int FROM tenant_api_keys k
                  WHERE k.tenant_id = t.id AND k.is_active) AS api_key_count
          FROM tenants t
@@ -808,12 +820,63 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
     }
   });
 
+  // GET /v1/admin/tenants/wp-provisioning-stats
+  //
+  // WP-15(D11 / §13.5): free_ad総量ガード(D7 / planQuota.ts)の発火実績を
+  // Super Adminが目で確認できるようにする。禁止50「監視対象が0件のときに
+  // 『異常なし』と報告しない」に従い、この面自体は生の数値だけを返し、
+  // 「正常/異常」の評価は admin-ui 側で0件を中立表示にする形で行う。
+  //
+  // ★原価集計は既存の tenantEconomics.ts に乗せる(新しい計測基盤を作らない・禁止32)★
+  // fetchTenantEconomics は「期間内に usage_logs 行があるテナント」を
+  // MAX_TENANTS_PER_ECONOMICS_REQUEST(=50)件までリクエスト数降順で返す実装のため、
+  // 利用中のfree_adテナントが50件を超え、かつ他プランのテナントも含めて全体で
+  // 50件を超える場合、後方の(リクエスト数が少ない)free_adテナントの原価が
+  // 合計から漏れる可能性がある(=実際より少なく出る)。free_adの新しい集計基盤を
+  // 別途作るのではなく、この既知の制約付きで既存関数へ乗せる判断とした。
+  //
+  // ★"/:id" より前に登録する★ Expressはルート登録順にマッチするため、
+  // GET /v1/admin/tenants/:id より後ろに置くと "wp-provisioning-stats" が
+  // テナントIDとして :id にマッチしてしまい、このハンドラへ到達しない。
+  app.get(
+    "/v1/admin/tenants/wp-provisioning-stats",
+    tenantAuth,
+    requireSuperAdmin,
+    async (_req: Request, res: Response) => {
+      try {
+        const [activeFreeAdTenants, todayNewProvisions] = await Promise.all([
+          countProvisionedWpTenants(db),
+          countWpProvisioningsCreatedSince(db, getDayStartJst(new Date())),
+        ]);
+
+        const period = currentJstPeriodYyyyMm();
+        const economics = await fetchTenantEconomics(db, period, fetchTenantBillingSnapshot);
+        const currentMonthFreeAdCostJpy = economics.tenants
+          .filter((t) => t.plan === "free_ad")
+          .reduce((sum, t) => sum + (t.cost_base_jpy ?? 0), 0);
+
+        return res.json({
+          active_free_ad_tenants: activeFreeAdTenants,
+          active_free_ad_tenant_cap: FREE_AD_MAX_ACTIVE_TENANTS,
+          today_new_provisions: todayNewProvisions,
+          today_new_provision_cap: FREE_AD_MAX_DAILY_PROVISIONS,
+          current_month_free_ad_cost_jpy: currentMonthFreeAdCostJpy,
+          cost_alert_threshold_jpy: FREE_AD_COST_ALERT_JPY,
+          cost_alert_triggered: isFreeAdCostAlertTriggered(currentMonthFreeAdCostJpy),
+        });
+      } catch (err) {
+        logger.warn("[GET /v1/admin/tenants/wp-provisioning-stats]", err);
+        return res.status(500).json({ error: "総量ガード実績の取得に失敗しました" });
+      }
+    }
+  );
+
   // GET /v1/admin/tenants/:id
   app.get("/v1/admin/tenants/:id", tenantAuth, requireSuperAdmin, async (req: Request, res: Response) => {
     const { id } = req.params;
     try {
       const result = await db.query(
-        `SELECT id, name, plan, is_active, allowed_origins, excluded_page_patterns, system_prompt, billing_enabled, billing_free_from, billing_free_until, features, lemonslice_agent_id, conversion_types, faq_question_hint, faq_answer_hint, onboarding_industry, onboarding_widget_seen_at, widget_theme, created_at, updated_at FROM tenants WHERE id = $1`,
+        `SELECT id, name, plan, is_active, allowed_origins, excluded_page_patterns, system_prompt, billing_enabled, billing_free_from, billing_free_until, features, lemonslice_agent_id, conversion_types, faq_question_hint, faq_answer_hint, onboarding_industry, onboarding_widget_seen_at, widget_theme, provisioning_source, created_at, updated_at FROM tenants WHERE id = $1`,
         [id]
       );
       if (result.rowCount === 0) {

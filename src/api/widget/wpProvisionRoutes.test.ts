@@ -312,10 +312,15 @@ describe("GET /v1/public/wp/provision/:token", () => {
     // ★C-3: allowed_origins にこのサイトのoriginが束縛されている★
     const insertTenantCall = calls.find(([sql]) => sql.includes("INSERT INTO tenants"));
     expect(insertTenantCall).toBeDefined();
-    // INSERT INTO tenants (id, name, plan, is_active, allowed_origins)
-    // VALUES ($1, $2, 'free_ad', true, $3) — plan/is_active はリテラルなので
-    // パラメータ配列は [id, name, allowedOrigins] の3要素(index 0,1,2)。
+    // INSERT INTO tenants (id, name, plan, is_active, allowed_origins, provisioning_source)
+    // VALUES ($1, $2, 'free_ad', true, $3, 'wordpress_plugin') — plan/is_active/
+    // provisioning_source はリテラルなので、パラメータ配列は
+    // [id, name, allowedOrigins] の3要素(index 0,1,2)のまま。
     expect(insertTenantCall![1][2]).toEqual(["https://example.com"]);
+
+    // ★D11(§13.5): WP経由テナントはprovisioning_source='wordpress_plugin'で
+    // 発行される★ Super Admin側での識別・総量ガード監視の唯一の判別列。
+    expect(insertTenantCall![0]).toContain("'wordpress_plugin'");
 
     // 発行された平文キーのハッシュがINSERT tenant_api_keysに渡っている
     const insertKeyCall = calls.find(([sql]) => sql.includes("INSERT INTO tenant_api_keys"));

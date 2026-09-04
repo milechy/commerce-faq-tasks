@@ -93,6 +93,23 @@ describe("TenantsPage — API応答形状とUIフィールドの整合性", () =
     await waitFor(() => expect(screen.getByText("無効")).toBeTruthy());
   });
 
+  it("provisioning_source='wordpress_plugin' のテナントに「WordPress」バッジを表示する(WP-15/D11)", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(200, { tenants: [makeTenant({ provisioning_source: "wordpress_plugin" })] })
+    );
+    renderPage();
+    await waitFor(() => expect(screen.getByText("WordPress")).toBeTruthy());
+  });
+
+  it("provisioning_source='manual'(既定)のテナントには流入元バッジを出さない", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(200, { tenants: [makeTenant({ provisioning_source: "manual" })] })
+    );
+    renderPage();
+    await waitFor(() => expect(screen.getByText("カーネーション")).toBeTruthy());
+    expect(screen.queryByText("WordPress")).toBeNull();
+  });
+
   it("api_key_count を実際の件数で表示する（0固定のバグの回帰防止）", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       jsonResponse(200, { tenants: [makeTenant({ api_key_count: 3 })] })
