@@ -1267,6 +1267,37 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
   {
     type: 'function',
     function: {
+      name: 'discover_faq_urls_from_sitemap',
+      description:
+        'テナントのサイトのsitemap.xml（サイトマップインデックスの場合は子サイトマップも1階層まで辿る）を読み、' +
+        'FAQ取り込みの候補になりそうなURL一覧を提示する読み取り専用ツール。FAQは生成しない・何も書き込まない。' +
+        'ここで見つけたURLの中からユーザーが選んだものを、別途 suggest_faq_import_from_urls（1〜5件ずつ）に渡してFAQ案を生成する、' +
+        'という2段階の流れになる。「サイト全体からFAQを作って」「まとめて取り込みたい」等、個別URLを指定せず' +
+        'サイト側から候補を探したいときに使うこと。',
+      parameters: {
+        type: 'object',
+        properties: {
+          base_url: {
+            type: 'string',
+            description:
+              'サイトマップを探すサイトのベースURL（例: https://example.com）。' +
+              '省略時はテナントに登録済みの埋め込み許可ドメイン(allowed_origins)の先頭を使う。',
+          },
+          exclude_patterns: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              'このツール呼び出しに限り追加で除外するパスパターン（例: "/privacy-policy", "/blog/**"）。' +
+              'テナントに恒常設定済みの除外パターンがあればそれと合わせて適用される。任意。',
+          },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'commit_faq_import',
       description:
         'suggest_faq_import_from_text または suggest_faq_import_from_urls でプレビュー済みのFAQをまとめてDBに登録し即座に公開する。' +

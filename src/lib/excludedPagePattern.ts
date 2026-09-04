@@ -10,3 +10,21 @@ export function isValidExcludedPagePattern(value: string): boolean {
   if (value.length < 1 || value.length > 200) return false;
   return true;
 }
+
+// public/widget.js の matchPathnameGlob と同一のグロブ構文(*, **)を実装する
+// サーバー側版。あちらはブラウザに配信される単体スクリプトのため import できず、
+// アルゴリズムをここに複製している。サーバー側で同じグロブ判定が必要になった
+// 箇所(例: src/lib/sitemapDiscovery.ts のクロール除外)はこちらを使い、
+// 3箇所目の実装を作らないこと。
+export function matchesPathnameGlob(pathname: string, pattern: string): boolean {
+  try {
+    const regexStr = pattern
+      .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+      .replace(/\*\*/g, "@@R2C_DBLSTAR@@")
+      .replace(/\*/g, "[^/]*")
+      .replace(/@@R2C_DBLSTAR@@/g, ".*");
+    return new RegExp(`^${regexStr}$`).test(pathname);
+  } catch {
+    return false;
+  }
+}

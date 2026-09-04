@@ -1,5 +1,5 @@
 // src/lib/excludedPagePattern.test.ts
-import { isValidExcludedPagePattern } from "./excludedPagePattern";
+import { isValidExcludedPagePattern, matchesPathnameGlob } from "./excludedPagePattern";
 
 describe("isValidExcludedPagePattern", () => {
   it("先頭スラッシュのパスは有効", () => {
@@ -30,5 +30,31 @@ describe("isValidExcludedPagePattern", () => {
     expect(at200.length).toBe(200);
     expect(isValidExcludedPagePattern(at200)).toBe(true);
     expect(isValidExcludedPagePattern(at201)).toBe(false);
+  });
+});
+
+describe("matchesPathnameGlob", () => {
+  it("完全一致", () => {
+    expect(matchesPathnameGlob("/cart", "/cart")).toBe(true);
+    expect(matchesPathnameGlob("/cart2", "/cart")).toBe(false);
+  });
+
+  it("* は1階層のみに一致（/を跨がない）", () => {
+    expect(matchesPathnameGlob("/products/123", "/products/*")).toBe(true);
+    expect(matchesPathnameGlob("/products/123/reviews", "/products/*")).toBe(false);
+  });
+
+  it("** は複数階層に一致", () => {
+    expect(matchesPathnameGlob("/blog/2026/09/post", "/blog/**")).toBe(true);
+  });
+
+  it("正規表現メタ文字はエスケープされる", () => {
+    expect(matchesPathnameGlob("/fooXhtml", "/foo.html")).toBe(false);
+    expect(matchesPathnameGlob("/foo.html", "/foo.html")).toBe(true);
+  });
+
+  it("括弧など正規表現メタ文字を含むパターンでも例外を投げない", () => {
+    expect(matchesPathnameGlob("/cart(", "/cart(")).toBe(true);
+    expect(matchesPathnameGlob("/cart", "/cart(")).toBe(false);
   });
 });
