@@ -30,6 +30,7 @@ import { initUsageTracker, trackUsage } from "./usageTracker";
 import { calculateBaseCostCents, calculateBillingAmountCents } from "./costCalculator";
 import { MARGIN_MULTIPLIER } from "./costCalculator";
 import { fetchTenantEconomics, _clearEconomicsCache, type BillingSnapshotFn } from "./tenantEconomics";
+import { buildSuperAdminUpsellFigures } from "./billingApi";
 
 const DB_URL = process.env.BILLING_SQL_TEST_DATABASE_URL;
 
@@ -1685,5 +1686,103 @@ d("tenantEconomics の原価導出（実 Postgres）", () => {
     await insertRow({ id: "r10", feature: "chat", total: 100, llm: 0, base: 100 });
     const res = await fetchTenantEconomics(db, "202609", stubSnapshot);
     expect(res.tenants.map((t) => t.tenant_id)).toEqual(["t1"]);
+  });
+});
+
+/**
+ * buildSuperAdminUpsellFigures — computeExpectedBilling の2重実行を実DBで防ぐ(P0)。
+ *
+ * ★このテストが守っているもの★
+ * かつての実装は、超過量(text_overage)を出すために evidence の currentPlan で
+ * computeExpectedBilling を直接呼び、粗利(revenue/cost/margin)のために
+ * fetchTenantEconomicsDetail が内部でもう一度(テナントの実プランで)同じ集計
+ * SQL を呼んでいた。同じ usage_logs 集計を1リクエストで2回実行するのは
+ * 無駄であるだけでなく、間に書き込みが挟まれば数量が食い違いうる経路でもあった。
+ *
+ * 提案投稿後にテナントが自己アップグレードする(evidence の currentPlan が
+ * 古くなる)ケースを実 Postgres 上で再現し、
+ *   - 集計SQL(billable_rows を含むクエリ)が1回しか実行されないこと
+ *   - 超過量が「evidence の currentPlan(standard)の込み枠」を基準に、実際に
+ *     集計された数量から一貫して計算されること
+ * を確認する。
+ */
+d("buildSuperAdminUpsellFigures（実 Postgres・プラン不一致の再現）", () => {
+  let db: Pool;
+
+  beforeAll(() => {
+    db = new Pool({ connectionString: DB_URL, options: "-c timezone=UTC" });
+  });
+
+  afterAll(async () => {
+    await db.end();
+  });
+
+  beforeEach(async () => {
+    _clearEconomicsCache();
+    await db.query("TRUNCATE usage_logs CASCADE");
+    await db.query("TRUNCATE tenants CASCADE");
+    // 実プラン(DB) = growth。evidence の currentPlan(呼び出し引数) = standard のまま、
+    // すなわち「アップセル提案の投稿後にテナントが自己アップグレードした」状態を再現する。
+    await db.query(`INSERT INTO tenants (id, name, plan) VALUES ('t1', 'Acme', 'growth')`);
+  });
+
+  const ORIGINAL_STRIPE_KEY = process.env.STRIPE_SECRET_KEY;
+  beforeEach(() => {
+    // Stripe 到達不可の経路で決定的にテストする(revenue/base 価格は null 伝播でよい。
+    // このテストの主眼は超過量とクエリ回数)。
+    delete process.env.STRIPE_SECRET_KEY;
+  });
+  afterAll(() => {
+    if (ORIGINAL_STRIPE_KEY === undefined) delete process.env.STRIPE_SECRET_KEY;
+    else process.env.STRIPE_SECRET_KEY = ORIGINAL_STRIPE_KEY;
+  });
+
+  /** db.query の呼び出しをそのまま実行しつつ、SQL文字列だけ記録するスパイ。 */
+  function spyOn(pool: Pool) {
+    const calls: string[] = [];
+    const wrapped = {
+      query: (text: string, params?: unknown[]) => {
+        calls.push(text);
+        return (pool.query as any)(text, params);
+      },
+    };
+    return { db: wrapped, calls };
+  }
+
+  it("★集計SQL(billable_rows)は1リクエストにつき1回しか実行されない★", async () => {
+    // session_id を持たない chat 行 1200件 → row_units フォールバックで text_units=1200。
+    await db.query(`
+      INSERT INTO usage_logs (tenant_id, request_id, feature_used, cost_total_cents, plan_multiplier, created_at)
+      SELECT 't1', 'r'||g, 'chat', 5, 1.5, '2026-09-15T00:00:00Z'::timestamptz
+        FROM generate_series(1,1200) g;
+    `);
+
+    const { db: spiedDb, calls } = spyOn(db);
+    const figures = await buildSuperAdminUpsellFigures(
+      spiedDb, "t1", "text_overage", "standard", "growth", "202609",
+    );
+
+    const aggCalls = calls.filter((sql) => sql.includes("billable_rows"));
+    expect(aggCalls).toHaveLength(1);
+
+    // standard の込み枠(1000)を基準に、実測 1200 から 200 超過。
+    // (誤って実プラン growth の込み枠(3000)を使うと 0 になり、この期待値で捕捉できる)
+    expect(figures.text_overage).toBe(200);
+    expect(figures.current_plan).toBe("standard");
+    // Stripe 未設定 + 実装コードは revenue を再計算しない(既存 fetchTenantEconomicsDetail
+    // に委譲するのみ)ので null 伝播。
+    expect(figures.revenue_estimate_jpy).toBeNull();
+  });
+
+  it("プランに込み枠が無い(starter)場合は超過0のまま、例外にもならない", async () => {
+    await db.query(`
+      INSERT INTO usage_logs (tenant_id, request_id, feature_used, cost_total_cents, plan_multiplier, created_at)
+      SELECT 't1', 'r'||g, 'chat', 5, 1.5, '2026-09-15T00:00:00Z'::timestamptz
+        FROM generate_series(1,50) g;
+    `);
+    const figures = await buildSuperAdminUpsellFigures(
+      db, "t1", "text_overage", "starter", "growth", "202609",
+    );
+    expect(figures.text_overage).toBe(0);
   });
 });
