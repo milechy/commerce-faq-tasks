@@ -229,6 +229,11 @@ describe('PUT /v1/admin/upsell-proposals/:id/adopt', () => {
     expect(res.status).toBe(403);
   });
 
+  it('未認証は403(または401相当)', async () => {
+    const res = await request(makeApp(null)).put('/v1/admin/upsell-proposals/1/adopt');
+    expect([401, 403]).toContain(res.status);
+  });
+
   it('採用に成功したら通知を送りテナント側へ届く経路を発火する', async () => {
     mockApproveTuningRule.mockResolvedValue({ id: 1, tenant_id: 't1', status: 'active', is_active: false, proposal_type: 'upsell', approved_at: 'x', rejected_at: null, updated_at: 'x' });
     const res = await request(makeApp('super_admin')).put('/v1/admin/upsell-proposals/1/adopt');
@@ -269,6 +274,16 @@ describe('PUT /v1/admin/upsell-proposals/:id/adopt', () => {
 });
 
 describe('PUT /v1/admin/upsell-proposals/:id/dismiss', () => {
+  it('★client_admin は到達できない(P2a: requireSuperAdminForUpsell を requireRole 統合後の回帰確認)★', async () => {
+    const res = await request(makeApp('client_admin')).put('/v1/admin/upsell-proposals/1/dismiss');
+    expect(res.status).toBe(403);
+  });
+
+  it('未認証は403(または401相当)', async () => {
+    const res = await request(makeApp(null)).put('/v1/admin/upsell-proposals/1/dismiss');
+    expect([401, 403]).toContain(res.status);
+  });
+
   it('見送りに成功したら通知は送らない(却下は通知の対象外)', async () => {
     mockRejectTuningRule.mockResolvedValue({ id: 1, tenant_id: 't1', status: 'rejected', is_active: false, proposal_type: 'upsell', approved_at: null, rejected_at: 'x', updated_at: 'x' });
     const res = await request(makeApp('super_admin')).put('/v1/admin/upsell-proposals/1/dismiss');
