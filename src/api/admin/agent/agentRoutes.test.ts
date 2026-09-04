@@ -7076,6 +7076,92 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(stripNullToolArgs('[1,2,3]')).toBe('[1,2,3]');
       expect(stripNullToolArgs('"just a string"')).toBe('"just a string"');
     });
+
+    // 既知の未修正ギャップ: 現在の実装は Object.entries(parsed) で「トップレベルの
+    // キー」しか見ておらず、ネストしたオブジェクト自体は null でない限りそのまま
+    // cleaned に入る。ネストの中身までは再帰していないため、ネストした引数に null が
+    // 残っているツール(例: filters: {category: null, ...})では、このfix が対処した
+    // はずのGroq 400(`expected string, but got null`)が形を変えて再発しうる。
+    // これは現状の挙動を固定するテストであり、「正しい」ことを保証するテストではない。
+    it('[既知のギャップ] ネストしたオブジェクト内のnullは除去されない(トップレベルのみ対応)', () => {
+      const input = '{"filters": {"category": null, "tag": "x"}}';
+      expect(JSON.parse(stripNullToolArgs(input))).toEqual({
+        filters: { category: null, tag: 'x' },
+      });
+    });
+
+    // 同様に配列の要素は「配列かどうか」の判定対象外(トップレベル値がArrayなら
+    // そのままスキップ)なので、配列内のnullも一切除去されない。
+    it('[既知のギャップ] 配列内の要素のnullは除去されない', () => {
+      const input = '{"tags": [null, "x", null]}';
+      expect(JSON.parse(stripNullToolArgs(input))).toEqual({
+        tags: [null, 'x', null],
+      });
+    });
+
+    it('ほぼJSONだが末尾カンマ等で不正な文字列は、例外を投げずそのまま返す', () => {
+      const trailingComma = '{"a": null,}';
+      expect(() => stripNullToolArgs(trailingComma)).not.toThrow();
+      expect(stripNullToolArgs(trailingComma)).toBe(trailingComma);
+    });
+
+    it('空文字列は例外を投げず、そのまま返す(呼び出し元のparseToolArgsが空オブジェクトへフォールバックする)', () => {
+      expect(() => stripNullToolArgs('')).not.toThrow();
+      expect(stripNullToolArgs('')).toBe('');
+    });
+
+    it('数百KB規模の大きな引数でもクラッシュせず、null除去とJSON往復が成立する', () => {
+      const large: Record<string, unknown> = {};
+      for (let i = 0; i < 20000; i++) {
+        large[`key_${i}`] = i % 2 === 0 ? null : `value_${i}`;
+      }
+      const input = JSON.stringify(large);
+      expect(input.length).toBeGreaterThan(200_000);
+
+      let output = '';
+      expect(() => {
+        output = stripNullToolArgs(input);
+      }).not.toThrow();
+
+      const parsed = JSON.parse(output);
+      expect(Object.keys(parsed)).toHaveLength(10000);
+      expect(parsed['key_1']).toBe('value_1');
+      expect(parsed['key_0']).toBeUndefined();
+      // 実装は JSON.parse → Object.entries → JSON.stringify の単純な一往復であり、
+      // ネストした再帰や文字列探索を行っていないため、キー数に対して線形。
+      // ここでは「クラッシュしないこと」の確認のみを目的とし、時間のアサーションはしない。
+    });
+
+    // agentRoutes.ts の parseToolArgs は stripNullToolArgs の戻り値をさらに JSON.parse する。
+    // arguments が "{}"すら無い空文字列("")の場合、stripNullToolArgs内のJSON.parse('')が
+    // 例外を投げてcatchに落ち、そのまま '' を返す。parseToolArgs 側もJSON.parse('')で
+    // 例外を拾い空オブジェクトへフォールバックするため、エンドツーエンドでも500にならない
+    // ことをHTTP経由で確認する(ユニットテストのstripNullToolArgs('')だけでは
+    // 呼び出し元のparseToolArgsまで通しで確認できないため)。
+    it('tool_calls.arguments が空文字列("")でもチャット応答は500にならない', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{ id: 'call-empty-args', type: 'function', function: { name: 'get_avatar_list', arguments: '' } }],
+              },
+            }],
+          }),
+          text: async () => '',
+        })
+        .mockResolvedValueOnce(makeGroqResponse('一覧をお伝えしました。'));
+      mockQuery.mockResolvedValueOnce({ rows: [] });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターの一覧を見せて', sessionId: 'sess-empty-args-01' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.actions[0].tool).toBe('get_avatar_list');
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -10111,6 +10197,122 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(res.body.actions[0].result).toContain('src="https://api.r2c.biz/widget/tenant-abc.js"');
       expect(res.body.actions[0].result).not.toContain('src="https://api.r2c.biz/widget.js"');
     });
+
+    // PR #1166: data-tenant欠落の再発防止として、文字列結合の組み合わせ4パターン全てで
+    // <script>タグが壊れないこと(二重スペース・属性の欠落・区切り崩れが無いこと)を
+    // 厳密な完全一致で固定する(.toContain だけでは "たまたま部分文字列が含まれる"
+    // 壊れたHTMLも見逃す)。
+    describe('data-tenant/data-api-key/data-accent-color/placement属性の組み合わせ(完全一致)', () => {
+      it('テーマカスタマイズ無し: data-tenantとdata-api-keyのみで、余分な空白なくタグが閉じる', async () => {
+        mockFetch
+          .mockResolvedValueOnce(toolCallResponse('call-ec-combo-0', 'get_embed_code'))
+          .mockResolvedValueOnce(makeGroqResponse('埋め込みコードです。'));
+        mockQuery
+          .mockResolvedValueOnce({ rows: [{ key_prefix: 'r2c_live_abc' }] })
+          .mockResolvedValueOnce({ rows: [{ widget_theme: null }] });
+
+        const res = await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: '埋め込みコードを教えて', sessionId: 'sess-embed-combo-0' });
+
+        expect(res.status).toBe(200);
+        expect(res.body.actions[0].result).toContain(
+          '<script src="https://api.r2c.biz/widget/tenant-abc.js" data-api-key="YOUR_API_KEY" data-tenant="tenant-abc"></script>',
+        );
+      });
+
+      it('色のみ設定済み: data-accent-colorだけが付き、スペーシングが崩れない', async () => {
+        mockFetch
+          .mockResolvedValueOnce(toolCallResponse('call-ec-combo-1', 'get_embed_code'))
+          .mockResolvedValueOnce(makeGroqResponse('埋め込みコードです。'));
+        mockQuery
+          .mockResolvedValueOnce({ rows: [{ key_prefix: 'r2c_live_abc' }] })
+          .mockResolvedValueOnce({ rows: [{ widget_theme: { primaryColor: '#3B82F6' } }] });
+
+        const res = await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: '埋め込みコードを教えて', sessionId: 'sess-embed-combo-1' });
+
+        expect(res.status).toBe(200);
+        expect(res.body.actions[0].result).toContain(
+          '<script src="https://api.r2c.biz/widget/tenant-abc.js" data-api-key="YOUR_API_KEY" data-tenant="tenant-abc"\n' +
+            '  data-accent-color="#3B82F6"></script>',
+        );
+      });
+
+      it('設置位置のみ設定済み: placement属性だけが付き、スペーシングが崩れない', async () => {
+        mockFetch
+          .mockResolvedValueOnce(toolCallResponse('call-ec-combo-2', 'get_embed_code'))
+          .mockResolvedValueOnce(makeGroqResponse('埋め込みコードです。'));
+        mockQuery
+          .mockResolvedValueOnce({ rows: [{ key_prefix: 'r2c_live_abc' }] })
+          .mockResolvedValueOnce({ rows: [{ widget_theme: { position: 'bottom-left', offsetY: 96 } }] });
+
+        const res = await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: '埋め込みコードを教えて', sessionId: 'sess-embed-combo-2' });
+
+        expect(res.status).toBe(200);
+        expect(res.body.actions[0].result).toContain(
+          '<script src="https://api.r2c.biz/widget/tenant-abc.js" data-api-key="YOUR_API_KEY" data-tenant="tenant-abc"\n' +
+            '  data-position="bottom-left"\n' +
+            '  data-offset-y="96"></script>',
+        );
+      });
+
+      it('色と設置位置の両方が設定済み: 全属性が正しい順序(色→位置→offset)で並び、区切り崩れが無い', async () => {
+        mockFetch
+          .mockResolvedValueOnce(toolCallResponse('call-ec-combo-3', 'get_embed_code'))
+          .mockResolvedValueOnce(makeGroqResponse('埋め込みコードです。'));
+        mockQuery
+          .mockResolvedValueOnce({ rows: [{ key_prefix: 'r2c_live_abc' }] })
+          .mockResolvedValueOnce({
+            rows: [{ widget_theme: { primaryColor: '#3B82F6', position: 'bottom-left', offsetX: 16, offsetY: 96 } }],
+          });
+
+        const res = await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: '埋め込みコードを教えて', sessionId: 'sess-embed-combo-3' });
+
+        expect(res.status).toBe(200);
+        expect(res.body.actions[0].result).toContain(
+          '<script src="https://api.r2c.biz/widget/tenant-abc.js" data-api-key="YOUR_API_KEY" data-tenant="tenant-abc"\n' +
+            '  data-accent-color="#3B82F6"\n' +
+            '  data-position="bottom-left"\n' +
+            '  data-offset-x="16"\n' +
+            '  data-offset-y="96"></script>',
+        );
+      });
+    });
+
+    // tenantId は agentRoutes.ts の extractAuth() で JWT の app_metadata.tenant_id を
+    // そのまま使っており(258-261行目)、この層に安全なslug/UUIDであることの検証は無い。
+    // 実運用ではSupabaseが発行するUUIDのみが入る前提だが、その前提が崩れた場合に
+    // 埋め込みコードのdata-tenant/src属性がエスケープされずHTMLインジェクションになりうる
+    // ことを、現状の(無防備な)挙動として記録する。今後 tenantId の発行元が変わって
+    // 安全性の前提が崩れたとき、このテストの結果が変わることで気づけるようにする。
+    it('tenantIdに二重引用符を含む場合、現状はエスケープされずそのまま埋め込まれる(未対策の記録)', async () => {
+      const MALICIOUS_TENANT_USER = {
+        app_metadata: { role: 'client_admin', tenant_id: 'tenant"><script>alert(1)</script>' },
+      };
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-ec-xss', 'get_embed_code'))
+        .mockResolvedValueOnce(makeGroqResponse('埋め込みコードです。'));
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ key_prefix: 'r2c_live_abc' }] })
+        .mockResolvedValueOnce({ rows: [{ widget_theme: null }] });
+
+      const res = await request(makeApp(MALICIOUS_TENANT_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '埋め込みコードを教えて', sessionId: 'sess-embed-xss' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      // 現状の実装(テンプレートリテラルでの直接埋め込み)はエスケープしないため、
+      // 生の "><script> が結果にそのまま出現する。これは既知・未対策の挙動記録であり、
+      // 「安全」を主張するテストではない。
+      expect(result).toContain('data-tenant="tenant"><script>alert(1)</script>"');
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -13035,6 +13237,136 @@ describe('POST /v1/admin/agent/chat', () => {
   });
 
   // -------------------------------------------------------------------------
+  // activate_avatar honest-status (PR #1171): INTERNAL_API_HMAC_SECRET が未設定だと
+  // 配信経路(GET /api/internal/avatar-config)がfail-closedで機能しない
+  // (docs/AVATAR_CONFIG_500_RECOVERY.md)。DB上のis_activeは立っていても実際には
+  // アバターが出ないため、単純な成功文言ではなく縮退メッセージを返すことの回帰テスト。
+  // -------------------------------------------------------------------------
+  describe('activate_avatar: INTERNAL_API_HMAC_SECRET 未設定時の縮退メッセージ', () => {
+    function toolCallResponse(id: string, name: string, args: Record<string, unknown> = {}) {
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+            },
+          }],
+        }),
+        text: async () => '',
+      };
+    }
+
+    function successfulActivationClientQuery() {
+      return jest.fn()
+        .mockResolvedValueOnce({ rows: [] }) // BEGIN
+        .mockResolvedValueOnce({ rows: [] }) // deactivate all
+        .mockResolvedValueOnce({ rows: [{ id: 'av-1' }] }) // activate target
+        .mockResolvedValueOnce({ rows: [] }) // tenants.features sync
+        .mockResolvedValueOnce({ rows: [] }); // COMMIT
+    }
+
+    // この変数はテストスイート全体でどこにも設定/削除管理されていないため、
+    // 実行環境のprocess.envに依存して他のテストの結果が変わる(既存のactivate_avatarの
+    // 「有効化できる」系テストは`を有効化しました`の部分一致でしか検証しておらず、
+    // 本来は健全パスと縮退パスを区別できていない)。ここでは明示的に退避・復元して
+    // 他テストを汚染しないようにする。
+    let originalSecret: string | undefined;
+    beforeEach(() => {
+      originalSecret = process.env.INTERNAL_API_HMAC_SECRET;
+    });
+    afterEach(() => {
+      if (originalSecret === undefined) {
+        delete process.env.INTERNAL_API_HMAC_SECRET;
+      } else {
+        process.env.INTERNAL_API_HMAC_SECRET = originalSecret;
+      }
+    });
+
+    it('未設定(undefined)の場合は縮退メッセージを返し、successMarkerの文言を保つ', async () => {
+      delete process.env.INTERNAL_API_HMAC_SECRET;
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-hmac-1', 'activate_avatar', { id: 'av-1' }))
+        .mockResolvedValueOnce(makeGroqResponse('アバターを有効化しました。'));
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'growth' }] });
+      mockConnect.mockResolvedValueOnce({ query: successfulActivationClientQuery(), release: jest.fn() });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターを有効化して', sessionId: 'sess-hmac-01' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('配信設定を解決できませんでした');
+      // agentRoutes.ts の AUDITED_SETTINGS_TOOLS.activate_avatar.successMarker が
+      // この部分文字列でしか監査ログの発火を判定していない。将来この文言を「改善」して
+      // 削ってしまうと、DBは正しく更新されているのに監査ログだけ無言で止まる
+      // (このテストが落ちて初めて気づける退行)。
+      expect(result).toContain('を有効化しました');
+    });
+
+    it('空文字列("")の場合もundefinedと同じく「未設定」として扱われ縮退メッセージを返す', async () => {
+      // 素朴な `process.env.X === undefined` へのリファクタだと、このケースだけ
+      // すり抜けて縮退が発生しなくなる(現在の実装は `!process.env.X` で両方を弾く)。
+      process.env.INTERNAL_API_HMAC_SECRET = '';
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-hmac-2', 'activate_avatar', { id: 'av-1' }))
+        .mockResolvedValueOnce(makeGroqResponse('アバターを有効化しました。'));
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'growth' }] });
+      mockConnect.mockResolvedValueOnce({ query: successfulActivationClientQuery(), release: jest.fn() });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターを有効化して', sessionId: 'sess-hmac-02' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toContain('配信設定を解決できませんでした');
+      expect(result).toContain('を有効化しました');
+    });
+
+    it('空白のみ("   ")の場合は現状「設定済み」として扱われ、通常の成功メッセージになる(現行仕様の記録)', async () => {
+      // truthyな文字列である以上、現在の `!process.env.X` ガードは通過する。
+      // これが意図した挙動か(空白secretでHMAC検証が事実上無意味になる)は別問題だが、
+      // 将来この判定基準を変えるなら意図的な変更であるべきで、このテストはその変更点を検知する。
+      process.env.INTERNAL_API_HMAC_SECRET = '   ';
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-hmac-3', 'activate_avatar', { id: 'av-1' }))
+        .mockResolvedValueOnce(makeGroqResponse('アバターを有効化しました。'));
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'growth' }] });
+      mockConnect.mockResolvedValueOnce({ query: successfulActivationClientQuery(), release: jest.fn() });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターを有効化して', sessionId: 'sess-hmac-03' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).not.toContain('配信設定を解決できませんでした');
+      expect(result).toBe('アバター（ID: av-1）を有効化しました');
+    });
+
+    it('設定済みの場合は従来通りの成功メッセージを一字一句返す(縮退文言を混入させない)', async () => {
+      process.env.INTERNAL_API_HMAC_SECRET = 'test-hmac-secret';
+      mockFetch
+        .mockResolvedValueOnce(toolCallResponse('call-hmac-4', 'activate_avatar', { id: 'av-1' }))
+        .mockResolvedValueOnce(makeGroqResponse('アバターを有効化しました。'));
+      mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'growth' }] });
+      mockConnect.mockResolvedValueOnce({ query: successfulActivationClientQuery(), release: jest.fn() });
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'アバターを有効化して', sessionId: 'sess-hmac-04' });
+
+      expect(res.status).toBe(200);
+      const result = res.body.actions[0].result as string;
+      expect(result).toBe('アバター（ID: av-1）を有効化しました');
+      expect(result).not.toContain('配信設定を解決できませんでした');
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // GID 1217535352042856(E1): set_avatar_feature — tenants.features.avatar の
   // マスターON/OFFをチャットから行えるようにする。
   // -------------------------------------------------------------------------
@@ -14647,6 +14979,51 @@ describe('POST /v1/admin/agent/chat', () => {
           newValue: 'av-1',
         },
       ]);
+    });
+
+    // PR #1171: INTERNAL_API_HMAC_SECRET未設定の縮退メッセージでも、DBのis_activeは
+    // 実際に更新済みのため監査記録は継続すべき(actionExecutor.tsのコメント通り)。
+    // successMarkerの部分一致判定(agentRoutes.ts AUDITED_SETTINGS_TOOLS)が縮退文言でも
+    // 引っかかることの回帰テスト — ここが外れると「有効化されたのに記録が残らない」
+    // 静かな退行になる。
+    it('activate_avatar が INTERNAL_API_HMAC_SECRET 未設定で縮退した場合でも active_avatar_config_id の変更を記録する', async () => {
+      const originalSecret = process.env.INTERNAL_API_HMAC_SECRET;
+      delete process.env.INTERNAL_API_HMAC_SECRET;
+      try {
+        mockFetch
+          .mockResolvedValueOnce(toolCallResponse('call-au-hmac', 'activate_avatar', { id: 'av-1' }))
+          .mockResolvedValueOnce(makeGroqResponse('アバターを有効化しました。'));
+        mockQuery.mockResolvedValueOnce({ rows: [{ plan: 'growth' }] });
+        const clientQuery = jest.fn()
+          .mockResolvedValueOnce({ rows: [] }) // BEGIN
+          .mockResolvedValueOnce({ rows: [] }) // deactivate all
+          .mockResolvedValueOnce({ rows: [{ id: 'av-1' }] }) // activate target
+          .mockResolvedValueOnce({ rows: [] }) // tenants.features sync
+          .mockResolvedValueOnce({ rows: [] }); // COMMIT
+        mockConnect.mockResolvedValueOnce({ query: clientQuery, release: jest.fn() });
+
+        const res = await request(makeApp(AUDIT_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: 'アバターを有効化して', sessionId: 'sess-audit-hmac' });
+
+        expect(res.status).toBe(200);
+        expect(res.body.actions[0].result).toContain('配信設定を解決できませんでした');
+        expect(recordedSettingsChanges()).toEqual([
+          {
+            tenantId: 'tenant-abc',
+            changedBy: 'admin@example.com',
+            fieldName: 'active_avatar_config_id',
+            oldValue: null,
+            newValue: 'av-1',
+          },
+        ]);
+      } finally {
+        if (originalSecret === undefined) {
+          delete process.env.INTERNAL_API_HMAC_SECRET;
+        } else {
+          process.env.INTERNAL_API_HMAC_SECRET = originalSecret;
+        }
+      }
     });
 
     // オンボ 是正B-2: import_industry_faq_templates/publish_faq_drafts が未登録で
