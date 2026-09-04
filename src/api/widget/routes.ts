@@ -17,11 +17,19 @@ const API_BASE_URL =
   process.env.API_BASE_URL ?? "https://api.r2c.biz";
 
 // ウィジェットの「Powered by R2C」バッジの遷移先（LPトップではなく専用着地ページ）。
-// 2026-08-24 実機確認: apex の r2c.biz は DNS レコードが存在せず解決不能
-// （admin.r2c.biz / api.r2c.biz は稼働中。R2C がローンチ前でマーケティング用
-// apex ドメインが未取得/未設定のため）。public/lp/ は本リポジトリの Express アプリ
-// (api.r2c.biz) が express.static で配信しているため、確実に到達できるこちらを既定にする。
-// r2c.biz apex が将来取得され次第、env で上書きする。
+//
+// 2026-09-04 実測（2026-08-24 の記述を訂正）: apex の r2c.biz は **解決する**
+// （65.108.159.161）。ただし解決先は api.r2c.biz と同じ Express アプリであり、
+// 独立したマーケティングサイトではない。実測値は以下のとおり。
+//   https://r2c.biz/lp/from-chat/      → 200（api.r2c.biz と同一コンテンツ）
+//   https://api.r2c.biz/lp/from-chat/  → 200
+//   https://r2c.biz/  と  https://api.r2c.biz/  → どちらも 404
+//
+// つまり既定値を apex へ変えても到達先は同じで、本番のリンク先を変える risk に
+// 見合う利益がない。よって既定値は API_BASE_URL のままとする。apex に独立した
+// LP を立てたときに、その作業とセットで env（LP_BASE_URL）で切り替える。
+// buildBadgeUrl / buildAdPromoUrl の遷移先は /lp/from-chat/ のみで、
+// 404 になる apex の `/` へは行かない。
 const LP_BASE_URL = process.env.LP_BASE_URL ?? API_BASE_URL;
 
 /**
