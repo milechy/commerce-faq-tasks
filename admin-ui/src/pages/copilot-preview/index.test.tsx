@@ -6516,3 +6516,186 @@ describe("CopilotPreviewPage — AI発話のMarkdown描画", () => {
     expect(own.tagName).not.toBe("STRONG");
   });
 });
+
+// GID 1218167291123548 (L3-1b) テスト強化: ウィジェットの設置位置編集カード(WidgetPlacementCard)。
+//
+// 「適用」ボタンは直接バックエンドを叩かない。__real: 自然文を /v1/admin/agent/chat に
+// 送り、LLMがそれを読んでset_widget_themeを呼ぶことを期待する構造になっている
+// (この画面の他の書き込み導線と同じ)。LLMが日本語文からJSONを正しく抽出できるかは
+// このレイヤーでは検証不能・対象外(下の「テストでカバーできていないリスク」参照)。
+// ここで検証するのは、その手前の「スライダー状態からonSendRealへ渡す文字列を
+// 組み立てる処理」自体が正しいか、という点。
+describe("CopilotPreviewPage — ウィジェット設置位置カード(L3-1b)", () => {
+  const baseCard = {
+    kind: "widget_placement",
+    position: "bottom-right" as const,
+    offsetX: 24,
+    offsetY: 24,
+    defaultPosition: "bottom-right" as const,
+    defaultOffsetX: 24,
+    defaultOffsetY: 24,
+  };
+
+  function mockAgent(card: Record<string, unknown>) {
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+    let agentCalls = 0;
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
+      agentCalls += 1;
+      if (agentCalls === 1) return mockOk({ reply: "今週も順調です。", actions: [] });
+      if (agentCalls === 2) {
+        return mockOk({
+          reply: "現在の設置位置です。",
+          actions: [{ tool: "get_widget_placement", result: "現在の設置位置です。", card }],
+        });
+      }
+      return mockOk({ reply: "了解しました。", actions: [] });
+    });
+  }
+
+  async function send(text: string) {
+    renderPage();
+    await waitForBootstrapSendStarted();
+    fireEvent.change(getComposer(), { target: { value: text } });
+    fireEvent.click(screen.getByLabelText("送信"));
+  }
+
+  function lastChatMessage(): string {
+    const bodies = vi
+      .mocked(authFetch)
+      .mock.calls.filter(([url]) => String(url).includes("/v1/admin/agent/chat"))
+      .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>);
+    return String(bodies.at(-1)?.message ?? "");
+  }
+
+  function offsetYSlider(): HTMLInputElement {
+    return screen.getByLabelText("ウィジェットを上へ／下へ動かす") as HTMLInputElement;
+  }
+  function offsetXSlider(): HTMLInputElement {
+    return screen.getByLabelText("ウィジェットを左右に動かす") as HTMLInputElement;
+  }
+  function applyButton(): HTMLButtonElement {
+    return screen.getByRole("button", { name: "適用" }) as HTMLButtonElement;
+  }
+
+  async function renderCard(card: Record<string, unknown> = baseCard) {
+    mockAgent(card);
+    await send("設置位置を教えて");
+    await screen.findByText("寄せる角（現在）");
+    // カード自体は応答到着と同時に描画されるが、返信本文はタイプライター演出中で
+    // sending がまだ true のことがある。この状態で「適用」を押むと sendReal が
+    // `sending && !force` ガードで無言のno-opになり、後続のfetchが一切飛ばない
+    // (このガード自体は正しい挙動なので、テスト側が演出の完了を待つ)。
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+  }
+
+  it("__real:文字列は現在のスライダー値をそのまま含む(offsetY=0のfalsy境界)", async () => {
+    await renderCard();
+
+    fireEvent.change(offsetYSlider(), { target: { value: "0" } });
+    fireEvent.click(applyButton());
+
+    await waitFor(() => expect(lastChatMessage()).toContain("set_widget_themeツール"));
+    const message = lastChatMessage();
+    expect(message).toContain('"position":"bottom-right"');
+    expect(message).toContain('"offsetX":24');
+    // value || default のような取り違えがあれば、ここが "offsetY":24 のまま送られてしまう
+    expect(message).toContain('"offsetY":0');
+    expect(message).not.toContain('"offsetY":24');
+  });
+
+  it("__real:文字列は offsetX=0 も正しく反映する(falsy境界)", async () => {
+    await renderCard();
+
+    fireEvent.change(offsetXSlider(), { target: { value: "0" } });
+    fireEvent.click(applyButton());
+
+    await waitFor(() => expect(lastChatMessage()).toContain("set_widget_themeツール"));
+    expect(lastChatMessage()).toContain('"offsetX":0');
+  });
+
+  it("__real:文字列は offsetY=320(最大)も正しく反映する", async () => {
+    await renderCard();
+
+    fireEvent.change(offsetYSlider(), { target: { value: "320" } });
+    fireEvent.click(applyButton());
+
+    await waitFor(() => expect(lastChatMessage()).toContain("set_widget_themeツール"));
+    expect(lastChatMessage()).toContain('"offsetY":320');
+  });
+
+  it("__real:文字列は position=bottom-left も正しく反映する", async () => {
+    await renderCard();
+
+    fireEvent.click(screen.getByRole("button", { name: "左下" }));
+    fireEvent.click(applyButton());
+
+    await waitFor(() => expect(lastChatMessage()).toContain("set_widget_themeツール"));
+    expect(lastChatMessage()).toContain('"position":"bottom-left"');
+  });
+
+  it("適用は初期状態で無効、変更で有効、元の値に戻すと再び無効になる(単純な「触った」フラグではなく差分判定であることの固定)", async () => {
+    await renderCard();
+
+    expect(applyButton().disabled).toBe(true);
+
+    fireEvent.change(offsetYSlider(), { target: { value: String(baseCard.offsetY + 1) } });
+    expect(applyButton().disabled).toBe(false);
+
+    // 「触ったかどうか」だけを見るdirtyフラグなら、ここで有効のままになってしまう
+    fireEvent.change(offsetYSlider(), { target: { value: String(baseCard.offsetY) } });
+    expect(applyButton().disabled).toBe(true);
+  });
+
+  it("既にoffsetYが96のとき「重なりを直す」を押しても適用は無効のまま(no-op)", async () => {
+    await renderCard({ ...baseCard, offsetY: 96 });
+
+    expect(applyButton().disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "重なりを直す" }));
+    expect(applyButton().disabled).toBe(true);
+  });
+
+  it("「重なりを直す」→「元に戻す」で、96ではなく既定値に戻り、適用は無効に戻る", async () => {
+    await renderCard();
+
+    fireEvent.click(screen.getByRole("button", { name: "重なりを直す" }));
+    expect(offsetYSlider().value).toBe("96");
+    expect(applyButton().disabled).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "元に戻す" }));
+    expect(offsetYSlider().value).toBe(String(baseCard.defaultOffsetY));
+    expect(applyButton().disabled).toBe(true);
+  });
+
+  it("「重なりを直す」→「元に戻す」→他の値を変えて「適用」しても、96ではなく既定値ベースのoffsetYが送信される(状態の取り違え/古い値の残留がないことの固定)", async () => {
+    await renderCard();
+
+    fireEvent.click(screen.getByRole("button", { name: "重なりを直す" }));
+    fireEvent.click(screen.getByRole("button", { name: "元に戻す" }));
+    // 適用ボタンを有効化するため、既定値からわずかにずらす(無変更ではdisabledのまま)
+    fireEvent.change(offsetXSlider(), { target: { value: String(baseCard.defaultOffsetX + 1) } });
+    fireEvent.click(applyButton());
+
+    await waitFor(() => expect(lastChatMessage()).toContain("set_widget_themeツール"));
+    const message = lastChatMessage();
+    expect(message).toContain(`"offsetY":${baseCard.defaultOffsetY}`);
+    expect(message).not.toContain('"offsetY":96');
+  });
+
+  it("スライダーのmin/maxはサーバ側のWIDGET_OFFSET_MIN/MAX(0/320)と一致する(admin-uiは複製を持つため乖離しうる。乖離時はsrc/api/admin/agent/widgetPlacement.tsとadmin-ui両方を直すこと)", async () => {
+    await renderCard();
+
+    // src/api/admin/agent/widgetPlacement.ts の WIDGET_OFFSET_MIN/MAX(2026-09-04時点)を
+    // ここに直値で固定する。admin-uiはsrc/からimportできず値を複製しているため、
+    // サーバ側だけ変更されるとこのテストだけが検出できる。
+    expect(offsetYSlider().min).toBe("0");
+    expect(offsetYSlider().max).toBe("320");
+    expect(offsetXSlider().min).toBe("0");
+    expect(offsetXSlider().max).toBe("320");
+  });
+});
