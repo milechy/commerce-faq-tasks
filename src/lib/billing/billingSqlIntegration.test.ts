@@ -25,7 +25,7 @@ import { Pool } from "pg";
 import { computeExpectedBilling } from "./stripeSync";
 import { findMissingColumns, REQUIRED_COLUMNS } from "../../api/admin/analytics/schemaHealth";
 import { countFreeAdBillableConversations, countFreeAdBillableRequests } from "../../api/chat/route";
-import { countFreeAdAdminConsults, reserveAdminConsultSlotIfWithinLimit } from "../../api/admin/agent/agentRoutes";
+import { countFreeAdAdminConsults, reserveAdminConsultSlotIfWithinLimit, releaseAdminConsultReservation } from "../../api/admin/agent/agentRoutes";
 import { initUsageTracker, trackUsage } from "./usageTracker";
 import { calculateBaseCostCents, calculateBillingAmountCents } from "./costCalculator";
 import { MARGIN_MULTIPLIER } from "./costCalculator";
@@ -1343,6 +1343,67 @@ d("countFreeAdAdminConsults（実 Postgres に対する管理AI月次上限の�
 
     const { count } = await countFreeAdAdminConsults(db, "t1", "none", now);
     expect(count).toBe(1); // 5回同時に叩いても1相談として数えられる
+  });
+
+  // GID 1218162837824797 レビュー是正(2026-09-04): releaseAdminConsultReservation の
+  // 実Postgres検証。予約→取り消しの後、当月件数が実際に元に戻ることを確認する
+  // (モックDBのテストは「DELETEクエリが呼ばれたか」しか固定できず、実際にその
+  // DELETEが対象行を消して集計に反映されるかまでは検証できない)。
+  describe("releaseAdminConsultReservation(予約の取り消し)", () => {
+    it("予約を取り消すと、当月件数から実際に消える(Groq失敗時のロールバック)", async () => {
+      const now = new Date("2026-03-05T02:00:00Z");
+      const reserved = await reserveAdminConsultSlotIfWithinLimit(db, "t1", "will-fail-session", now);
+      expect(reserved.blocked).toBe(false);
+      expect(reserved.reservationRequestId).not.toBeNull();
+
+      const before = await countFreeAdAdminConsults(db, "t1", "none", now);
+      expect(before.count).toBe(1);
+
+      await releaseAdminConsultReservation(db, "t1", reserved.reservationRequestId!);
+
+      const after = await countFreeAdAdminConsults(db, "t1", "none", now);
+      expect(after.count).toBe(0); // 取り消し後は月間上限を消費していない
+
+      // 取り消し後に同じセッションで再試行すると、新しい予約として通常どおり許可される
+      const retried = await reserveAdminConsultSlotIfWithinLimit(db, "t1", "will-fail-session", now);
+      expect(retried.blocked).toBe(false);
+    });
+
+    it("実コスト行(billable=trueだがcost_total_cents>0)は誤って削除しない", async () => {
+      const now = new Date("2026-03-05T02:00:00Z");
+      // 本物の利用行(原価あり)を直接投入する。request_idは予約とは別物。
+      await db.query(
+        `INSERT INTO usage_logs (tenant_id, request_id, session_id, feature_used, billable, cost_total_cents, created_at)
+         VALUES ('t1', 'admin-agent-real-row', 'real-session', 'admin_agent', true, 50, $1)`,
+        [now]
+      );
+      // 実コスト行と同じ request_id を(あり得ない想定だが)指定してみても、
+      // cost_total_cents=0 の予約でなければ削除条件に一致せず消えない。
+      await releaseAdminConsultReservation(db, "t1", "admin-agent-real-row");
+
+      const result = await db.query(`SELECT COUNT(*)::int AS c FROM usage_logs WHERE request_id = 'admin-agent-real-row'`);
+      expect(result.rows[0].c).toBe(1); // 削除されていない
+    });
+
+    it("他テナントの同名request_idは削除しない(テナント境界)", async () => {
+      const now = new Date("2026-03-05T02:00:00Z");
+      const reserved = await reserveAdminConsultSlotIfWithinLimit(db, "t1", "cross-tenant-session", now);
+
+      // otherテナントに対して t1 の予約を取り消そうとしても消えない
+      await releaseAdminConsultReservation(db, "other", reserved.reservationRequestId!);
+
+      const result = await db.query(
+        `SELECT COUNT(*)::int AS c FROM usage_logs WHERE request_id = $1`,
+        [reserved.reservationRequestId]
+      );
+      expect(result.rows[0].c).toBe(1); // t1の予約は残ったまま
+    });
+
+    it("存在しない予約を取り消そうとしても例外を投げない(0行のDELETEは正常)", async () => {
+      await expect(
+        releaseAdminConsultReservation(db, "t1", "no-such-reservation")
+      ).resolves.toBeUndefined();
+    });
   });
 });
 

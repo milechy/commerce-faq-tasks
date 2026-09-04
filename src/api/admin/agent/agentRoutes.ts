@@ -967,6 +967,17 @@ function todayJstDateString(now: Date): string {
   );
 }
 
+/**
+ * 管理AI相談の予約行(reserveAdminConsultSlotIfWithinLimit が書く $0 の usage_logs 行)の
+ * request_id。(tenantId, sessionId, JST暦日)から決定的に導出するため、同じ相談への
+ * 二重クリック・複数タブでの再送は ON CONFLICT (request_id) で1行に収束する。
+ * 呼び出し元(isAdminAgentFreeAdLimitReached の失敗時ロールバック)がこの値を
+ * 再計算できるよう、予約INSERT側と共通の関数にしている(2箇所に書き写さない)。
+ */
+function adminConsultReservationRequestId(tenantId: string, sessionId: string, now: Date): string {
+  return `admin-agent-slot-${tenantId}-${sessionId}-${todayJstDateString(now)}`;
+}
+
 // export: billingSqlIntegration.test.ts が実 Postgres に対してこの関数を直接呼び、
 // JS側(shiftToJstWallClock)とSQL側(AT TIME ZONE 'Asia/Tokyo')のJST日付計算が
 // 実際に一致することを検証する(src/api/chat/route.ts の
@@ -1016,7 +1027,7 @@ export async function countFreeAdAdminConsults(
  *
  * ★対処: テナント単位の pg_advisory_lock で「数える→予約行を書く」を直列化する★
  * 予約行は原価0円・billable=true の usage_logs 行で、request_id は
- * (tenantId, sessionId, JST暦日)から決定的に導出する(admin-agent-slot-*)。
+ * adminConsultReservationRequestId((tenantId, sessionId, JST暦日)から決定的に導出)。
  * これにより:
  *   - 同じ session×日への予約は ON CONFLICT (request_id) DO NOTHING で1行に収束する
  *     (2重クリック・再送でも予約が増えない)。
@@ -1034,6 +1045,16 @@ export async function countFreeAdAdminConsults(
  *
  * fail-open: ロック獲得・カウント・予約行のいずれが失敗しても呼び出し元の
  * try/catch がまとめて拾い、店主の相談を止めない(既存方針を維持)。
+ *
+ * ★戻り値に reservationRequestId を含める理由★
+ * このリクエストで新規に予約行を作った場合のみ非null。呼び出し元
+ * (isAdminAgentFreeAdLimitReached経由)はこれを保持しておき、Groq呼び出しが
+ * 失敗した場合に releaseAdminConsultReservation でこの予約行を削除する
+ * (2026-09-04レビュー是正: 予約後にGroqが失敗すると、何も回答が返らないまま
+ * free_adの月間上限を1件消費していた。原因はこの関数ではなく呼び出し元が
+ * 予約の成否をGroq呼び出しの結果と結び付けていなかったこと)。
+ * countedToday=true(予約済みの継続)・blocked=true(そもそも予約していない)の
+ * 場合は null — 削除すべき「今回作った予約」が無いため。
  */
 // export: billingSqlIntegration.test.ts が実 Postgres に対して同時実行し、
 // テナント単位のロックが check-then-act の隙間を実際に塞ぐことを検証する。
@@ -1042,14 +1063,14 @@ export async function reserveAdminConsultSlotIfWithinLimit(
   tenantId: string,
   sessionId: string,
   now: Date,
-): Promise<{ blocked: boolean }> {
+): Promise<{ blocked: boolean; reservationRequestId: string | null }> {
   const client = await pool.connect();
   try {
     await client.query('SELECT pg_advisory_lock(hashtext($1))', [`admin_agent_consult:${tenantId}`]);
     try {
       const { count, countedToday } = await countFreeAdAdminConsults(client, tenantId, sessionId, now);
-      if (countedToday) return { blocked: false };
-      if (isFreeAdAdminConsultQuotaExceeded(count)) return { blocked: true };
+      if (countedToday) return { blocked: false, reservationRequestId: null };
+      if (isFreeAdAdminConsultQuotaExceeded(count)) return { blocked: true, reservationRequestId: null };
 
       // ロックを保持したまま、この(session, 今日)分の予約を書く。ここまでがロックの
       // 目的(次の同時リクエストのカウントに即座に反映させる)。実際のGroq呼び出しは
@@ -1061,18 +1082,43 @@ export async function reserveAdminConsultSlotIfWithinLimit(
       // 指定した場合や、僅かなクロックドリフトがある場合)、この予約行が期間条件
       // (created_at >= $3 AND created_at < $4)に一致せず、後続の同時リクエストの
       // カウントに一切反映されない(=ロックの意味が消える)。
+      const reservationRequestId = adminConsultReservationRequestId(tenantId, sessionId, now);
       await client.query(
         `INSERT INTO usage_logs (tenant_id, request_id, session_id, feature_used, billable, created_at)
          VALUES ($1, $2, $3, 'admin_agent', true, $4)
          ON CONFLICT (request_id) DO NOTHING`,
-        [tenantId, `admin-agent-slot-${sessionId}-${todayJstDateString(now)}`, sessionId, now],
+        [tenantId, reservationRequestId, sessionId, now],
       );
-      return { blocked: false };
+      return { blocked: false, reservationRequestId };
     } finally {
       await client.query('SELECT pg_advisory_unlock(hashtext($1))', [`admin_agent_consult:${tenantId}`]);
     }
   } finally {
     client.release();
+  }
+}
+
+/**
+ * reserveAdminConsultSlotIfWithinLimit が作った予約行を取り消す。Groq呼び出しが
+ * 失敗し、何も回答が返らなかった場合に呼ぶ(呼び出し元の catch から)。
+ *
+ * best-effort: 削除自体が失敗しても例外を投げない。ここは既にエラー応答を
+ * 組み立てている最中の後始末であり、ここで例外を投げると本来のエラー応答が
+ * 別のエラーに上書きされてしまう。削除に失敗しても実害は「予約行が1件残る」
+ * だけ(原価0円、翌月には影響しない)なので warn ログに留める。
+ */
+export async function releaseAdminConsultReservation(
+  pool: Pool,
+  tenantId: string,
+  requestId: string,
+): Promise<void> {
+  try {
+    await pool.query(
+      `DELETE FROM usage_logs WHERE tenant_id = $1 AND request_id = $2 AND billable = true AND cost_total_cents = 0`,
+      [tenantId, requestId],
+    );
+  } catch (err) {
+    logger.warn('[admin-agent] failed to release admin consult reservation after Groq failure', err);
   }
 }
 
@@ -1099,27 +1145,32 @@ export async function reserveAdminConsultSlotIfWithinLimit(
  * 別チャネルにする。60秒キャッシュ付き getTenantPlan は上記の理由で使わない
  * （この経路は店主の相談＝低トラフィックで、主キー1本のSELECTなのでキャッシュなしを許容する）。
  *
- * fail-open: プラン解決・ロック獲得・集計・予約行の書き込みのいずれが失敗しても false
- * (止めない)を返す。計測の失敗で店主の相談を止めない、という既存の fire-and-forget
- * 方針と同じ考え方。free_ad 以外のプランは常に false（既存動作は一切変えない。
- * ロックにも一切触れない — advisory lock はテナント単位のため、free_ad以外の
- * 大多数のリクエストは reserveAdminConsultSlotIfWithinLimit 自体を呼ばない）。
+ * fail-open: プラン解決・ロック獲得・集計・予約行の書き込みのいずれが失敗しても
+ * { blocked: false, reservationRequestId: null } を返す(止めない)。計測の失敗で
+ * 店主の相談を止めない、という既存の fire-and-forget 方針と同じ考え方。
+ * free_ad 以外のプランは常に blocked:false（既存動作は一切変えない。ロックにも
+ * 一切触れない — advisory lock はテナント単位のため、free_ad以外の大多数の
+ * リクエストは reserveAdminConsultSlotIfWithinLimit 自体を呼ばない）。
+ *
+ * ★reservationRequestId を呼び出し元へ返す★ 呼び出し元はこれを保持し、この後の
+ * Groq呼び出しが失敗した場合に releaseAdminConsultReservation で予約を取り消す。
+ * ここで失敗を吸収して blocked:false に丸めた場合(catch節)は reservationRequestId
+ * も必ず null にする — 予約が実際に作られていない以上、取り消す対象も無い。
  */
 async function isAdminAgentFreeAdLimitReached(
   db: Pool,
   tenantId: string,
   sessionId: string,
   now: Date = new Date(),
-): Promise<boolean> {
+): Promise<{ blocked: boolean; reservationRequestId: string | null }> {
   try {
     const plan = await queryTenantPlanResult(getPool(), tenantId);
-    if (plan !== 'free_ad') return false; // null(判定不能)もここで止めない側に倒れる
+    if (plan !== 'free_ad') return { blocked: false, reservationRequestId: null }; // null(判定不能)もここで止めない側に倒れる
 
-    const { blocked } = await reserveAdminConsultSlotIfWithinLimit(db, tenantId, sessionId, now);
-    return blocked;
+    return await reserveAdminConsultSlotIfWithinLimit(db, tenantId, sessionId, now);
   } catch (err) {
     logger.warn('[admin-agent] free_ad admin consult quota check failed', err);
-    return false;
+    return { blocked: false, reservationRequestId: null };
   }
 }
 
@@ -1195,13 +1246,21 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
     // 行いたい操作を明示的に述べている場合のみ true(相槌一言では false)。元メッセージ基準。
     const humanApprovedThisRequest = messageIndicatesHumanApproval(message);
 
+    // free_ad の管理AI月次上限(S7)判定で「今回新規に予約行を作った」場合のrequest_id。
+    // このターンがGroq呼び出しの失敗で終わった場合、下のcatchでこの予約を取り消す
+    // (2026-09-04レビュー是正: 取り消さないと、何も回答が返らないリクエストが
+    // free_adの月間30件をそのまま1件消費してしまう)。
+    let pendingFreeAdReservationRequestId: string | null = null;
+
     try {
       // free_ad の管理AI月次上限(S7)。Groqを呼ぶ「前」に判定し、到達時は原価0で
       // 正常系の案内文を返す。同一 session_id で今日既に計上済みの相談は継続を許す。
-      if (
-        effectiveTenantId &&
-        (await isAdminAgentFreeAdLimitReached(db, effectiveTenantId, sessionId))
-      ) {
+      const freeAdCheck = effectiveTenantId
+        ? await isAdminAgentFreeAdLimitReached(db, effectiveTenantId, sessionId)
+        : { blocked: false, reservationRequestId: null };
+      pendingFreeAdReservationRequestId = freeAdCheck.reservationRequestId;
+
+      if (freeAdCheck.blocked) {
         logger.info('[admin-agent] free_ad monthly admin consult limit reached', { tenantId: effectiveTenantId });
         if (parsed.data.stream === true) {
           res.writeHead(200, {
@@ -1374,6 +1433,13 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
           res.end();
         } catch (err) {
           logger.warn('[POST /v1/admin/agent/chat stream]', err);
+          // このターンで新規に free_ad の予約行を作っていたら取り消す。ここまで来た
+          // ということは trackUsage が一度も呼ばれていない(呼ばれていれば正常応答して
+          // returnしているため、この catch には来ない) — 何も回答を返せなかった
+          // リクエストが月間30件の1件を消費したままにしない。
+          if (effectiveTenantId && pendingFreeAdReservationRequestId) {
+            await releaseAdminConsultReservation(db, effectiveTenantId, pendingFreeAdReservationRequestId);
+          }
           res.write(`event: error\ndata: ${JSON.stringify({ error: 'AIエージェントの応答生成に失敗しました' })}\n\n`);
           res.end();
         }
@@ -1465,6 +1531,11 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
       return res.json({ reply: redactedReply, actions, answered_from: answeredFrom });
     } catch (err) {
       logger.warn('[POST /v1/admin/agent/chat]', err);
+      // ストリーミング経路のcatchと同じ理由: 何も回答を返せなかったリクエストが
+      // free_adの月間上限を消費したままにしない。
+      if (effectiveTenantId && pendingFreeAdReservationRequestId) {
+        await releaseAdminConsultReservation(db, effectiveTenantId, pendingFreeAdReservationRequestId);
+      }
       return res.status(500).json({ error: 'AIエージェントの応答生成に失敗しました' });
     }
   });
