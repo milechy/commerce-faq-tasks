@@ -34,6 +34,17 @@ jest.mock("../../lib/tenant-context", () => ({
 }));
 import { registerTenant } from "../../lib/tenant-context";
 
+// D12: 招待メールはテナント発行の成否と独立させる(fire-and-forget)。
+// inviteUserByEmail / updateUserById をモックし、呼び出し内容と
+// 失敗時の非ブロッキング挙動の両方を検証する。
+const mockInviteUserByEmail = jest.fn();
+const mockUpdateUserById = jest.fn();
+jest.mock("../../auth/supabaseClient", () => ({
+  get supabaseAdmin() {
+    return (globalThis as any).__mockSupabaseAdmin__;
+  },
+}));
+
 function makeApp(db: any) {
   const app = express();
   app.use(express.json());
@@ -58,7 +69,7 @@ function makeTxClient(handlers: {
     if (norm === "BEGIN" || norm === "SET LOCAL lock_timeout = '3s'" || norm === "COMMIT" || norm === "ROLLBACK") {
       return { rows: [], rowCount: 0 };
     }
-    if (norm.startsWith("SELECT status, site_origin, site_name, tenant_id FROM wp_provisionings")) {
+    if (norm.startsWith("SELECT status, site_origin, site_name, tenant_id, email FROM wp_provisionings")) {
       return handlers.onSelectForUpdate?.(params) ?? { rows: [], rowCount: 0 };
     }
     if (norm.startsWith("SELECT") && norm.includes("wp_provisionings") && norm.includes("status = 'provisioned'") && norm.includes("site_origin = $1")) {
@@ -89,6 +100,15 @@ function makeTxClient(handlers: {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockInviteUserByEmail.mockResolvedValue({ data: { user: { id: "user-1" } }, error: null });
+  mockUpdateUserById.mockResolvedValue({ error: null });
+  (globalThis as any).__mockSupabaseAdmin__ = {
+    auth: { admin: { inviteUserByEmail: mockInviteUserByEmail, updateUserById: mockUpdateUserById } },
+  };
+});
+
+afterEach(() => {
+  delete (globalThis as any).__mockSupabaseAdmin__;
 });
 
 describe("POST /v1/public/wp/provision", () => {
@@ -261,7 +281,7 @@ describe("GET /v1/public/wp/provision/:token", () => {
     mockVerify.mockResolvedValueOnce({ ok: true });
     const { client, calls } = makeTxClient({
       onSelectForUpdate: () => ({
-        rows: [{ status: "site_verified", site_origin: "https://example.com", site_name: "My Shop", tenant_id: null }],
+        rows: [{ status: "site_verified", site_origin: "https://example.com", site_name: "My Shop", tenant_id: null, email: "owner@example.com" }],
         rowCount: 1,
       }),
       onFindProvisionedByOrigin: () => ({ rows: [], rowCount: 0 }),
@@ -313,6 +333,92 @@ describe("GET /v1/public/wp/provision/:token", () => {
         }),
       })
     );
+
+    // ★D12: 招待メールが発行と同じタイミングで、正しい宛先・tenant_idで送られる★
+    // fire-and-forget なので直後は未確定 — マイクロタスクの完了を待つ。
+    await new Promise((r) => setImmediate(r));
+    expect(mockInviteUserByEmail).toHaveBeenCalledWith(
+      "owner@example.com",
+      expect.objectContaining({
+        data: { role: "client_admin", tenant_id: res.body.tenant_id },
+      })
+    );
+    expect(mockUpdateUserById).toHaveBeenCalledWith(
+      "user-1",
+      expect.objectContaining({ app_metadata: { role: "client_admin", tenant_id: res.body.tenant_id } })
+    );
+  });
+
+  // D12: 招待メール送信が失敗しても、既に返したレスポンス(発行済みテナント・
+  // APIキー)には一切影響しない——WP-1の成功をメール到達に依存させない。
+  it("招待メールの送信に失敗してもレスポンスは200 provisionedのまま(非ブロッキング)", async () => {
+    mockVerify.mockResolvedValueOnce({ ok: true });
+    mockInviteUserByEmail.mockRejectedValueOnce(new Error("smtp down"));
+    const { client } = makeTxClient({
+      onSelectForUpdate: () => ({
+        rows: [{ status: "site_verified", site_origin: "https://example.com", site_name: null, tenant_id: null, email: "owner@example.com" }],
+        rowCount: 1,
+      }),
+      onFindProvisionedByOrigin: () => ({ rows: [], rowCount: 0 }),
+      onCountProvisioned: () => ({ rows: [{ count: 0 }], rowCount: 1 }),
+      onCountCreatedSince: () => ({ rows: [{ count: 0 }], rowCount: 1 }),
+      onMarkProvisioned: () => ({ rows: [], rowCount: 1 }),
+    });
+    const connect = jest.fn().mockResolvedValue(client);
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({
+        rows: [{ id: "row-1", status: "pending", site_origin: "https://example.com", tenant_id: null, failure_reason: null, created_at: new Date() }],
+        rowCount: 1,
+      })
+      .mockResolvedValueOnce({ rows: [{ challenge_hash: "hash-x" }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 });
+    const app = makeApp({ query: dbQuery, connect });
+
+    const res = await request(app).get(`/v1/public/wp/provision/${TOKEN}`);
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("provisioned");
+    expect(typeof res.body.api_key).toBe("string");
+
+    await new Promise((r) => setImmediate(r));
+    expect(mockInviteUserByEmail).toHaveBeenCalled();
+    // updateUserById まで進まない(inviteが失敗しているため) — 呼ばれないことを確認
+    expect(mockUpdateUserById).not.toHaveBeenCalled();
+  });
+
+  // supabaseAdmin 未設定(env未構成)の環境では、発行自体は成功したままにする。
+  it("supabaseAdmin未設定でも発行は成功する(招待は静かにスキップ)", async () => {
+    (globalThis as any).__mockSupabaseAdmin__ = null;
+    mockVerify.mockResolvedValueOnce({ ok: true });
+    const { client } = makeTxClient({
+      onSelectForUpdate: () => ({
+        rows: [{ status: "site_verified", site_origin: "https://example.com", site_name: null, tenant_id: null, email: "owner@example.com" }],
+        rowCount: 1,
+      }),
+      onFindProvisionedByOrigin: () => ({ rows: [], rowCount: 0 }),
+      onCountProvisioned: () => ({ rows: [{ count: 0 }], rowCount: 1 }),
+      onCountCreatedSince: () => ({ rows: [{ count: 0 }], rowCount: 1 }),
+      onMarkProvisioned: () => ({ rows: [], rowCount: 1 }),
+    });
+    const connect = jest.fn().mockResolvedValue(client);
+    const dbQuery = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({
+        rows: [{ id: "row-1", status: "pending", site_origin: "https://example.com", tenant_id: null, failure_reason: null, created_at: new Date() }],
+        rowCount: 1,
+      })
+      .mockResolvedValueOnce({ rows: [{ challenge_hash: "hash-x" }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 });
+    const app = makeApp({ query: dbQuery, connect });
+
+    const res = await request(app).get(`/v1/public/wp/provision/${TOKEN}`);
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("provisioned");
+
+    await new Promise((r) => setImmediate(r));
+    expect(mockInviteUserByEmail).not.toHaveBeenCalled();
   });
 
   // ★C-1の本体: サイト所有証明(verifyWpSiteChallenge)が失敗する限り、
@@ -342,7 +448,7 @@ describe("GET /v1/public/wp/provision/:token", () => {
     mockVerify.mockResolvedValueOnce({ ok: true });
     const { client } = makeTxClient({
       onSelectForUpdate: () => ({
-        rows: [{ status: "site_verified", site_origin: "https://example.com", site_name: null, tenant_id: null }],
+        rows: [{ status: "site_verified", site_origin: "https://example.com", site_name: null, tenant_id: null, email: "owner@example.com" }],
         rowCount: 1,
       }),
       onFindProvisionedByOrigin: () => ({ rows: [], rowCount: 0 }),
@@ -372,7 +478,7 @@ describe("GET /v1/public/wp/provision/:token", () => {
     mockVerify.mockResolvedValueOnce({ ok: true });
     const { client } = makeTxClient({
       onSelectForUpdate: () => ({
-        rows: [{ status: "site_verified", site_origin: "https://example.com", site_name: null, tenant_id: null }],
+        rows: [{ status: "site_verified", site_origin: "https://example.com", site_name: null, tenant_id: null, email: "owner@example.com" }],
         rowCount: 1,
       }),
       onFindProvisionedByOrigin: () => ({

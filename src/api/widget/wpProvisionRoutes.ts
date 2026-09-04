@@ -50,6 +50,7 @@ import {
 } from "../../lib/billing/planQuota";
 import { generateApiKey, hashApiKey } from "../admin/tenants/apiKeyUtils";
 import { registerTenant } from "../../lib/tenant-context";
+import { supabaseAdmin } from "../../auth/supabaseClient";
 
 // ---------------------------------------------------------------------------
 // レート制限
@@ -168,8 +169,9 @@ async function completeWpProvisioning(pool: Pool, provisioningId: string): Promi
       site_origin: string;
       site_name: string | null;
       tenant_id: string | null;
+      email: string;
     }>(
-      `SELECT status, site_origin, site_name, tenant_id FROM wp_provisionings WHERE id = $1 FOR UPDATE`,
+      `SELECT status, site_origin, site_name, tenant_id, email FROM wp_provisionings WHERE id = $1 FOR UPDATE`,
       [provisioningId]
     );
     if (locked.rowCount === 0) {
@@ -259,12 +261,56 @@ async function completeWpProvisioning(pool: Pool, provisioningId: string): Promi
       enabled: true,
     });
 
+    // ★招待メールはテナント発行の成否と独立させる(D12)★
+    // サイト所有証明が通った時点で発行は完了しており、招待メールは
+    // R2C App(CopilotUI)への導線(D10)として送るだけ。送信に失敗しても
+    // 発行済みテナント・APIキーは有効なまま返す——WP-1の成功をメール到達に
+    // 依存させない(要件書 §1「5分以内に稼働」、D12の議論と同じ理由)。
+    // レスポンスを待たせないよう fire-and-forget にする(CLAUDE.md「副作用の
+    // 記録は fire-and-forget」と同じ扱い。ただしこれは記録ではなく通知だが、
+    // 失敗してもユーザー向け応答に影響させない点は同じ)。
+    inviteWpTenantAdmin(row.email, tenantId).catch((err) => {
+      logger.warn({ err, tenantId }, "[wp-provision] invite email failed (non-blocking)");
+    });
+
     return { status: "provisioned", tenantId, apiKey: plainKey };
   } catch (err) {
     await client.query("ROLLBACK").catch(() => undefined);
     throw err;
   } finally {
     client.release();
+  }
+}
+
+/**
+ * 発行したテナントの client_admin として email を招待する。
+ * 既存の POST /v1/admin/tenants/:id/invite(src/api/admin/tenants/routes.ts)と
+ * 同じ inviteUserByEmail + updateUserById の2手順を踏襲する(招待メールの
+ * 着地先・app_metadata の付与方法を2箇所に書き分けない)。
+ *
+ * supabaseAdmin が未設定(env未構成)の環境では何もしない——WP-1の発行自体は
+ * 既に完了しているため、ここで例外を投げてログを汚さない。
+ */
+async function inviteWpTenantAdmin(email: string, tenantId: string): Promise<void> {
+  if (!supabaseAdmin) return;
+
+  const adminUiUrl = (process.env.ADMIN_UI_URL || "https://admin.r2c.biz").replace(/\/$/, "");
+  const { data, error } = await supabaseAdmin.auth.admin.inviteUserByEmail(email, {
+    data: { role: "client_admin", tenant_id: tenantId },
+    redirectTo: `${adminUiUrl}/reset-password`,
+  });
+  if (error) {
+    throw new Error(`inviteUserByEmail failed: ${error.message}`);
+  }
+
+  const userId = data.user?.id;
+  if (!userId) return;
+
+  const { error: updateError } = await supabaseAdmin.auth.admin.updateUserById(userId, {
+    app_metadata: { role: "client_admin", tenant_id: tenantId },
+  });
+  if (updateError) {
+    throw new Error(`updateUserById(app_metadata) failed: ${updateError.message}`);
   }
 }
 
