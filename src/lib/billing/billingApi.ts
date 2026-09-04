@@ -16,10 +16,10 @@ import {
   FREE_AD_MONTHLY_ADMIN_CONSULT_LIMIT,
 } from './planQuota';
 import {
-  fetchTenantEconomics, fetchTenantEconomicsDetail,
+  fetchTenantEconomics, fetchTenantEconomicsDetail, periodToJstRangeIso,
   type TenantBillingSnapshot, type PeriodInvoice,
 } from './tenantEconomics';
-import type { TenantUpsellFigures } from './upsellRenderer';
+import type { TenantUpsellFigures, SuperAdminUpsellFigures } from './upsellRenderer';
 import type { UpsellSignal } from './upsellSignals';
 
 const usageQuerySchema = z.object({
@@ -304,6 +304,69 @@ export async function buildTenantUpsellFigures(
     avatar_included_minutes_after: includedAfter?.avatarMinutes ?? null,
     text_overage: overage?.textConversations ?? 0,
     avatar_overage_minutes: overage?.avatarMinutes ?? 0,
+    as_of: new Date().toISOString(),
+  };
+}
+
+/**
+ * アップセル文面に必要な数字を組み立てる（運営 super_admin 向け）。
+ *
+ * ★buildTenantUpsellFigures とは別関数にする★
+ * 売上推計・原価・粗利を含む SuperAdminUpsellFigures を組み立てる唯一の経路。
+ * テナント向け経路(buildTenantUpsellFigures)からはこの関数を呼ばない
+ * (呼べる場所を1つに絞ることで、原価がテナント向け画面へ混ざる経路を無くす)。
+ *
+ * 粗利の計算は fetchTenantEconomicsDetail(粗利ダッシュボードのドリルダウンが
+ * 使う関数)をそのまま呼ぶ。集計 SQL をここに書き写さない
+ * (src/api/admin/CLAUDE.md「同じ数値を2本目のクエリで集計しない」)。
+ */
+export async function buildSuperAdminUpsellFigures(
+  db: any,
+  tenantId: string,
+  signal: UpsellSignal,
+  currentPlan: string,
+  recommendedPlan: string,
+  periodYyyyMm: string,
+): Promise<SuperAdminUpsellFigures> {
+  const { from, to } = periodToJstRangeIso(periodYyyyMm);
+
+  const [nameRow, billing, detail, currentBase, recommendedBase] = await Promise.all([
+    db.query(`SELECT name FROM tenants WHERE id = $1`, [tenantId]),
+    // 超過量は buildTenantUpsellFigures と同じ計算(computeExpectedBilling →
+    // computeQuotaOverage)を使う。tenantEconomics 側の text_units/avatar_minutes
+    // から再計算すると閾値表が2箇所に増える(第2の閾値表を作らない方針に反する)。
+    computeExpectedBilling(db, tenantId, from, to, currentPlan),
+    fetchTenantEconomicsDetail(db, tenantId, periodYyyyMm, fetchTenantBillingSnapshot, null),
+    (async () => {
+      const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
+      if (!stripeSecretKey) return null;
+      return planBaseMonthlyJpy(getStripe(stripeSecretKey), currentPlan);
+    })(),
+    (async () => {
+      const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
+      if (!stripeSecretKey) return null;
+      return planBaseMonthlyJpy(getStripe(stripeSecretKey), recommendedPlan);
+    })(),
+  ]);
+
+  const overage = computeQuotaOverage(currentPlan, billing.textUnits, billing.avatarMinutes, billing.adminConsults);
+  const row = detail?.row;
+
+  return {
+    __audience: 'super_admin',
+    signal,
+    tenant_id: tenantId,
+    tenant_name: nameRow.rows[0]?.name ?? null,
+    current_plan: currentPlan,
+    recommended_plan: recommendedPlan,
+    current_base_monthly_jpy: currentBase,
+    recommended_base_monthly_jpy: recommendedBase,
+    text_overage: overage?.textConversations ?? 0,
+    avatar_overage_minutes: overage?.avatarMinutes ?? 0,
+    revenue_estimate_jpy: row?.revenue_estimate_jpy ?? null,
+    cost_base_jpy: row?.cost_base_jpy ?? null,
+    gross_profit_jpy: row?.gross_profit_jpy ?? null,
+    gross_margin_pct: row?.gross_margin_pct ?? null,
     as_of: new Date().toISOString(),
   };
 }

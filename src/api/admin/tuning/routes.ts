@@ -27,6 +27,12 @@ import { getResearchProvider } from '../../../lib/research';
 import { isDeepResearchEnabled } from '../../../lib/research/featureCheck';
 import { buildResearchQuery } from '../../../lib/research/queryBuilder';
 import { trackUsage } from '../../../lib/billing/usageTracker';
+import { approveTuningRule, rejectTuningRule } from "../evaluations/evaluationsRepository";
+import { notifyTenantOfApprovedUpsell } from "../evaluations/routes";
+import { buildSuperAdminUpsellFigures } from "../../../lib/billing/billingApi";
+import { renderUpsellForSuperAdmin } from "../../../lib/billing/upsellRenderer";
+import { isValidUpsellSignal } from "../../../lib/billing/upsellSignals";
+import { getPool } from "../../../lib/db";
 
 // ---------------------------------------------------------------------------
 // ALLOWED_ROLES whitelist
@@ -253,6 +259,169 @@ const updateSchema = z.object({
 
 export function registerTuningRoutes(app: Express): void {
   app.use("/v1/admin/tuning-rules", supabaseAuthMiddleware, roleAuthMiddleware);
+
+  // ★super_admin 限定★ 原価・マージン倍率・粗利を同じ応答に含むため、
+  // テナントには絶対に出さない(costCalculator.ts の原価開示方針 H-10)。
+  function requireSuperAdminForUpsell(req: Request, res: Response, next: () => void): void {
+    const su = (req as AuthedReq).supabaseUser;
+    const role = su?.app_metadata?.role;
+    if (role !== "super_admin") {
+      res.status(403).json({ error: "forbidden", message: "この操作はスーパー管理者のみ実行できます" });
+      return;
+    }
+    next();
+  }
+
+  // -----------------------------------------------------------------------
+  // GET /v1/admin/upsell-proposals
+  //
+  // Hermes が投稿した営業提案(proposal_type='upsell', status='pending')を
+  // 全テナント横断で一覧し、運営が採否を判断するための面。
+  // R6/禁止31(提案の受け皿を増やさない)に従い、永続化先は既存の tuning_rules
+  // のまま。ここは「一覧の取得と粗利付き文面のレンダリング」だけを担う。
+  //
+  // ★原価・粗利は保存済みの値ではなく、その場で計算する★
+  // 保存すると価格改定・利用量の変化で数字が古くなる。
+  // -----------------------------------------------------------------------
+  app.get(
+    "/v1/admin/upsell-proposals",
+    supabaseAuthMiddleware,
+    roleAuthMiddleware,
+    requireSuperAdminForUpsell,
+    async (_req: Request, res: Response) => {
+      try {
+        const rows = await listRules(undefined, { proposalType: "upsell", status: "pending" });
+
+        const proposals = await Promise.all(
+          rows.map(async (row) => {
+            const evidence = row.evidence as { upsell?: Record<string, unknown> } | null | undefined;
+            const upsell = evidence?.upsell;
+            const signal = upsell?.["signal"];
+            const currentPlan = upsell?.["current_plan"];
+            const recommendedPlan = upsell?.["recommended_plan"];
+            const periodYyyyMm = upsell?.["period_yyyymm"];
+
+            // evidence が壊れている行(手動編集・移行漏れ等)は、誤った文面を
+            // 出すより「レンダリング不可」として素通しする(黙って落とさない)。
+            if (
+              !isValidUpsellSignal(signal) ||
+              typeof currentPlan !== "string" ||
+              typeof recommendedPlan !== "string" ||
+              typeof periodYyyyMm !== "string"
+            ) {
+              return {
+                proposal_id: String(row.id),
+                tenant_id: row.tenant_id,
+                renderable: false as const,
+                created_at: row.created_at,
+              };
+            }
+
+            try {
+              const pool = getPool();
+              const figures = await buildSuperAdminUpsellFigures(
+                pool, row.tenant_id, signal, currentPlan, recommendedPlan, periodYyyyMm,
+              );
+              const rendered = renderUpsellForSuperAdmin(figures);
+              return {
+                proposal_id: String(row.id),
+                tenant_id: row.tenant_id,
+                renderable: true as const,
+                headline: rendered.headline,
+                lines: rendered.lines,
+                created_at: row.created_at,
+              };
+            } catch (err) {
+              // 1件の計算失敗(Stripe到達不可等)で一覧全体を落とさない。
+              logger.warn("[GET /v1/admin/upsell-proposals] figures failed", err);
+              return {
+                proposal_id: String(row.id),
+                tenant_id: row.tenant_id,
+                renderable: false as const,
+                created_at: row.created_at,
+              };
+            }
+          }),
+        );
+
+        return res.json({ proposals });
+      } catch (err) {
+        logger.warn("[GET /v1/admin/upsell-proposals]", err);
+        return res.status(500).json({ error: "internal_error" });
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------------
+  // PUT /v1/admin/upsell-proposals/:id/adopt
+  // PUT /v1/admin/upsell-proposals/:id/dismiss
+  //
+  // ★既存の PUT /v1/admin/tuning/:id/approve|reject とは別エンドポイントにする★
+  // 同一URLでロール/文脈による分岐を持たせると、将来フィールドが1つ増えたときに
+  // 「FAQチューニングの承認」と「営業案の採否」が同じ意味だと誤解されて
+  // 分岐が漏れる。URLが違えば混同事故が構造的に起きず、テストでも固定できる。
+  //
+  // 内部実装は既存の approveTuningRule/rejectTuningRule をそのまま呼ぶ
+  // (D8-2 の is_active 制御はそちらに一本化済み。ここでロジックを複製しない)。
+  // -----------------------------------------------------------------------
+  app.put(
+    "/v1/admin/upsell-proposals/:id/adopt",
+    supabaseAuthMiddleware,
+    roleAuthMiddleware,
+    requireSuperAdminForUpsell,
+    async (req: Request, res: Response) => {
+      const id = Number(req.params["id"]);
+      if (!Number.isFinite(id) || id <= 0) {
+        return res.status(400).json({ error: "invalid_id" });
+      }
+      try {
+        // super_admin 操作なので tenantId 制約は付けない(全テナント対象)。
+        const updated = await approveTuningRule(id, undefined);
+        if (!updated) {
+          return res.status(404).json({ error: "not_found" });
+        }
+        if (updated.proposal_type !== "upsell") {
+          // ★このエンドポイントは upsell 専用★ behavior 提案を誤って
+          // ここから承認すると、営業案の文脈のまま本番プロンプトへ入る
+          // (is_active=true になる)ため、明示的に拒否する。
+          return res.status(409).json({ error: "not_an_upsell_proposal" });
+        }
+        await notifyTenantOfApprovedUpsell(id);
+        return res.json({ ok: true });
+      } catch (err) {
+        logger.warn("[PUT /v1/admin/upsell-proposals/:id/adopt]", err);
+        return res.status(500).json({ error: "internal_error" });
+      }
+    },
+  );
+
+  app.put(
+    "/v1/admin/upsell-proposals/:id/dismiss",
+    supabaseAuthMiddleware,
+    roleAuthMiddleware,
+    requireSuperAdminForUpsell,
+    async (req: Request, res: Response) => {
+      const id = Number(req.params["id"]);
+      if (!Number.isFinite(id) || id <= 0) {
+        return res.status(400).json({ error: "invalid_id" });
+      }
+      try {
+        const updated = await rejectTuningRule(id, undefined);
+        if (!updated) {
+          return res.status(404).json({ error: "not_found" });
+        }
+        if (updated.proposal_type !== "upsell") {
+          // ★このエンドポイントは upsell 専用★(adopt と対称にする)。
+          return res.status(409).json({ error: "not_an_upsell_proposal" });
+        }
+        return res.json({ ok: true });
+      } catch (err) {
+        logger.warn("[PUT /v1/admin/upsell-proposals/:id/dismiss]", err);
+        return res.status(500).json({ error: "internal_error" });
+      }
+    },
+  );
+
 
   // -----------------------------------------------------------------------
   // POST /v1/admin/tuning/suggest-rule
