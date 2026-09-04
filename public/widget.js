@@ -1851,6 +1851,14 @@
       }
 
       avatarMuteBtn.appendChild(_anamMuteSvg());
+      // ★接続完了までは非表示(2026-09-04ユーザー報告の是正)★ avatarAreaへは
+      // ここで入れる(クリック可能な状態を維持する必要があるため — E2E
+      // widget-avatar-mute.spec.ts はroom.connect()/streamToVideoElement()の
+      // 成否を待たず同期的にクリックできることを前提にしている)が、動画が
+      // まだ映っていないロード中の顔プレースホルダーにミュートアイコンが
+      // オーバーレイ表示されないよう、streamToVideoElement()成功まではCSSで
+      // 非表示にする(display:noneでも.click()での発火は妨げられない)。
+      avatarMuteBtn.style.display = 'none';
       avatarArea.appendChild(avatarMuteBtn);
 
       avatarMuteBtn.addEventListener('click', function () {
@@ -1950,7 +1958,8 @@
           avatarCloseBtn.addEventListener('click', closePanel);
           avatarArea.appendChild(avatarCloseBtn);
 
-          // ミュートボタンを入力バー左端に移動
+          // ミュートボタンを入力バー左端に移動し、非表示を解除する
+          avatarMuteBtn.style.display = '';
           inputArea.insertBefore(avatarMuteBtn, inputArea.firstChild);
 
           // Client-Side Custom LLM: 音声入力完了時に Groq で応答生成
@@ -2142,6 +2151,14 @@
       }
 
       avatarMuteBtn.appendChild(_muteSvg());   // デフォルトミュート → ミュートアイコンで初期化
+      // ★接続完了までは非表示(2026-09-04ユーザー報告の是正)★ avatarAreaへは
+      // ここで入れる(クリック可能な状態を維持する必要があるため — E2E
+      // widget-avatar-mute.spec.ts はroom.connect()の成否を待たず同期的に
+      // クリックできることを前提にしている)が、動画がまだ映っていないロード中の
+      // 顔プレースホルダーにミュートアイコンがオーバーレイ表示されないよう、
+      // room.connect()成功まではCSSで非表示にする(display:noneでも.click()
+      // での発火は妨げられない)。
+      avatarMuteBtn.style.display = 'none';
       avatarArea.appendChild(avatarMuteBtn);
 
       avatarMuteBtn.addEventListener('click', function () {
@@ -2322,8 +2339,11 @@
         // 旧 Room の閉じるボタンは常に除去（新接続成功時に新ボタンを追加するため）
         var cBtns = avatarArea.querySelectorAll('.avatar-close-btn');
         for (var ci = 0; ci < cBtns.length; ci++) { cBtns[ci].remove(); }
-        // ミュートボタンをavatarAreaに戻す
+        // ミュートボタンをavatarAreaに戻す(再接続待ちの間、顔プレースホルダーに
+        // 重なって見えないよう非表示にする。2026-09-04是正 — 接続成功時と
+        // 同じdisplay:noneルールを再接続待ちの間にも適用する)
         if (avatarMuteBtn && avatarMuteBtn.parentNode !== avatarArea) {
+          avatarMuteBtn.style.display = 'none';
           avatarArea.appendChild(avatarMuteBtn);
         }
         if (!isOpen) {
@@ -2388,7 +2408,8 @@
           avatarCloseBtn.addEventListener('click', closePanel);
           avatarArea.appendChild(avatarCloseBtn);
 
-          // ミュートボタンを入力バー左端に移動
+          // ミュートボタンを入力バー左端に移動し、非表示を解除する
+          avatarMuteBtn.style.display = '';
           inputArea.insertBefore(avatarMuteBtn, inputArea.firstChild);
 
           // LiveKit Data Channel 経由でウェルカムメッセージを送信
