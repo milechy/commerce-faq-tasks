@@ -14,6 +14,12 @@ import {
   computeQuotaOverage,
   isFreeAdAdminConsultQuotaExceeded,
   FREE_AD_MONTHLY_ADMIN_CONSULT_LIMIT,
+  isFreeAdTenantCapReached,
+  FREE_AD_MAX_ACTIVE_TENANTS,
+  isFreeAdDailyProvisionCapReached,
+  FREE_AD_MAX_DAILY_PROVISIONS,
+  isFreeAdCostAlertTriggered,
+  FREE_AD_COST_ALERT_JPY,
 } from './planQuota';
 
 describe('getMonthRangeJst', () => {
@@ -323,5 +329,85 @@ describe('isFreeAdAdminConsultQuotaExceeded / FREE_AD_MONTHLY_ADMIN_CONSULT_LIMI
   it('カスタム上限を指定できる', () => {
     expect(isFreeAdAdminConsultQuotaExceeded(9, 10)).toBe(false);
     expect(isFreeAdAdminConsultQuotaExceeded(10, 10)).toBe(true);
+  });
+});
+
+describe("WordPress プラグイン計画 D7/§5.4: free_ad テナント数の総量ガード", () => {
+  describe("isFreeAdTenantCapReached", () => {
+    it("上限未満は false", () => {
+      expect(isFreeAdTenantCapReached(99, FREE_AD_MAX_ACTIVE_TENANTS)).toBe(false);
+    });
+
+    // ちょうど上限件数のときに「まだ余裕がある」と誤判定すると、
+    // 上限+1件目が常に素通りする。境界を明示的に固定する。
+    it("ちょうど上限件数は true(上限+1件目を通さない)", () => {
+      expect(isFreeAdTenantCapReached(100, FREE_AD_MAX_ACTIVE_TENANTS)).toBe(true);
+    });
+
+    it("上限超過は true", () => {
+      expect(isFreeAdTenantCapReached(101, FREE_AD_MAX_ACTIVE_TENANTS)).toBe(true);
+    });
+
+    it("既定の上限は D7 の初期値100", () => {
+      expect(FREE_AD_MAX_ACTIVE_TENANTS).toBe(100);
+    });
+
+    it("0件(公開直後でまだ流入が無い状態)は false", () => {
+      expect(isFreeAdTenantCapReached(0)).toBe(false);
+    });
+
+    it.each([
+      ["負の活動数", -1, 10],
+      ["活動数がNaN", Number.NaN, 10],
+      ["上限が負", 5, -1],
+      ["上限がNaN", 5, Number.NaN],
+    ])("%s は throw する(fail-closed で判定不能を握りつぶさない)", (_label, count, limit) => {
+      expect(() => isFreeAdTenantCapReached(count, limit)).toThrow();
+    });
+  });
+
+  describe("isFreeAdDailyProvisionCapReached", () => {
+    it("上限未満は false", () => {
+      expect(isFreeAdDailyProvisionCapReached(29, FREE_AD_MAX_DAILY_PROVISIONS)).toBe(false);
+    });
+
+    it("ちょうど上限件数は true", () => {
+      expect(isFreeAdDailyProvisionCapReached(30, FREE_AD_MAX_DAILY_PROVISIONS)).toBe(true);
+    });
+
+    it("既定の上限は D7 の初期値30", () => {
+      expect(FREE_AD_MAX_DAILY_PROVISIONS).toBe(30);
+    });
+
+    it.each([
+      ["負の件数", -1, 10],
+      ["件数がNaN", Number.NaN, 10],
+      ["上限が負", 5, -1],
+    ])("%s は throw する", (_label, count, limit) => {
+      expect(() => isFreeAdDailyProvisionCapReached(count, limit)).toThrow();
+    });
+  });
+
+  describe("isFreeAdCostAlertTriggered", () => {
+    it("閾値未満は false(0件のときに「異常なし」と表示しない、とは別の話——これは単に閾値未満)", () => {
+      expect(isFreeAdCostAlertTriggered(0, FREE_AD_COST_ALERT_JPY)).toBe(false);
+      expect(isFreeAdCostAlertTriggered(19_999, FREE_AD_COST_ALERT_JPY)).toBe(false);
+    });
+
+    it("ちょうど閾値は true", () => {
+      expect(isFreeAdCostAlertTriggered(20_000, FREE_AD_COST_ALERT_JPY)).toBe(true);
+    });
+
+    it("既定の閾値は D7 の¥20,000", () => {
+      expect(FREE_AD_COST_ALERT_JPY).toBe(20_000);
+    });
+
+    it.each([
+      ["負の原価", -1, 1000],
+      ["原価がNaN", Number.NaN, 1000],
+      ["閾値が負", 100, -1],
+    ])("%s は throw する", (_label, cost, threshold) => {
+      expect(() => isFreeAdCostAlertTriggered(cost, threshold)).toThrow();
+    });
   });
 });

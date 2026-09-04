@@ -254,3 +254,85 @@ export function computeQuotaOverage(
     textPriceQuantity:   textOverage + adminOverage,
   };
 }
+
+// ---------------------------------------------------------------------------
+// WordPress プラグイン計画 D7/§5.4: free_ad テナント数そのものの総量ガード。
+//
+// 上の各上限(FREE_AD_MONTHLY_*)は「1テナントあたり」の上限であり、
+// WordPress プラグイン公開前から実装済みだった。未実装だったのは
+// 「free_ad テナントの数そのもの」の上限——プラグイン公開は
+// 無料テナントの自動増殖経路の開通であり、原価構造の変更にあたる
+// (CLAUDE.md 禁止39: 原価の負担者が反転する機能を上限なしで開放しない)。
+//
+// 初期値の根拠(docs/WORDPRESS_PLUGIN_REQUIREMENTS.md D7):
+// 固定費が月¥25,655に対し free_ad 枠を月¥30,000と置く。上限張り付き時の
+// 1テナント最悪値は管理AI¥60〜90(docs/ADMIN_AGENT_COST_REQUIREMENTS.md の
+// 実数)＋会話200件分で月¥300〜500と見積もり(会話単価はcostCalculator.tsの
+// モデル別のため推定値)。最悪値ベースで60件、実際は上限張り付きが稀なため
+// 初期値100件。
+// ---------------------------------------------------------------------------
+
+/** 同時に稼働できる free_ad テナント数の上限。 */
+export const FREE_AD_MAX_ACTIVE_TENANTS = 100;
+
+/** プラグイン経由の free_ad テナント新規作成、1日あたりの上限。 */
+export const FREE_AD_MAX_DAILY_PROVISIONS = 30;
+
+/** free_ad 全体の当月原価がこれを超えたらアラートする(円)。上限で止める値ではない。 */
+export const FREE_AD_COST_ALERT_JPY = 20_000;
+
+/**
+ * 同時稼働数の上限判定。呼び出し側は
+ * wpProvisionRepository.countProvisionedWpTenants の結果を渡す。
+ *
+ * ★>= で判定する★ ちょうど上限件数のときに「まだ余裕がある」と誤判定すると、
+ * 上限+1件目が常に素通りする。
+ */
+export function isFreeAdTenantCapReached(
+  activeCount: number,
+  limit: number = FREE_AD_MAX_ACTIVE_TENANTS,
+): boolean {
+  if (!Number.isFinite(activeCount) || activeCount < 0) {
+    throw new Error(`Invalid activeCount: ${activeCount}`);
+  }
+  if (!Number.isFinite(limit) || limit < 0) {
+    throw new Error(`Invalid limit: ${limit}`);
+  }
+  return activeCount >= limit;
+}
+
+/**
+ * 日次新規作成数の上限判定。呼び出し側は
+ * wpProvisionRepository.countWpProvisioningsCreatedSince(db, todayStartUtc)
+ * の結果を渡す。日境界の算出は呼び出し側の責務(このファイルはDBにもTZにも
+ * 触れない数値比較のみ)。
+ */
+export function isFreeAdDailyProvisionCapReached(
+  todayCount: number,
+  limit: number = FREE_AD_MAX_DAILY_PROVISIONS,
+): boolean {
+  if (!Number.isFinite(todayCount) || todayCount < 0) {
+    throw new Error(`Invalid todayCount: ${todayCount}`);
+  }
+  if (!Number.isFinite(limit) || limit < 0) {
+    throw new Error(`Invalid limit: ${limit}`);
+  }
+  return todayCount >= limit;
+}
+
+/**
+ * 原価アラートの判定。上限で止める値ではなく通知のみ(呼び出し側が
+ * 通知経路を決める。本ファイルはDBにも通知経路にも触れない)。
+ */
+export function isFreeAdCostAlertTriggered(
+  currentMonthCostJpy: number,
+  threshold: number = FREE_AD_COST_ALERT_JPY,
+): boolean {
+  if (!Number.isFinite(currentMonthCostJpy) || currentMonthCostJpy < 0) {
+    throw new Error(`Invalid currentMonthCostJpy: ${currentMonthCostJpy}`);
+  }
+  if (!Number.isFinite(threshold) || threshold < 0) {
+    throw new Error(`Invalid threshold: ${threshold}`);
+  }
+  return currentMonthCostJpy >= threshold;
+}
