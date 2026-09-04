@@ -106,6 +106,9 @@ export const REQUIRED_COLUMNS: Record<string, readonly string[]> = {
   // JS側の月範囲計算と一致させるため)ため、ここで明示的に列挙して
   // schemaHealth.test.ts の機械的ガード(ソースのINSERT文とレジストリの完全一致)を保つ。
   usage_logs: ["anam_session_seconds", "avatar_credits", "avatar_session_ms", "billable", "cost_base_cents", "cost_llm_cents", "cost_total_cents", "created_at", "feature_used", "input_tokens", "model", "output_tokens", "plan", "plan_multiplier", "request_id", "session_id", "tenant_id", "tts_text_bytes"],
+  // WordPress プラグインのセルフサインアップ中間状態(migration: phase78_wp_provisionings.sql)。
+  // 未適用のまま配備すると 42P01 でプロビジョニングAPIのみが失敗する(既存経路は触らない)。
+  wp_provisionings: ["challenge_hash", "email", "locale", "plugin_version", "poll_token_hash", "site_name", "site_origin", "wp_version"],
 };
 
 export interface MissingColumn {
