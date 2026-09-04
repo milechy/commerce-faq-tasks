@@ -256,4 +256,53 @@ describe("QuotaSection", () => {
       expect(screen.queryByText(/エラー/)).toBeNull();
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // デプロイ順序(admin-ui は Cloudflare Pages で main push 時に自動配信され、
+  // バックエンドの VPS デプロイは必ずその後になる)で、admin フィールドを持たない
+  // 旧レスポンスが返る窓がある。そこで落ちない・0件と描かないことを固定する。
+  // ここが壊れると ErrorBoundary が無いため画面ごと落ちる。
+  // ---------------------------------------------------------------------------
+  describe("旧レスポンス(adminフィールドなし)への耐性", () => {
+    /** admin を持たない旧APIレスポンスを再現する(型は optional なのでそのまま外せる)。 */
+    function makeLegacyQuota(overrides: Partial<BillingQuota> = {}): BillingQuota {
+      const q = makeQuota(overrides);
+      delete (q as { admin?: unknown }).admin;
+      return q;
+    }
+
+    it("standard: クラッシュせず、管理AIの行を出さない(0件と描かない)", () => {
+      render(<QuotaSection quota={makeLegacyQuota()} status="ready" />);
+      expect(screen.getByText("テキスト会話")).toBeTruthy();
+      expect(screen.queryByText("管理AIへのご相談")).toBeNull();
+      expect(screen.queryByText(/0 \/ 100 件/)).toBeNull();
+    });
+
+    it("starter: クラッシュせず、管理AIに触れる文言を出さない", () => {
+      const quota = makeLegacyQuota({ plan: "starter", text: { used: 12, included: null, overage: 0 } });
+      render(<QuotaSection quota={quota} status="ready" />);
+      expect(screen.getByText(/純従量プラン/)).toBeTruthy();
+      expect(screen.queryByText(/管理AIへのご相談/)).toBeNull();
+    });
+
+    it("enterprise: クラッシュせず、管理AIに触れる文言を出さない", () => {
+      const quota = makeLegacyQuota({ plan: "enterprise", text: { used: 7, included: null, overage: 0 } });
+      render(<QuotaSection quota={quota} status="ready" />);
+      expect(screen.getByText(/上限がありません/)).toBeTruthy();
+      expect(screen.queryByText(/管理AIへのご相談/)).toBeNull();
+    });
+
+    it("free_ad: 管理AIの上限3フィールドが無くても会話数の枠は出る", () => {
+      const quota = makeLegacyQuota({
+        plan: "free_ad",
+        text: { used: 10, included: null, overage: 0 },
+        freeAd: { used: 10, limit: 200, remaining: 190 },
+      });
+      render(<QuotaSection quota={quota} status="ready" />);
+      expect(screen.getByText("会話数")).toBeTruthy();
+      expect(screen.queryByText("管理AIへのご相談")).toBeNull();
+      expect(screen.queryByText(/上限に達しました/)).toBeNull();
+    });
+  });
+
 });

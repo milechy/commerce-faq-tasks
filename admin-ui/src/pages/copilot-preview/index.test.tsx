@@ -1792,6 +1792,44 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
   });
 
   describe("billing_summary カード", () => {
+    // デプロイ順序(admin-ui は main push で Cloudflare Pages が自動配信、バックエンドの
+    // VPS デプロイは必ずその後)で、quota に admin を持たない旧レスポンスが返る窓がある。
+    // ここが壊れるとカードごと落ちる(ErrorBoundary は無い)。0件と描かないことも同時に固定する。
+    it("quota に admin が無い旧レスポンスでもカードが落ちず、管理AIの枠を出さない", async () => {
+      mockAgent({
+        reply: "ご利用状況をお伝えします。",
+        actions: [
+          {
+            tool: "get_billing_summary",
+            result: "ご利用状況・お支払い（直近30日間）",
+            card: {
+              kind: "billing_summary",
+              period: "30d",
+              plan: "Growth",
+              billingEstimateJpy: 3300,
+              breakdown: [],
+              invoicesAvailable: false,
+              invoices: [],
+              portalUrl: null,
+              quota: {
+                plan: "growth",
+                text: { used: 100, included: 3000, overage: 0 },
+                avatar: { usedMinutes: 5, includedMinutes: 150, overageMinutes: 0 },
+                // admin を意図的に持たせない(旧バックエンドの応答)
+                freeAd: null,
+              },
+            },
+          },
+        ],
+      });
+
+      await send("今月の請求額を教えて");
+
+      expect(await screen.findByText("テキスト会話")).toBeTruthy();
+      expect(screen.queryByText("管理AIへのご相談")).toBeNull();
+      expect(screen.queryByText(/込み枠を超過しています/)).toBeNull();
+    });
+
     it("契約プラン・費用内訳・請求書・お支払いポータルへのリンクが描画される(操作ボタンは出ない)", async () => {
       mockAgent({
         reply: "ご利用状況をお伝えします。",
