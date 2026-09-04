@@ -152,23 +152,37 @@ fi
 # /api/chat・アバター系が全滅した事象が発生した。サーバ自体は/health等で200を
 # 返し続けており、既存のHTTPレベルのチェックはこの障害をすり抜ける
 # (「サーバは200を返すがテナント固有の認証だけ壊れている」パターン)。
-# 実在テナントのAPIキーで /api/chat を実際に叩き、テナント認証経路が生きている
-# ことを確認する。キーはリポジトリに置かず、VPS上の.envから該当行のみを
-# grepで抽出する(.envをsourceしない — プレースホルダ行での構文崩壊による
-# 秘密鍵のecho漏洩を過去に起こしているため、必要変数のみを個別に取り出す)。
+#
+# ★/api/chatではなく/api/widget/featuresを叩く★ (2026-09-04レビュー是正)
+# 認証経路(...apiStack、今回壊れた箇所そのもの)は/api/chatと共通だが、
+# /api/widget/featuresはLLM呼び出しもtrackUsageによる課金計上も一切行わない
+# 軽量な認証付きエンドポイント。/api/chatだと、デプロイ頻度が高いR2Cでは
+# デプロイのたびに実LLM課金が発生し、かつ対象テナントの月次会話数(free_ad上限
+# 等)を消費し続けてしまう。
+# x-api-keyがどのテナントにも解決しない場合、authMiddleware.tsが
+# ハンドラに到達する前に401 invalid_api_keyを返す(確認済み)ため、
+# /api/widget/features内のtenantId未解決時フォールバック分岐
+# (401で弾かれるため到達しない)を経由して見かけ上200になることはない。
+# 念のためHTTPステータスだけでなくレスポンスのtenant_idも確認する。
+#
+# キーはリポジトリに置かず、VPS上の.envから該当行のみをgrepで抽出する
+# (.envをsourceしない — プレースホルダ行での構文崩壊による秘密鍵のecho漏洩を
+# 過去に起こしているため、必要変数のみを個別に取り出す)。
 smoke_tenant_key=$(ssh "${VPS}" "grep -m1 '^SMOKE_TEST_TENANT_API_KEY=' /opt/rajiuce/.env 2>/dev/null | cut -d= -f2-" 2>/dev/null || echo "")
 
 if [ -n "$smoke_tenant_key" ]; then
-  tenant_chat_status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
-    -X POST "$API_URL/api/chat" \
-    -H "x-api-key: ${smoke_tenant_key}" \
-    -H "Content-Type: application/json" \
-    -d '{"message":"smoke-test"}' 2>/dev/null || echo "000")
-  if [ "$tenant_chat_status" = "200" ]; then
-    echo "  ✅ /api/chat テナント認証 — $tenant_chat_status"
+  tenant_features_body=$(curl -s --max-time 10 \
+    "$API_URL/api/widget/features" \
+    -H "x-api-key: ${smoke_tenant_key}" 2>/dev/null || echo "{}")
+  tenant_features_status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
+    "$API_URL/api/widget/features" \
+    -H "x-api-key: ${smoke_tenant_key}" 2>/dev/null || echo "000")
+  resolved_tenant_id=$(echo "$tenant_features_body" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('tenant_id',''))" 2>/dev/null || echo "")
+  if [ "$tenant_features_status" = "200" ] && [ -n "$resolved_tenant_id" ]; then
+    echo "  ✅ /api/widget/features テナント認証 — $tenant_features_status (tenant_id解決済み)"
     PASS=$((PASS + 1))
   else
-    echo "  ❌ /api/chat テナント認証 — got $tenant_chat_status (expected 200; seedTenantsFromDBのテナント欠落 or 認証経路の破損の疑い。ssh ${VPS} 'pm2 restart rajiuce-api' で復旧するか確認)"
+    echo "  ❌ /api/widget/features テナント認証 — got $tenant_features_status, tenant_id=\"$resolved_tenant_id\" (expected 200かつtenant_id非空; seedTenantsFromDBのテナント欠落 or 認証経路の破損の疑い。ssh ${VPS} 'pm2 restart rajiuce-api' で復旧するか確認)"
     FAIL=$((FAIL + 1))
   fi
 else

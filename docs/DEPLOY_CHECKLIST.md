@@ -71,6 +71,20 @@ ssh root@65.108.159.161 "pm2 startup && pm2 save"
 - [ ] `pm2 restart all` → 全プロセス正常再起動
 - [ ] `pm2 logs rajiuce-api --lines 20` → エラーなし
 
+### テナント認証経路 (GID 1218171750803663・任意だが推奨)
+
+`SCRIPTS/post-deploy-smoke.sh` は `SMOKE_TEST_TENANT_API_KEY`(VPSの`/opt/rajiuce/.env`)
+が設定されていれば、`GET /api/widget/features` を実在テナントのAPIキーで叩き、
+seedTenantsFromDBの一過性欠落等で認証経路だけが壊れていないかを確認する
+(サーバ自体は`/health`等で200を返し続けるため、この障害はそちらのチェックを
+すり抜ける)。LLM呼び出しを伴わないため課金・利用量への影響は無い。未設定時は
+スキップされる(必須ではない)。
+
+- [ ] `SMOKE_TEST_TENANT_API_KEY` にテスト専用の低権限テナント(推奨: free_adプランの
+      検証用テナント)のAPIキーを設定する
+- [ ] `bash SCRIPTS/post-deploy-smoke.sh` 実行時に「✅ /api/widget/features テナント認証」
+      が出ることを確認する
+
 ## 本番 .env テンプレート
 
 ```bash
