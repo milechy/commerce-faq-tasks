@@ -110,3 +110,36 @@ export function normalizeWpSiteUrl(raw: string): WpSiteUrlResult {
 
   return { ok: true, origin };
 }
+
+/**
+ * origin から tenants.id 用のラベルを決定的に組み立てる。
+ * createTenantSchema の id 形式(3〜50字、`^[a-z0-9_-]+$`)に必ず収まる。
+ *
+ * ランダムサフィックスは呼び出し側が用意する(このファイルは乱数を持たない)。
+ * 衝突耐性は呼び出し側の再試行 + tenants.id の PRIMARY KEY 制約に委ねる —
+ * ここでは「同じ入力からは同じ ID が組み立てられる」ことだけを保証する。
+ */
+export function buildWpTenantId(origin: string, randomSuffix: string): string {
+  let host: string;
+  try {
+    host = new URL(origin).hostname.toLowerCase();
+  } catch {
+    host = "site";
+  }
+  // 先頭ラベルだけを使う(サブドメインを含めるとID長が伸びやすく、
+  // "www" のような無意味な接頭辞が混ざるのを避ける)。
+  const firstLabel = host.split(".")[0] ?? "";
+  const sanitized = firstLabel
+    .replace(/[^a-z0-9-]/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 20);
+  const base = sanitized.length > 0 ? sanitized : "site";
+
+  const suffix =
+    (typeof randomSuffix === "string" ? randomSuffix : "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, "")
+      .slice(0, 16) || "0";
+
+  return `wp-${base}-${suffix}`;
+}

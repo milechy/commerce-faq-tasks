@@ -70,6 +70,7 @@ import { e2eWriteGuard } from "./api/middleware/e2eWriteGuard";
 import { assertInternalSecretConfigured } from "./lib/startup/internalSecretGuard";
 import { assertAuthSecretsConfigured } from "./lib/startup/authSecretsGuard";
 import { registerWidgetRoutes } from "./api/widget/routes";
+import { registerWpProvisionRoutes } from "./api/widget/wpProvisionRoutes";
 import { registerAuthRoutes } from "./api/auth/routes";
 import { registerLiveKitTokenRoutes } from "./api/avatar/livekitTokenRoutes";
 import { registerAnamRoutes } from "./api/avatar/anamRoutes";
@@ -738,6 +739,12 @@ registerPremiumGenerationRoutes(app);
 
 // Security Level 4: Dynamic per-tenant widget JS delivery
 registerWidgetRoutes(app, db);
+
+// WordPressプラグイン計画 WP-1/WP-2/WP-3: セルフサインアップ
+// (docs/WORDPRESS_PLUGIN_REQUIREMENTS.md)。db が null の環境では
+// registerWpProvisionRoutes 内の requireDb が 503 を返す(registerWidgetRoutes の
+// DB未接続時フォールバックとは異なり、静的版へのリダイレクト先が無いため)。
+registerWpProvisionRoutes(app, db);
 
 // Phase55: 行動イベント受信 API (Widget → Server)
 if (db) registerEventRoutes(app, apiStack, db);

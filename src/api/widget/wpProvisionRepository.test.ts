@@ -20,6 +20,7 @@ import {
   expireStaleWpProvisionings,
   countProvisionedWpTenants,
   countWpProvisioningsCreatedSince,
+  getWpProvisioningChallengeHashForVerification,
 } from "./wpProvisionRepository";
 
 function makeDb(response: { rows?: any[]; rowCount?: number } = {}) {
@@ -200,5 +201,29 @@ describe("総量ガードの集計", () => {
   ])("%s のときは 0 を返す", async (_label, resp) => {
     const { db } = makeDb(resp as any);
     await expect(countProvisionedWpTenants(db)).resolves.toBe(0);
+  });
+});
+
+describe("getWpProvisioningChallengeHashForVerification", () => {
+  it("pending の行なら challenge_hash を返す", async () => {
+    const { db, query } = makeDb({ rows: [{ challenge_hash: "hash-abc" }] });
+    await expect(getWpProvisioningChallengeHashForVerification(db, "row-1")).resolves.toBe(
+      "hash-abc"
+    );
+    expect(sqlOf(query)).toContain("status = 'pending'");
+  });
+
+  it("見つからなければ null(undefinedを漏らさない)", async () => {
+    const { db } = makeDb({ rows: [] });
+    await expect(getWpProvisioningChallengeHashForVerification(db, "row-1")).resolves.toBeNull();
+  });
+
+  // 他の一般的な SELECT(ROW_COLUMNS)にハッシュ列を含めない設計との対比。
+  // この関数だけが例外的にハッシュを返すことを、SQL文字列で直接確認する。
+  it("SELECT句がchallenge_hashだけを対象にしている(他の列を巻き込まない)", async () => {
+    const { db, query } = makeDb({ rows: [{ challenge_hash: "h" }] });
+    await getWpProvisioningChallengeHashForVerification(db, "row-1");
+    const sql = sqlOf(query);
+    expect(sql).toMatch(/^SELECT challenge_hash FROM wp_provisionings/);
   });
 });
