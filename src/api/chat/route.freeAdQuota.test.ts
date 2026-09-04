@@ -185,6 +185,56 @@ describe("POST /api/chat — free_ad プランの月次上限", () => {
   });
 
   // ---------------------------------------------------------------------
+  // イレギュラー: restricted(猶予超過)の有料プランへの free_ad 上限適用
+  // (fix/unpaid-suspension の forceCap 経路)と、本PRの独立try/catch分離が
+  // 両立することの確認。route.freeAdQuota.test.ts の他ケースは全て
+  // plan==="free_ad" 直行か非対象プランのみで、forceCap=true 経由で
+  // isFreeAdQuotaExceededForTenant に到達するケースが1本も無かった
+  // (=このカバレッジの穴自体が壊れやすいポイント)。
+  // ---------------------------------------------------------------------
+  const restrictedBillingRow = {
+    rows: [{
+      plan: "starter",
+      subscription_status: "past_due",
+      // BILLING_PAST_DUE_GRACE_DAYS の既定7日を超えている(=restricted)。
+      delinquent_since: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(),
+      sub_active: true,
+    }],
+  };
+
+  it("restricted(猶予超過)のstarterテナントはfree_ad相当の会話上限が適用され、会話ベース集計が例外を投げてもバックストップは独立して評価される", async () => {
+    mockGetTenantPlan.mockResolvedValue("starter");
+    mockPoolQuery
+      .mockResolvedValueOnce(restrictedBillingRow) // 停止ゲートの状態確認 → restricted
+      .mockRejectedValueOnce(Object.assign(new Error("column \"session_id\" does not exist"), { code: "42703" })) // 会話ベース集計: 失敗
+      .mockResolvedValueOnce(countRow(5)); // バックストップ: 上限未満
+
+    const res = await request(makeApp())
+      .post("/api/chat")
+      .send({ message: "こんにちは" });
+
+    expect(res.status).toBe(200);
+    expect(mockPoolQuery).toHaveBeenCalledTimes(3);
+    expect(mockRunDialogTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("restricted(猶予超過)のstarterテナントは、バックストップが上限以上なら403(有料プランでもforceCap適用中はfree_ad同等の上限で止まる)", async () => {
+    mockGetTenantPlan.mockResolvedValue("starter");
+    mockPoolQuery
+      .mockResolvedValueOnce(restrictedBillingRow)
+      .mockRejectedValueOnce(Object.assign(new Error("column \"session_id\" does not exist"), { code: "42703" }))
+      .mockResolvedValueOnce(countRow(1000)); // バックストップ: 上限ちょうど
+
+    const res = await request(makeApp())
+      .post("/api/chat")
+      .send({ message: "こんにちは" });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("plan_upgrade_required");
+    expect(mockRunDialogTurn).not.toHaveBeenCalled();
+  });
+
+  // ---------------------------------------------------------------------
   // P0-4バックストップ: 会話ベースの上限をすり抜ける生リクエスト数の絶対上限
   // ---------------------------------------------------------------------
 
@@ -279,6 +329,61 @@ describe("POST /api/chat — free_ad プランの月次上限", () => {
     expect(mockRunDialogTurn).not.toHaveBeenCalled();
   });
 
+  // 壊れやすいポイント: 会話ベース集計(1本目)だけでなく、バックストップ(2本目)
+  // 自身も例外を投げるケース。分離したことで2本とも独立して評価される以上、
+  // 「1本目が失敗→2本目を試す→2本目も失敗」という経路が必ず通ることを固定する
+  // (2本とも呼ばれること自体をアサートしないと、実装が誤って1本目の例外で
+  // 即returnするよう先祖返りしても検知できない)。
+  it("会話ベース集計・バックストップの両方が例外を投げても、両方試みたうえでチャットは継続する(fail-open)", async () => {
+    mockGetTenantPlan.mockResolvedValue("free_ad");
+    mockPoolQuery
+      .mockRejectedValueOnce(Object.assign(new Error("column \"session_id\" does not exist"), { code: "42703" }))
+      .mockRejectedValueOnce(new Error("db timeout on backstop query"));
+
+    const res = await request(makeApp())
+      .post("/api/chat")
+      .send({ message: "こんにちは" });
+
+    expect(res.status).toBe(200);
+    expect(mockPoolQuery).toHaveBeenCalledTimes(2);
+    expect(mockRunDialogTurn).toHaveBeenCalledTimes(1);
+  });
+
+  // イレギュラー: DBドライバが投げるエラーオブジェクトに code プロパティが
+  // 無い(pgモジュール以外が投げた素のNetworkError等)場合。42703判定の
+  // (err as {code?:string})?.code は string にも安全にオプショナルチェーン
+  // できるが、念のためcodeなし・Errorですらない値でもクラッシュしないことを固定する。
+  it("イレギュラー: 会話ベース集計がcodeプロパティを持たないエラーを投げても、バックストップの評価は続く", async () => {
+    mockGetTenantPlan.mockResolvedValue("free_ad");
+    mockPoolQuery
+      .mockRejectedValueOnce(new Error("plain network error without a pg error code"))
+      .mockResolvedValueOnce(countRow(5));
+
+    const res = await request(makeApp())
+      .post("/api/chat")
+      .send({ message: "こんにちは" });
+
+    expect(res.status).toBe(200);
+    expect(mockPoolQuery).toHaveBeenCalledTimes(2);
+  });
+
+  // イレギュラー: pool.query が Error インスタンスですらない値をreject する
+  // (文字列・undefined等、ライブラリによっては起こりうる)場合でも、
+  // err?.code のオプショナルチェーンでクラッシュせずfail-openすることを固定する。
+  it("イレギュラー: 会話ベース集計がError以外の値(文字列)をrejectしても、クラッシュせずバックストップへ進む", async () => {
+    mockGetTenantPlan.mockResolvedValue("free_ad");
+    mockPoolQuery
+      .mockRejectedValueOnce("not-an-error-object")
+      .mockResolvedValueOnce(countRow(5));
+
+    const res = await request(makeApp())
+      .post("/api/chat")
+      .send({ message: "こんにちは" });
+
+    expect(res.status).toBe(200);
+    expect(mockPoolQuery).toHaveBeenCalledTimes(2);
+  });
+
   it("異常系(fail-open): getTenantPlanが例外を投げてもチャットは処理を続ける(全テナント停止を避ける)", async () => {
     mockGetTenantPlan.mockRejectedValue(new Error("pool not initialized"));
 
@@ -300,6 +405,9 @@ describe("POST /api/chat — free_ad プランの月次上限", () => {
 
     expect(res.status).toBe(200);
     expect(mockRunDialogTurn).toHaveBeenCalledTimes(1);
+    // 会話ベース集計だけが試みられて即fail-openする先祖返り(2本目が
+    // 一度も評価されない)を検知するため、2本とも呼ばれたことを固定する。
+    expect(mockPoolQuery).toHaveBeenCalledTimes(2);
   });
 
   it("イレギュラー: 上限到達後も同じテナントが連続でリクエストすると毎回403になる(1回だけ許可、ではない)", async () => {

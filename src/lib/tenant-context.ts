@@ -276,7 +276,8 @@ export function seedTenantsFromEnv(): void {
   }
 }
 
-type SeedTenantRow = {
+/** seedTenantsFromDB が読むDB行の形。テストのフィクスチャ型と重複させない。 */
+export type SeedTenantRow = {
   tenant_id: string;
   name: string;
   plan: string;
@@ -333,21 +334,43 @@ export async function seedTenantsFromDB(pool: Pool, logger?: Logger, retryDelayM
     // ★二重読み取り(2026-09-04是正・GID 1218171750803663)★
     // 2026-09-04の本番デプロイで、DB側のデータは正しいのに起動直後のこの
     // クエリだけが一過性でテナントを取りこぼす事象が実測された(11回中1回、
-    // 原因未特定)。同じクエリを短い間隔を空けてもう一度実行し、件数が
-    // 少ない方ではなく多い方を採用する。一致していれば追加コストはこの
-    // 1クエリ+短い待機のみ(起動時に一度だけ)。
+    // 原因未特定・根本対応は別途必要)。同じクエリを短い間隔を空けてもう一度
+    // 実行し、件数が少ない方ではなく多い方を採用する。一致していれば追加
+    // コストはこの1クエリ+短い待機のみ(起動時に一度だけ)。
+    //
+    // ★既知のトレードオフ(2026-09-04レビュー是正で明記)★
+    // 「多い方を採用」は、1回目と2回目の間(最大 retryDelayMs)に運用者が
+    // テナントを無効化する・APIキーを失効させる等の正当な同時実行の変更が
+    // 起きた場合、その変更前の(既に古いはずの)状態を「より正しい」として
+    // 誤って復活させうる。この関数は起動時に一度だけ、かつ既定300msという
+    // 極小の窓でしか動かないため許容しているが、窓を広げる場合はこの
+    // トレードオフが拡大することに注意。件数が同数の場合はこの問題が
+    // 起きないより新しい方(2回目)を優先する。
     const first = await fetchActiveTenantRows(pool);
     if (retryDelayMs > 0) {
       await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
     }
-    const second = await fetchActiveTenantRows(pool);
-    if (second.size !== first.size) {
+    // 2回目の読み取り自体は独立したtry/catchで囲む。1回目が成功した後に
+    // 2回目だけが例外を投げるケース(起動直後のDB瞬断・接続競合)で、1回目の
+    // 正しい結果ごと外側のcatchに握りつぶされ0テナント登録になる退行が
+    // あった(2回目の読み取りを導入したこと自体が生んだ新しい欠落パターン)。
+    // 2回目が失敗したら1回目の結果をそのまま使う。
+    let second: Map<string, SeedTenantRow[]> | null = null;
+    try {
+      second = await fetchActiveTenantRows(pool);
+    } catch (err) {
+      logger?.warn(
+        { err },
+        "seedTenantsFromDB: 2回目の読み取りが失敗した。1回目の結果で復元を続ける"
+      );
+    }
+    if (second !== null && second.size !== first.size) {
       logger?.error(
         { firstCount: first.size, secondCount: second.size },
         "seedTenantsFromDB: 2回の読み取りでテナント件数が食い違った(起動直後の一過性欠落の疑い)。多い方を採用する"
       );
     }
-    const rowsByTenant = second.size >= first.size ? second : first;
+    const rowsByTenant = second !== null && second.size >= first.size ? second : first;
 
     let tenantCount = 0;
     let keyCount = 0;

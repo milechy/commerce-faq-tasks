@@ -158,14 +158,16 @@ export async function countFreeAdBillableRequests(
  * 変えない）。上限・月次境界の計算自体は src/lib/billing/planQuota.ts の
  * 純関数に委ね、ここでは DB 集計のみを行う。
  *
- * fail-open: plan取得・集計クエリのいずれかが失敗した場合は false（ブロックしない）
- * を返す。エンタイトルメント判定(機能を隠す側)は最も制限の強い方へ倒すのが
- * 正しい方向だが、ここは「既に受理されたチャットリクエストを処理してよいか」の
- * 可用性の話であり、billing系の一時的な障害(pool未初期化・DB瞬断)で
- * 全テナントのチャットが止まるほうが実害が大きい。DB接続自体の障害時は
- * queryTenantPlan 内部のcatchで既に free_ad にfail-safeされる(意図どおり)ため、
- * plan取得・pool初期化のtry/catchで追加で捕まえるのは getPool() 自体が
- * 投げるケース(未初期化)のみ。
+ * fail-open: plan取得・pool初期化が失敗した場合、および下記の2つの集計が
+ * 「両方とも」失敗した場合は false（ブロックしない）を返す。★会話ベース集計
+ * だけが失敗しバックストップ側で上限超過が判明した場合はtrue(ブロックする)を
+ * 返す★ — 詳細は下の「互いに独立して評価する」を参照。エンタイトルメント判定
+ * (機能を隠す側)は最も制限の強い方へ倒すのが正しい方向だが、ここは「既に
+ * 受理されたチャットリクエストを処理してよいか」の可用性の話であり、billing系
+ * の一時的な障害(pool未初期化・DB瞬断)で全テナントのチャットが止まるほうが
+ * 実害が大きい。DB接続自体の障害時は queryTenantPlan 内部のcatchで既に
+ * free_ad にfail-safeされる(意図どおり)ため、plan取得・pool初期化のtry/catch
+ * で追加で捕まえるのは getPool() 自体が投げるケース(未初期化)のみ。
  *
  * ★会話ベース集計とP0-4バックストップは互いに独立して評価する(2026-09-04是正)★
  * 以前は2つの集計を同一try/catchで実行しており、会話ベース集計
@@ -197,7 +199,7 @@ async function isFreeAdQuotaExceededForTenant(
   // undefined のときのみ内部で取得する(既存の単独呼び出しとの後方互換)。
   preResolvedPlan?: string | null,
 ): Promise<boolean> {
-  let pool: ReturnType<typeof getPool>;
+  let pool: QueryablePool;
   try {
     const plan = preResolvedPlan !== undefined ? preResolvedPlan : await getTenantPlan(tenantId);
     if (plan !== "free_ad" && !forceCap) return false;

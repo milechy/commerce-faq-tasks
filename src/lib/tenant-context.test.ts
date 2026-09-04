@@ -20,6 +20,7 @@ import {
   addTenantApiKey,
   revokeAdditionalTenantApiKey,
   seedTenantsFromDB,
+  type SeedTenantRow,
 } from "./tenant-context";
 import { logger as mockedLogger } from "./logger";
 
@@ -589,19 +590,10 @@ describe("seedTenantsFromDB — 起動時のin-memory復元", () => {
   // このパスは従来テストが1本も無く、PM2再起動のたびに
   // 「テナントごと1本のキーしか復元されない」バグが検出されないままだった。
 
-  type SeedRow = {
-    tenant_id: string;
-    name: string;
-    plan: string;
-    is_active: boolean;
-    features: Record<string, boolean>;
-    allowed_origins: string[];
-    key_hash: string;
-    rate_limit: number | null;
-    expires_at: string | null;
-  };
-
-  const row = (over: Partial<SeedRow> & Pick<SeedRow, "tenant_id" | "key_hash">): SeedRow => ({
+  // seedTenantsFromDB が読むDB行の型は tenant-context.ts の SeedTenantRow を
+  // そのまま使う(2026-09-04レビュー是正: 以前はここに同じ形の型を再定義して
+  // おり、片方だけ列を追加してもう片方を直し忘れるドリフトの温床だった)。
+  const row = (over: Partial<SeedTenantRow> & Pick<SeedTenantRow, "tenant_id" | "key_hash">): SeedTenantRow => ({
     name: over.tenant_id,
     plan: "starter",
     is_active: true,
@@ -613,7 +605,7 @@ describe("seedTenantsFromDB — 起動時のin-memory復元", () => {
   });
 
   /** pool.query だけを持つ最小のフェイク（seedTenantsFromDB が使うのはこれだけ） */
-  const fakePool = (rows: SeedRow[]) =>
+  const fakePool = (rows: SeedTenantRow[]) =>
     ({ query: jest.fn().mockResolvedValue({ rows, rowCount: rows.length }) }) as unknown as Parameters<typeof seedTenantsFromDB>[0];
 
   // このdescribe配下の既存テストは全て retryDelayMs=0 で呼ぶ(二重読み取りの
@@ -758,7 +750,7 @@ describe("seedTenantsFromDB — 起動時のin-memory復元", () => {
   // 食い違いをerrorログに残すことを固定する。
   describe("二重読み取り(2026-09-04是正)", () => {
     /** 呼び出しごとに異なる行配列を返すフェイクpool(1回目と2回目で結果を変える) */
-    const flakyPool = (firstRows: SeedRow[], secondRows: SeedRow[]) => {
+    const flakyPool = (firstRows: SeedTenantRow[], secondRows: SeedTenantRow[]) => {
       const query = jest
         .fn()
         .mockResolvedValueOnce({ rows: firstRows, rowCount: firstRows.length })
@@ -819,6 +811,69 @@ describe("seedTenantsFromDB — 起動時のin-memory復元", () => {
       await seedTenantsFromDB(flakyPool(rows, rows), testLogger, 0);
 
       expect(errorSpy).not.toHaveBeenCalled();
+    });
+
+    // 既知のトレードオフ(2026-09-04レビュー是正): 件数が同じでも中身(テナント
+    // 集合)が異なる場合、現在の実装はsize比較だけで判定するため常に2回目を
+    // 採用する。1回目と2回目の間に正当な同時実行の変更(例: あるテナントが
+    // 無効化され、別の新規テナントが同時に有効化された)が起きても、より新しい
+    // 状態である2回目を採用するのは意図どおりの挙動。この挙動を明示的に固定する
+    // (「多い方を採用」というsize比較だけのロジックが暗黙に持つ、この場合の
+    // 判断基準を可視化する目的)。
+    it("イレギュラー: 件数は同じだが中身(テナント集合)が異なる場合、2回目(より新しい方)を採用する", async () => {
+      const TENANT_OLD = "seed-tie-old-tenant";
+      const TENANT_NEW = "seed-tie-new-tenant";
+      const first = [row({ tenant_id: TENANT_OLD, key_hash: "seed-tie-old-key" })];
+      const second = [row({ tenant_id: TENANT_NEW, key_hash: "seed-tie-new-key" })];
+
+      await seedTenantsFromDB(flakyPool(first, second), undefined, 0);
+
+      expect(getTenantByApiKeyHash("seed-tie-new-key")?.tenantId).toBe(TENANT_NEW);
+      expect(getTenantByApiKeyHash("seed-tie-old-key")).toBeUndefined();
+    });
+
+    // 壊れやすいポイント: 1回目が成功した後、2回目の読み取り自体が例外を投げる
+    // (起動直後のDB瞬断・接続プール競合)場合。単純な二重読み取りの実装だと
+    // 全体が1つのtry/catchに包まれているため、1回目の正しい結果ごと握りつぶされ、
+    // 「DBは正しいのに読み取れなかった」という本来直したかった障害モードを
+    // 二重読み取りの導入自体が新しい形で再現してしまう(1回目が成功していたのに
+    // 2回目の例外で0テナント登録になる)。1回目の結果は2回目の成否に関わらず
+    // 活かされなければならない。
+    const poolWithFailingSecondRead = (firstRows: SeedTenantRow[]) => {
+      const query = jest
+        .fn()
+        .mockResolvedValueOnce({ rows: firstRows, rowCount: firstRows.length })
+        .mockRejectedValueOnce(new Error("connection reset during startup"));
+      return { query } as unknown as Parameters<typeof seedTenantsFromDB>[0];
+    };
+
+    it("1回目が成功し2回目が例外を投げても、1回目の結果で復元する(1回目の成功を握りつぶさない)", async () => {
+      const TENANT = "seed-second-read-fails-tenant";
+      const first = [row({ tenant_id: TENANT, key_hash: "seed-second-read-fails-key" })];
+
+      await seedTenantsFromDB(poolWithFailingSecondRead(first), undefined, 0);
+
+      expect(getTenantByApiKeyHash("seed-second-read-fails-key")?.tenantId).toBe(TENANT);
+    });
+
+    it("1回目が成功し2回目が例外を投げた場合、2回目の失敗をwarnログに残す(黙って握りつぶさない)", async () => {
+      const warnSpy = jest.fn();
+      const testLogger = { warn: warnSpy, info: jest.fn(), error: jest.fn() } as unknown as Parameters<typeof seedTenantsFromDB>[1];
+      const TENANT = "seed-second-read-fails-log-tenant";
+      const first = [row({ tenant_id: TENANT, key_hash: "seed-second-read-fails-log-key" })];
+
+      await seedTenantsFromDB(poolWithFailingSecondRead(first), testLogger, 0);
+
+      expect(warnSpy).toHaveBeenCalled();
+    });
+
+    it("1回目が例外を投げた場合は、2回目を試さずに例外を投げずfalseへfail-safe(既存動作を維持)", async () => {
+      const query = jest.fn().mockRejectedValueOnce(new Error("connection refused on first read"));
+      const failingFirstReadPool = { query } as unknown as Parameters<typeof seedTenantsFromDB>[0];
+
+      await expect(seedTenantsFromDB(failingFirstReadPool, undefined, 0)).resolves.toBeUndefined();
+      // 2回目は試みられない(1回目が失敗した時点で全体をfail-safeにフォールバックする)
+      expect(query).toHaveBeenCalledTimes(1);
     });
   });
 });

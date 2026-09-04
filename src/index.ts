@@ -856,10 +856,11 @@ async function startServer() {
   // DB側のテナント登録(APIキー・プラン等)をリクエスト受付開始前に完了させる
   // (2026-09-04是正・GID 1218171750803663)。以前はモジュール直下でfire-and-forget
   // していたため、この完了を待たずにapp.listen()以降へ進んでいた。
+  // ★.catch()を付けない★ seedTenantsFromDB自身が内部で全例外を握りつぶし
+  // 決してrejectしない契約になっている(tenant-context.test.tsで固定済み)。
+  // ここでの.catch()は到達不能なコードになるため付けない(2026-09-04レビュー是正)。
   if (db) {
-    await seedTenantsFromDB(db, logger).catch((err) => {
-      logger.warn({ err }, "seedTenantsFromDB failed at startup");
-    });
+    await seedTenantsFromDB(db, logger);
   }
 
   const server = app.listen(port, () => {
