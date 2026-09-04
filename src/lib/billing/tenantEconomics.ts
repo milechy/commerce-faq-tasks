@@ -24,6 +24,7 @@ import { END_USER_FEATURES, MARGIN_MULTIPLIER } from './costCalculator';
 import { usdCentsToJpy, fxMeta } from './fx';
 import { getMonthRangeJst } from './planQuota';
 import { shiftToJstWallClock } from '../date/jstOffset';
+import { createTtlCache } from '../ttlCache';
 
 /** 1リクエストで集計するテナント数の上限。超えたら truncated: true を返す。 */
 export const MAX_TENANTS_PER_ECONOMICS_REQUEST = 50;
@@ -209,8 +210,7 @@ function estimationMethodOf(recorded: number, all: number): EstimationMethod {
   return 'mixed';
 }
 
-interface CacheEntry { at: number; value: TenantEconomicsResponse }
-const _cache = new Map<string, CacheEntry>();
+const _cache = createTtlCache<string, TenantEconomicsResponse>(CACHE_TTL_MS);
 
 /** テスト用。プロセス内キャッシュを捨てる。 */
 export function _clearEconomicsCache(): void {
@@ -230,7 +230,7 @@ export async function fetchTenantEconomics(
   getSnapshot: BillingSnapshotFn,
 ): Promise<TenantEconomicsResponse> {
   const cached = _cache.get(periodYyyyMm);
-  if (cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.value;
+  if (cached) return cached;
 
   const { from, to } = periodToJstRangeIso(periodYyyyMm);
   const costRows = await fetchTenantBaseCosts(db, from, to);
@@ -304,7 +304,7 @@ export async function fetchTenantEconomics(
     tenants,
     truncated,
   };
-  _cache.set(periodYyyyMm, { at: Date.now(), value });
+  _cache.set(periodYyyyMm, value);
   return value;
 }
 
