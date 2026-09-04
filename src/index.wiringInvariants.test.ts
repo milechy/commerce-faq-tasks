@@ -296,4 +296,29 @@ describe("src/index.ts 配線の不変条件（ソース構造検査）", () => 
       expect(dialogAgentSource).not.toMatch(/mergeExcludedIds/);
     });
   });
+
+  // GID 1218171750803663是正(2026-09-04): seedTenantsFromDBがfire-and-forget
+  // (.catchのみ・awaitなし)だったため、DB側のテナント登録が終わる前でも
+  // app.listen()以降でリクエストを受け付けられる構造になっており、起動直後の
+  // 一過性の欠落(同修正のtenant-context.ts側)と組み合わさると登録漏れ
+  // テナントの認証が起動直後の窓で失敗し得た。ここでawaitに戻す退行を検知する。
+  describe("起動シーケンス: seedTenantsFromDB を app.listen() より前に完了させる", () => {
+    it("seedTenantsFromDBの呼び出しにawaitが付いている(fire-and-forgetへの巻き戻り検知)", () => {
+      expect(source).toMatch(/await seedTenantsFromDB\(/);
+    });
+
+    it("await seedTenantsFromDB(...) が app.listen(port, ...) の実呼び出しより前に現れる", () => {
+      const seedIdx = firstIndexOf(/await seedTenantsFromDB\(/);
+      // コメント中の "app.listen()" 記述に誤マッチしないよう、実呼び出しの
+      // 引数(port)まで含めてマッチさせる。
+      const listenIdx = firstIndexOf(/app\.listen\(\s*port/);
+      expect(seedIdx).toBeLessThan(listenIdx);
+    });
+
+    it("seedTenantsFromEnv() はモジュール直下で同期的に呼ばれている(DB読み込みより先にenv優先を確定させる)", () => {
+      const envIdx = firstIndexOf(/seedTenantsFromEnv\(\);/);
+      const startServerIdx = firstIndexOf(/async function startServer\(\)/);
+      expect(envIdx).toBeLessThan(startServerIdx);
+    });
+  });
 });

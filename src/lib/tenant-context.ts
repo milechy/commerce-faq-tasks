@@ -340,14 +340,27 @@ export async function seedTenantsFromDB(pool: Pool, logger?: Logger, retryDelayM
     if (retryDelayMs > 0) {
       await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
     }
-    const second = await fetchActiveTenantRows(pool);
-    if (second.size !== first.size) {
+    // 2回目の読み取り自体は独立したtry/catchで囲む。1回目が成功した後に
+    // 2回目だけが例外を投げるケース(起動直後のDB瞬断・接続競合)で、1回目の
+    // 正しい結果ごと外側のcatchに握りつぶされ0テナント登録になる退行が
+    // あった(2回目の読み取りを導入したこと自体が生んだ新しい欠落パターン)。
+    // 2回目が失敗したら1回目の結果をそのまま使う。
+    let second: Map<string, SeedTenantRow[]> | null = null;
+    try {
+      second = await fetchActiveTenantRows(pool);
+    } catch (err) {
+      logger?.warn(
+        { err },
+        "seedTenantsFromDB: 2回目の読み取りが失敗した。1回目の結果で復元を続ける"
+      );
+    }
+    if (second !== null && second.size !== first.size) {
       logger?.error(
         { firstCount: first.size, secondCount: second.size },
         "seedTenantsFromDB: 2回の読み取りでテナント件数が食い違った(起動直後の一過性欠落の疑い)。多い方を採用する"
       );
     }
-    const rowsByTenant = second.size >= first.size ? second : first;
+    const rowsByTenant = second !== null && second.size >= first.size ? second : first;
 
     let tenantCount = 0;
     let keyCount = 0;

@@ -820,6 +820,50 @@ describe("seedTenantsFromDB — 起動時のin-memory復元", () => {
 
       expect(errorSpy).not.toHaveBeenCalled();
     });
+
+    // 壊れやすいポイント: 1回目が成功した後、2回目の読み取り自体が例外を投げる
+    // (起動直後のDB瞬断・接続プール競合)場合。単純な二重読み取りの実装だと
+    // 全体が1つのtry/catchに包まれているため、1回目の正しい結果ごと握りつぶされ、
+    // 「DBは正しいのに読み取れなかった」という本来直したかった障害モードを
+    // 二重読み取りの導入自体が新しい形で再現してしまう(1回目が成功していたのに
+    // 2回目の例外で0テナント登録になる)。1回目の結果は2回目の成否に関わらず
+    // 活かされなければならない。
+    const poolWithFailingSecondRead = (firstRows: SeedRow[]) => {
+      const query = jest
+        .fn()
+        .mockResolvedValueOnce({ rows: firstRows, rowCount: firstRows.length })
+        .mockRejectedValueOnce(new Error("connection reset during startup"));
+      return { query } as unknown as Parameters<typeof seedTenantsFromDB>[0];
+    };
+
+    it("1回目が成功し2回目が例外を投げても、1回目の結果で復元する(1回目の成功を握りつぶさない)", async () => {
+      const TENANT = "seed-second-read-fails-tenant";
+      const first = [row({ tenant_id: TENANT, key_hash: "seed-second-read-fails-key" })];
+
+      await seedTenantsFromDB(poolWithFailingSecondRead(first), undefined, 0);
+
+      expect(getTenantByApiKeyHash("seed-second-read-fails-key")?.tenantId).toBe(TENANT);
+    });
+
+    it("1回目が成功し2回目が例外を投げた場合、2回目の失敗をwarnログに残す(黙って握りつぶさない)", async () => {
+      const warnSpy = jest.fn();
+      const testLogger = { warn: warnSpy, info: jest.fn(), error: jest.fn() } as unknown as Parameters<typeof seedTenantsFromDB>[1];
+      const TENANT = "seed-second-read-fails-log-tenant";
+      const first = [row({ tenant_id: TENANT, key_hash: "seed-second-read-fails-log-key" })];
+
+      await seedTenantsFromDB(poolWithFailingSecondRead(first), testLogger, 0);
+
+      expect(warnSpy).toHaveBeenCalled();
+    });
+
+    it("1回目が例外を投げた場合は、2回目を試さずに例外を投げずfalseへfail-safe(既存動作を維持)", async () => {
+      const query = jest.fn().mockRejectedValueOnce(new Error("connection refused on first read"));
+      const failingFirstReadPool = { query } as unknown as Parameters<typeof seedTenantsFromDB>[0];
+
+      await expect(seedTenantsFromDB(failingFirstReadPool, undefined, 0)).resolves.toBeUndefined();
+      // 2回目は試みられない(1回目が失敗した時点で全体をfail-safeにフォールバックする)
+      expect(query).toHaveBeenCalledTimes(1);
+    });
   });
 });
 
