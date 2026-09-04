@@ -101,3 +101,53 @@ describe('GET /v1/admin/tuning-rules — source/status フィルタ配線', () =
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// D8-2: proposal_type の配線
+//
+// Hermes は営業提案(upsell)も同じ tuning_rules に投稿する。それが FAQ
+// チューニング一覧に混ざると「トリガー / 提案返答」のラベルで描画され、
+// 同じ承認ボタンから承認すると DB の CHECK 制約で 23514 → 500 になる。
+// ---------------------------------------------------------------------------
+describe('GET /v1/admin/tuning-rules — proposal_type', () => {
+  beforeEach(() => mockListRules.mockClear());
+
+  it('★未指定なら proposalType は undefined（listRules 側が behavior に倒す）★', async () => {
+    await request(makeApp({ role: 'super_admin' }))
+      .get('/v1/admin/tuning-rules?source=judge,hermes&status=pending');
+    expect(mockListRules).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ proposalType: undefined }),
+    );
+  });
+
+  it('proposal_type=behavior を渡すとそのまま伝わる', async () => {
+    await request(makeApp({ role: 'super_admin' }))
+      .get('/v1/admin/tuning-rules?proposal_type=behavior');
+    expect(mockListRules).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ proposalType: 'behavior' }),
+    );
+  });
+
+  it('proposal_type=upsell / all も伝わる（営業提案の一覧を作れる）', async () => {
+    const app = makeApp({ role: 'super_admin' });
+    await request(app).get('/v1/admin/tuning-rules?proposal_type=upsell');
+    expect(mockListRules).toHaveBeenLastCalledWith(
+      undefined, expect.objectContaining({ proposalType: 'upsell' }),
+    );
+    await request(app).get('/v1/admin/tuning-rules?proposal_type=all');
+    expect(mockListRules).toHaveBeenLastCalledWith(
+      undefined, expect.objectContaining({ proposalType: 'all' }),
+    );
+  });
+
+  it('★未知の値は既定へ倒す（任意文字列をSQLの等値比較へ渡さない）★', async () => {
+    await request(makeApp({ role: 'super_admin' }))
+      .get("/v1/admin/tuning-rules?proposal_type=' OR 1=1--");
+    expect(mockListRules).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ proposalType: undefined }),
+    );
+  });
+});
