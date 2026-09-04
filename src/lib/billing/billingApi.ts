@@ -6,7 +6,7 @@ import type { Application, Request, Response, RequestHandler } from 'express';
 import { z } from 'zod';
 import { roleAuthMiddleware, requireRole } from '../../api/middleware/roleAuth';
 import { computeExpectedBilling } from './stripeSync';
-import { getSubscriptionItemPrices, toSubscriptionItems } from './planPricing';
+import { getSubscriptionItemPrices, toSubscriptionItems, STARTER_MONTHLY_BILLED_QUANTITY_CAP } from './planPricing';
 import { billingSyncStatusNeedsAttention } from './subscriptionSync';
 import {
   getMonthRangeJst,
@@ -226,16 +226,30 @@ export async function computeBillingEstimateJpy(
   }
 
   // starter(および null/未知プランは starter として fail-safe — planMultiplier と
-  // 同じ「請求漏れを避ける」向き)は基本料も込み枠も無い純従量: 会話数 × 単価のみ。
+  // 同じ「請求漏れを避ける」向き)は基本料も込み枠も無い純従量: 数量 × 単価のみ。
   // enterprise はここで getSubscriptionItemPrices が ok:false(plan_not_self_serve)を
   // 返すため自然に null に落ちる(個別契約を自動算出しない、という既存方針どおり)。
+  //
+  // ★数量は textUnits 単体ではなく textUnits + adminConsults、かつ480単位で頭打ち★
+  // 管理AIの相談はテキスト会話と同じ Stripe price を流用する設計なので、実際に
+  // Stripe へ送信される数量(computeExpectedBilling の billedQuantity。stripeSync.ts の
+  // _reportTenantUsage が使う)は admin_units 分も合算し、かつ starter は
+  // STARTER_MONTHLY_BILLED_QUANTITY_CAP(480単位・¥9,600)で頭打ちにしている。
+  // ここで textUnits だけを使い、かつ頭打ちを適用しないと、見積り(このUI表示値)が
+  // 実際の請求より低く出る(管理AI利用分の請求漏れに見える)か、あるいはLPが約束する
+  // 「月額のご請求は¥9,600が上限」を超えて見えるかのどちらかになる(CLAUDE.md 禁止54:
+  // 表記と実課金の不一致)。billedQuantity を再計算しない(2本目の集計式を作らない —
+  // CLAUDE.md禁止6)ため、同じ足し算と同じ頭打ちをここでもう一度行う。
   const priceResult = getSubscriptionItemPrices(plan, 'monthly');
   if (!priceResult.ok || !priceResult.prices.text) return null;
 
   const unitAmountJpy = await getPriceUnitAmountJpy(stripe, priceResult.prices.text);
   if (unitAmountJpy === null) return null;
 
-  return textUnits * unitAmountJpy;
+  const rawQuantity = textUnits + adminConsults;
+  const quantity =
+    plan === 'starter' ? Math.min(rawQuantity, STARTER_MONTHLY_BILLED_QUANTITY_CAP) : rawQuantity;
+  return quantity * unitAmountJpy;
 }
 
 /**

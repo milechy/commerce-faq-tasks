@@ -162,6 +162,87 @@ describe("computeBillingEstimateJpy", () => {
       );
       expect(result).toBe(100); // ¥10 × 10件(確定価格の¥20ではなく、実際に使われたフォールバック単価と一致すること)
     });
+
+    // ★退行検知(2026-09-04発見・修正)★ 管理AIの相談(admin_agent)はテキスト会話と
+    // 同じStripe priceを流用する設計(docs/ADMIN_AGENT_COST_REQUIREMENTS.md §4-1)。
+    // 実際にStripeへ送信される数量(computeExpectedBilling の billedQuantity。
+    // stripeSync.ts の row_units/admin_units 合算)は adminConsults を含むため、
+    // ここで textUnits だけを使うと見積りが実際の請求より低く出る
+    // (=管理AI利用分の請求が見積りに現れない「見えない請求」になる)。
+    it("管理AIの相談もテキストと同じ単価で見積りに合算される(textUnitsだけを見ない)", async () => {
+      mockComputeExpectedBilling.mockResolvedValue({
+        textUnits: 42, avatarMinutes: 0, adminConsults: 8, billedQuantity: 999999,
+        totalRequests: 0, totalCostCents: 0, billableUnits: 0, unstampedRows: 0, fallbackMultiplier: 1,
+      });
+      const db = makeDb("starter");
+      const result = await withStripeClient({ price_starter_text: perUnitPrice(20) }, () =>
+        computeBillingEstimateJpy(db, "tenant-a", "2026-08-01", "2026-09-01")
+      );
+      // (42+8)*20 = 1000。42*20=840のままなら退行(管理AI分の¥160が見積りから漏れている)。
+      expect(result).toBe(1000);
+    });
+
+    // ★退行検知★ LP/CLAUDE.mdが約束する「Starterの月額請求は¥9,600(480単位)が上限」は
+    // computeExpectedBilling().billedQuantity(実際の送信数量)にしか適用されていなかった。
+    // 見積り(このUI表示値)にも同じ頭打ちを適用しないと、テキストと管理AIの合計が
+    // 480単位を超えたテナントに「実際の請求より高い金額」を見せることになる
+    // (LPの「¥9,600が上限」という約束と画面表示が食い違う。CLAUDE.md 禁止54)。
+    it("Starterの見積りは480単位(¥9,600)で頭打ちになる(テキスト+管理AIの合計に対して)", async () => {
+      mockComputeExpectedBilling.mockResolvedValue({
+        // 500会話 + 50相談 = 550単位。頭打ちが無いと 550*20=11,000 になってしまう。
+        textUnits: 500, avatarMinutes: 0, adminConsults: 50, billedQuantity: 999999,
+        totalRequests: 0, totalCostCents: 0, billableUnits: 0, unstampedRows: 0, fallbackMultiplier: 1,
+      });
+      const db = makeDb("starter");
+      const result = await withStripeClient({ price_starter_text: perUnitPrice(20) }, () =>
+        computeBillingEstimateJpy(db, "tenant-a", "2026-08-01", "2026-09-01")
+      );
+      expect(result).toBe(9600); // 480 * 20、実際の請求(billedQuantityの頭打ち)と一致する
+    });
+
+    it("480単位ちょうどなら頭打ちの影響を受けない(境界)", async () => {
+      mockComputeExpectedBilling.mockResolvedValue({
+        textUnits: 480, avatarMinutes: 0, adminConsults: 0, billedQuantity: 999999,
+        totalRequests: 0, totalCostCents: 0, billableUnits: 0, unstampedRows: 0, fallbackMultiplier: 1,
+      });
+      const db = makeDb("starter");
+      const result = await withStripeClient({ price_starter_text: perUnitPrice(20) }, () =>
+        computeBillingEstimateJpy(db, "tenant-a", "2026-08-01", "2026-09-01")
+      );
+      expect(result).toBe(9600);
+    });
+
+    it("480単位の直前(479)なら頭打ちを適用せずそのまま計算する(境界)", async () => {
+      mockComputeExpectedBilling.mockResolvedValue({
+        textUnits: 400, avatarMinutes: 0, adminConsults: 79, billedQuantity: 999999,
+        totalRequests: 0, totalCostCents: 0, billableUnits: 0, unstampedRows: 0, fallbackMultiplier: 1,
+      });
+      const db = makeDb("starter");
+      const result = await withStripeClient({ price_starter_text: perUnitPrice(20) }, () =>
+        computeBillingEstimateJpy(db, "tenant-a", "2026-08-01", "2026-09-01")
+      );
+      expect(result).toBe(479 * 20); // 9580。頭打ち(9600)より安いのでそのまま
+    });
+
+    // ★頭打ちはStarter専用★ growthや未知プランにこの上限を誤って適用すると、
+    // 大口テナントの請求が静かに安くなる(過少請求)。standard/growth側のテストは
+    // 別のdescribeで担保するが、ここではstarter分岐自体が他プランへ波及していないことを
+    // 明示する(計算式のif分岐を書き間違えても検知できるように)。
+    it("頭打ちはstarterのみに適用され、480を超えても他プランには影響しない(この分岐だけの検証)", async () => {
+      // このdescribe自体がstarter専用なので、頭打ちが効かない対照として
+      // 480を大幅に超える数量でも比例のまま計算されないことをここでは確認しない
+      // (standard/growthの計算式は別describeが担当)。ここではstarter自身が
+      // 480ちょうどの境界を跨いだ瞬間だけ頭打ちに切り替わることを固定する。
+      mockComputeExpectedBilling.mockResolvedValue({
+        textUnits: 481, avatarMinutes: 0, adminConsults: 0, billedQuantity: 999999,
+        totalRequests: 0, totalCostCents: 0, billableUnits: 0, unstampedRows: 0, fallbackMultiplier: 1,
+      });
+      const db = makeDb("starter");
+      const result = await withStripeClient({ price_starter_text: perUnitPrice(20) }, () =>
+        computeBillingEstimateJpy(db, "tenant-a", "2026-08-01", "2026-09-01")
+      );
+      expect(result).toBe(9600); // 481*20=9620ではなく、頭打ちの9600
+    });
   });
 
   describe("standard(基本料 + 込み枠1,000会話/30分 + 超過¥25/¥100)", () => {
@@ -222,6 +303,45 @@ describe("computeBillingEstimateJpy", () => {
       expect(result).toBe(26800);
     });
 
+    // ★退行検知(2026-09-04追加)★ 管理AIの相談超過はテキスト超過と合算して
+    // テキストのStripe price(price_std_text)へ送られる(overage.textPriceQuantity。
+    // stripeSync.ts の _reportQuotaOverageUsage と同じ値)。ここが overage.textConversations
+    // だけを見ていると、テキスト会話自体は込み枠内でも管理AIの相談だけが超過している
+    // テナントの請求見積りが¥9,800(超過なし)のまま動かず、実際の請求(超過あり)と
+    // 食い違う。
+    it("テキスト会話は込み枠内でも、管理AIの相談だけ超過していれば見積りに反映される", async () => {
+      mockComputeExpectedBilling.mockResolvedValue({
+        textUnits: 500, avatarMinutes: 0, adminConsults: 150, billedQuantity: 999999, // 込み枠100件+50件超過
+        totalRequests: 0, totalCostCents: 0, billableUnits: 0, unstampedRows: 0, fallbackMultiplier: 1,
+      });
+      const db = makeDb("standard");
+      const result = await withStripeClient(
+        { price_std_base: perUnitPrice(9800), price_std_text: perUnitPrice(25), price_std_avatar: perUnitPrice(100) },
+        () => computeBillingEstimateJpy(db, "tenant-a", "2026-08-01", "2026-09-01")
+      );
+      // 9800 + 50(管理AI超過分)*25 = 9800 + 1250 = 11050
+      // overage.textConversationsだけを見る退行なら 9800(テキストは込み枠内なので超過0)のまま。
+      expect(result).toBe(11050);
+    });
+
+    // テキスト超過と管理AI超過が両方あるとき、textPriceQuantityで合算した「1回の掛け算」に
+    // なっていることを確認する(それぞれ別々に掛けて足すのと数学的には同じ結果になるが、
+    // 実装が overage.textConversations だけを使って管理AI分を握りつぶしていないかを、
+    // 両方が0でないケースで再確認する)。
+    it("テキストと管理AIが両方超過していれば、同じテキスト単価で合算される", async () => {
+      mockComputeExpectedBilling.mockResolvedValue({
+        textUnits: 1200, avatarMinutes: 0, adminConsults: 150, billedQuantity: 999999, // テキスト+200 / 管理AI+50
+        totalRequests: 0, totalCostCents: 0, billableUnits: 0, unstampedRows: 0, fallbackMultiplier: 1,
+      });
+      const db = makeDb("standard");
+      const result = await withStripeClient(
+        { price_std_base: perUnitPrice(9800), price_std_text: perUnitPrice(25), price_std_avatar: perUnitPrice(100) },
+        () => computeBillingEstimateJpy(db, "tenant-a", "2026-08-01", "2026-09-01")
+      );
+      // 9800 + (200+50)*25 = 9800 + 6250 = 16050
+      expect(result).toBe(16050);
+    });
+
     it("price envが一部でも欠けていれば null(黙って一部だけで計算しない)", async () => {
       delete process.env.STRIPE_PRICE_STANDARD_AVATAR_OVERAGE;
       mockComputeExpectedBilling.mockResolvedValue({
@@ -271,6 +391,22 @@ describe("computeBillingEstimateJpy", () => {
       );
       // 29800 + 100*30 + 10*80 = 29800 + 3000 + 800 = 33600
       expect(result).toBe(33600);
+    });
+
+    // standardと同じ退行検知をgrowthでも(超過単価・込み枠が別値のため計算式の
+    // コピー間違いを別途検知できる)。
+    it("管理AIの相談だけ超過していても、growthの超過単価(¥30)で見積りに反映される", async () => {
+      mockComputeExpectedBilling.mockResolvedValue({
+        textUnits: 2000, avatarMinutes: 0, adminConsults: 3050, billedQuantity: 999999, // 込み枠300件+2750件超過
+        totalRequests: 0, totalCostCents: 0, billableUnits: 0, unstampedRows: 0, fallbackMultiplier: 1,
+      });
+      const db = makeDb("growth");
+      const result = await withStripeClient(
+        { price_growth_base: perUnitPrice(29800), price_growth_text: perUnitPrice(30), price_growth_avatar: perUnitPrice(80) },
+        () => computeBillingEstimateJpy(db, "tenant-a", "2026-08-01", "2026-09-01")
+      );
+      // 29800 + 2750*30 = 29800 + 82500 = 112300
+      expect(result).toBe(112300);
     });
   });
 
