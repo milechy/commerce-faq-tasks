@@ -3106,7 +3106,7 @@ function CardView({
     case "planChanged":
       return <PlanChangedCard card={card} />;
     case "widgetPlacement":
-      return <WidgetPlacementCard card={card} />;
+      return <WidgetPlacementCard card={card} onSendReal={onSendReal} />;
     case "knowledgeGapsList":
       return (
         <CardShell hd={<><span>📚</span>知識ギャップ一覧（{card.totalCount}件）</>}>
@@ -3769,21 +3769,39 @@ function PlanChangedCard({ card }: { card: Extract<Card, { kind: "planChanged" }
 // GID 1218167820775294 (L3-1a): get_widget_placement の現在値提示カード。読み取り専用
 // — ボタンは無い(編集導線はL3-1bで別途追加する)。テナントが「ウィジェットが他のボタンと
 // 重なる」と相談してきたとき、生のpxを打たせる前にまず現在値と既定値を見せるためのもの。
+const WIDGET_POSITIONS: readonly ("bottom-right" | "bottom-left")[] = ["bottom-right", "bottom-left"];
 const WIDGET_POSITION_LABEL: Record<"bottom-right" | "bottom-left", string> = {
   "bottom-right": "右下",
   "bottom-left": "左下",
 };
-// src/api/admin/agent/widgetPlacement.ts の WIDGET_OFFSET_MAX と同じ値(admin-ui は
-// 別ビルドで src/ から import できないため複製する)。ダイアグラムの縮尺のみに使う。
-const WIDGET_OFFSET_VISUAL_MAX = 320;
+// src/api/admin/agent/widgetPlacement.ts の WIDGET_OFFSET_MIN/MAX と同じ値(admin-ui は
+// 別ビルドで src/ から import できないため複製する)。L3-1bのスライダーのmin/max、
+// ダイアグラムの縮尺に使う。
+const WIDGET_OFFSET_MIN = 0;
+const WIDGET_OFFSET_MAX = 320;
+const WIDGET_OFFSET_VISUAL_MAX = WIDGET_OFFSET_MAX;
 
-function WidgetPlacementCard({ card }: { card: Extract<Card, { kind: "widgetPlacement" }> }) {
-  const { position, offsetX, offsetY, defaultPosition, defaultOffsetX, defaultOffsetY } = card;
+// GID 1218167291123548 (L3-1b): 読み取り専用カード(L3-1a)にスライダーと寄せる角トグルを足し、
+// 「適用」でset_widget_theme(既存の書き込みツール)を呼ぶ。新しいツール・確認機構は作らない
+// — この画面の他の書き込み導線(RuleEffectCardの無効化ボタン等)と同じく、onSendRealで
+// __real: 自然文を送りLLMにset_widget_themeを呼ばせる(直接叩けるfetchWithAuthはこのツールには
+// 存在しない)。スライダー操作自体はローカル状態のみを動かし、ネットワーク呼び出しはしない。
+function WidgetPlacementCard({ card, onSendReal }: { card: Extract<Card, { kind: "widgetPlacement" }>; onSendReal?: (action: string) => void }) {
+  const { position: appliedPosition, offsetX: appliedOffsetX, offsetY: appliedOffsetY, defaultPosition, defaultOffsetX, defaultOffsetY } = card;
+
+  // スライダー/トグルは「これから適用する値」を持つ、card(=DBに保存済みの値)とは別のローカル状態。
+  // ドラッグ中にcardを書き換えることはない(適用は「適用」ボタン押下時のみ)。
+  const [position, setPosition] = useState<"bottom-right" | "bottom-left">(appliedPosition);
+  const [offsetX, setOffsetX] = useState(appliedOffsetX);
+  const [offsetY, setOffsetY] = useState(appliedOffsetY);
+
   const isDefault = position === defaultPosition && offsetX === defaultOffsetX && offsetY === defaultOffsetY;
+  const hasPendingChanges = position !== appliedPosition || offsetX !== appliedOffsetX || offsetY !== appliedOffsetY;
 
   // 簡易ダイアグラム: 枠=画面、点=ウィジェットアイコンのおおよその位置。
   // 正確な縮尺表示が目的ではなく、既定からどちら向きにどれだけずれているかが
   // 見た目で伝わればよいため、余白(px, 0〜320)を小さな枠の中で強調して動かす。
+  // スライダーのドラッグに追従して動く(=適用前の見た目もここで確認できる)。
   const BOX_W = 96;
   const BOX_H = 64;
   const MAX_INSET = 30;
@@ -3795,6 +3813,20 @@ function WidgetPlacementCard({ card }: { card: Extract<Card, { kind: "widgetPlac
       ? { position: "absolute", bottom: insetY, left: insetX, width: 10, height: 10, borderRadius: "50%", background: AGENT, boxShadow: "0 0 0 3px rgba(124,58,237,0.25)" }
       : { position: "absolute", bottom: insetY, right: insetX, width: 10, height: 10, borderRadius: "50%", background: AGENT, boxShadow: "0 0 0 3px rgba(124,58,237,0.25)" };
 
+  const handleApply = () => {
+    if (!onSendReal) return;
+    onSendReal(
+      `__real:ウィジェットの設置位置を変更してください。set_widget_themeツールをtheme={"position":"${position}","offsetX":${offsetX},"offsetY":${offsetY}}で実行してください`,
+    );
+  };
+  // 元に戻す＝スライダー/トグルを既定値に戻すだけ。DBへの書き込みは次の「適用」を待つ
+  // (このボタン単体では何も保存しない)。
+  const handleReset = () => {
+    setPosition(defaultPosition);
+    setOffsetX(defaultOffsetX);
+    setOffsetY(defaultOffsetY);
+  };
+
   return (
     <CardShell hd={<><span>📍</span>ウィジェットの設置位置</>} tone={isDefault ? "agent" : "brand"}>
       <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
@@ -3803,24 +3835,103 @@ function WidgetPlacementCard({ card }: { card: Extract<Card, { kind: "widgetPlac
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           <Field
-            k="寄せる角"
-            v={`${WIDGET_POSITION_LABEL[position]}${position !== defaultPosition ? `（既定: ${WIDGET_POSITION_LABEL[defaultPosition]}）` : ""}`}
+            k="寄せる角（現在）"
+            v={`${WIDGET_POSITION_LABEL[appliedPosition]}${appliedPosition !== defaultPosition ? `（既定: ${WIDGET_POSITION_LABEL[defaultPosition]}）` : ""}`}
           />
           <Field
-            k="横方向の余白 (offsetX)"
-            v={`${offsetX}px${offsetX !== defaultOffsetX ? `（既定: ${defaultOffsetX}px）` : ""}`}
+            k="横方向の余白（現在）"
+            v={`${appliedOffsetX}px${appliedOffsetX !== defaultOffsetX ? `（既定: ${defaultOffsetX}px）` : ""}`}
           />
           <Field
-            k="縦方向の余白 (offsetY)"
-            v={`${offsetY}px${offsetY !== defaultOffsetY ? `（既定: ${defaultOffsetY}px）` : ""}`}
+            k="縦方向の余白（現在）"
+            v={`${appliedOffsetY}px${appliedOffsetY !== defaultOffsetY ? `（既定: ${defaultOffsetY}px）` : ""}`}
           />
         </div>
       </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 14, paddingTop: 4, borderTop: "1px solid var(--border)" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ fontSize: 12.5, color: "var(--muted-foreground)", fontWeight: 600 }}>寄せる角</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            {WIDGET_POSITIONS.map((p) => (
+              <button
+                key={p}
+                onClick={() => setPosition(p)}
+                style={{
+                  flex: 1, fontSize: 13.5, fontWeight: 700, padding: "8px 14px", borderRadius: 10, minHeight: 40, cursor: "pointer",
+                  border: `1px solid ${position === p ? AGENT : "var(--border)"}`,
+                  background: position === p ? AGENT_SOFT : "transparent",
+                  color: position === p ? AGENT : "var(--foreground)",
+                }}
+              >
+                {WIDGET_POSITION_LABEL[p]}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <div style={{ fontSize: 12.5, color: "var(--muted-foreground)", fontWeight: 600 }}>上へ / 下へ</div>
+          <input
+            type="range"
+            min={WIDGET_OFFSET_MIN}
+            max={WIDGET_OFFSET_MAX}
+            value={offsetY}
+            onChange={(e) => setOffsetY(Number(e.target.value))}
+            style={{ width: "100%", accentColor: AGENT }}
+            aria-label="ウィジェットを上へ／下へ動かす"
+          />
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "var(--muted-foreground)" }}>
+            <span>下へ（画面端）</span>
+            <span>上へ</span>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <div style={{ fontSize: 12.5, color: "var(--muted-foreground)", fontWeight: 600 }}>左右</div>
+          <input
+            type="range"
+            min={WIDGET_OFFSET_MIN}
+            max={WIDGET_OFFSET_MAX}
+            value={offsetX}
+            onChange={(e) => setOffsetX(Number(e.target.value))}
+            style={{ width: "100%", accentColor: AGENT }}
+            aria-label="ウィジェットを左右に動かす"
+          />
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "var(--muted-foreground)" }}>
+            <span>端に寄せる</span>
+            <span>中央へ寄せる</span>
+          </div>
+        </div>
+      </div>
+
       <div style={{ fontSize: 12.5, color: "var(--muted-foreground)" }}>
         {isDefault
           ? "既定の設置位置のままです。"
           : "既定から変更されています。サイト側の他の要素と重なる場合はご相談ください。"}
       </div>
+
+      {onSendReal && (
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <button
+            onClick={handleApply}
+            disabled={!hasPendingChanges}
+            style={{
+              fontSize: 14.5, fontWeight: 700, padding: "10px 18px", borderRadius: 12, minHeight: 44,
+              border: "none", background: AGENT, color: "#fff",
+              cursor: hasPendingChanges ? "pointer" : "not-allowed", opacity: hasPendingChanges ? 1 : 0.5,
+            }}
+          >
+            適用
+          </button>
+          <button
+            onClick={handleReset}
+            style={{ fontSize: 14.5, fontWeight: 700, padding: "10px 18px", borderRadius: 12, minHeight: 44, border: "1px solid var(--border)", background: "transparent", color: "var(--foreground)", cursor: "pointer" }}
+          >
+            元に戻す
+          </button>
+        </div>
+      )}
     </CardShell>
   );
 }
