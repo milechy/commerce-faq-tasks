@@ -102,6 +102,26 @@ export function UpsellProposalsSection() {
             </p>
           )}
 
+          {/* ★長期pendingの陳腐化を黙って隠さない(P2b)★ 作成月を常時開示し、
+              今月と違えば警告バッジを出す(数字自体は上の figures 側で毎回その場で計算し直しており、
+              ここは「この提案が投稿された時点」を明示するだけ)。 */}
+          {p.period_yyyymm && (
+            <p style={{ margin: "6px 0 0", fontSize: 11, color: "var(--muted-foreground)" }}>
+              作成月: {p.period_yyyymm}
+              {p.stale && (
+                <span
+                  style={{
+                    marginLeft: 8, padding: "1px 8px", borderRadius: 999,
+                    fontSize: 11, fontWeight: 600, color: "#b45309",
+                    background: "rgba(217,119,6,0.12)", border: "1px solid rgba(217,119,6,0.3)",
+                  }}
+                >
+                  ⚠️ 今月の状況と異なる可能性があります
+                </span>
+              )}
+            </p>
+          )}
+
           <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "center" }}>
             <button
               onClick={() => void act(p.proposal_id, "adopt")}

@@ -11,6 +11,7 @@
  */
 import {
   periodToJstRangeIso,
+  currentJstPeriodYyyyMm,
   fetchTenantEconomics,
   _clearEconomicsCache,
   MAX_TENANTS_PER_ECONOMICS_REQUEST,
@@ -62,6 +63,51 @@ describe('periodToJstRangeIso', () => {
     expect(() => periodToJstRangeIso('202613')).toThrow();
     expect(() => periodToJstRangeIso('202600')).toThrow();
     expect(() => periodToJstRangeIso('abcdef')).toThrow();
+  });
+});
+
+describe('currentJstPeriodYyyyMm', () => {
+  it('引数の Date が属する JST 暦月を YYYYMM で返す', () => {
+    // 2026-09-04T05:00:00Z = 2026-09-04 14:00 JST
+    expect(currentJstPeriodYyyyMm(new Date('2026-09-04T05:00:00Z'))).toBe('202609');
+  });
+
+  it('★JST新月の直後(UTC上はまだ前月)でも正しく新月を返す★', () => {
+    // 2026-09-01 00:00:01 JST = 2026-08-31T15:00:01Z。UTC基準では8月のまま。
+    expect(currentJstPeriodYyyyMm(new Date('2026-08-31T15:00:01Z'))).toBe('202609');
+  });
+
+  it('JST新月の直前は前月のまま', () => {
+    // 2026-08-31 23:59:59 JST = 2026-08-31T14:59:59Z
+    expect(currentJstPeriodYyyyMm(new Date('2026-08-31T14:59:59Z'))).toBe('202608');
+  });
+
+  it('年をまたぐ(12月→1月)', () => {
+    // 2027-01-01 00:00:01 JST = 2026-12-31T15:00:01Z
+    expect(currentJstPeriodYyyyMm(new Date('2026-12-31T15:00:01Z'))).toBe('202701');
+  });
+
+  it('periodToJstRangeIso が解釈する期間と一貫する(自分自身を渡すと同じ月の範囲になる)', () => {
+    const now = new Date('2026-09-15T00:00:00Z');
+    const period = currentJstPeriodYyyyMm(now);
+    const { from, to } = periodToJstRangeIso(period);
+    expect(new Date(from).getTime()).toBeLessThanOrEqual(now.getTime());
+    expect(new Date(to).getTime()).toBeGreaterThan(now.getTime());
+  });
+
+  it('★process の TZ を変えても結果が変わらない★', () => {
+    const original = process.env.TZ;
+    try {
+      const fixed = new Date('2026-08-31T15:00:01Z');
+      const results = ['UTC', 'Asia/Tokyo', 'America/New_York', 'Pacific/Kiritimati'].map((tz) => {
+        process.env.TZ = tz;
+        return currentJstPeriodYyyyMm(fixed);
+      });
+      for (const r of results) expect(r).toBe(results[0]);
+    } finally {
+      if (original === undefined) delete process.env.TZ;
+      else process.env.TZ = original;
+    }
   });
 });
 

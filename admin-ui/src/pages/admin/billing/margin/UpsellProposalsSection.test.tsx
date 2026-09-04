@@ -172,4 +172,31 @@ describe('UpsellProposalsSection', () => {
     await waitFor(() => expect(screen.queryByText('アップセル候補')).toBeNull());
     expect(screen.getByText('提案B')).toBeTruthy();
   });
+
+  it('★stale:true のとき作成月と警告バッジを表示する(P2b: 長期pendingの陳腐化を黙って隠さない)★', async () => {
+    mockAuthFetch.mockResolvedValue(jsonResponse(200, {
+      proposals: [{ ...PROPOSAL, period_yyyymm: '202609', stale: true }],
+    }));
+    render(<UpsellProposalsSection />);
+    await screen.findByText('アップセル候補');
+    expect(screen.getByText(/作成月: 202609/)).toBeTruthy();
+    expect(screen.getByText(/今月の状況と異なる可能性があります/)).toBeTruthy();
+  });
+
+  it('stale:false のときは作成月だけ表示し、警告バッジは出さない', async () => {
+    mockAuthFetch.mockResolvedValue(jsonResponse(200, {
+      proposals: [{ ...PROPOSAL, period_yyyymm: '202609', stale: false }],
+    }));
+    render(<UpsellProposalsSection />);
+    await screen.findByText('アップセル候補');
+    expect(screen.getByText(/作成月: 202609/)).toBeTruthy();
+    expect(screen.queryByText(/今月の状況と異なる可能性があります/)).toBeNull();
+  });
+
+  it('period_yyyymm が無ければ作成月の行自体を出さない(evidence が壊れている旧データ)', async () => {
+    mockAuthFetch.mockResolvedValue(jsonResponse(200, { proposals: [PROPOSAL] }));
+    render(<UpsellProposalsSection />);
+    await screen.findByText('アップセル候補');
+    expect(screen.queryByText(/作成月:/)).toBeNull();
+  });
 });

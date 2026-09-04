@@ -32,6 +32,7 @@ import { notifyTenantOfApprovedUpsell } from "../evaluations/routes";
 import { buildSuperAdminUpsellFigures } from "../../../lib/billing/billingApi";
 import { renderUpsellForSuperAdmin } from "../../../lib/billing/upsellRenderer";
 import { isValidUpsellSignal } from "../../../lib/billing/upsellSignals";
+import { currentJstPeriodYyyyMm } from "../../../lib/billing/tenantEconomics";
 import { getPool } from "../../../lib/db";
 
 // ---------------------------------------------------------------------------
@@ -304,6 +305,12 @@ export function registerTuningRoutes(app: Express): void {
         const rows = await listRules(undefined, { proposalType: "upsell", status: "pending" });
         const truncated = rows.length > MAX_UPSELL_PROPOSALS_PER_REQUEST;
         const target = rows.slice(0, MAX_UPSELL_PROPOSALS_PER_REQUEST);
+        // ★長期pendingの陳腐化検知(REV-P2b)★
+        // 提案投稿時点(evidence.upsell.period_yyyymm)のまま長期pendingで残ると、
+        // 運営が開いた「今」ではなく投稿時点の古い月の粗利を見せ続けることになる。
+        // ロジックは変えず(currentPlan/periodYyyyMm はそのまま buildSuperAdminUpsellFigures
+        // に渡す)、事実を隠さず一覧に開示するだけに留める(Asana起票時のA案)。
+        const currentPeriod = currentJstPeriodYyyyMm();
 
         const proposals: Array<{
           proposal_id: string;
@@ -311,6 +318,8 @@ export function registerTuningRoutes(app: Express): void {
           renderable: boolean;
           headline?: string;
           lines?: string[];
+          period_yyyymm?: string;
+          stale?: boolean;
           created_at: unknown;
         }> = [];
 
@@ -351,6 +360,8 @@ export function registerTuningRoutes(app: Express): void {
               renderable: true,
               headline: rendered.headline,
               lines: rendered.lines,
+              period_yyyymm: periodYyyyMm,
+              stale: periodYyyyMm !== currentPeriod,
               created_at: row.created_at,
             });
           } catch (err) {
@@ -360,6 +371,8 @@ export function registerTuningRoutes(app: Express): void {
               proposal_id: String(row.id),
               tenant_id: row.tenant_id,
               renderable: false,
+              period_yyyymm: periodYyyyMm,
+              stale: periodYyyyMm !== currentPeriod,
               created_at: row.created_at,
             });
           }

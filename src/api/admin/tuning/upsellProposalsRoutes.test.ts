@@ -64,6 +64,14 @@ jest.mock('../../../lib/billing/upsellRenderer', () => ({
   })),
 }));
 
+// ★「今月」を実の壁時計から切り離す(P2b: 陳腐化検知テストを日付非依存にする)★
+// currentJstPeriodYyyyMm(new Date()) をそのまま使うと、テスト実行日によって
+// フィクスチャの period_yyyymm が stale になったりならなかったりして不安定になる。
+const mockCurrentPeriod = jest.fn((..._args: unknown[]) => '202609');
+jest.mock('../../../lib/billing/tenantEconomics', () => ({
+  currentJstPeriodYyyyMm: (...a: unknown[]) => mockCurrentPeriod(...a),
+}));
+
 import express from 'express';
 import { request } from "../../../../tests/helpers/testServer";
 import { registerTuningRoutes } from './routes';
@@ -80,6 +88,7 @@ function makeApp(role: string | null, tenantId = 'tenant-a') {
 }
 
 beforeEach(() => {
+  mockCurrentPeriod.mockReset().mockReturnValue('202609');
   mockListRules.mockReset().mockResolvedValue([]);
   mockApproveTuningRule.mockReset();
   mockRejectTuningRule.mockReset();
@@ -121,6 +130,40 @@ describe('GET /v1/admin/upsell-proposals', () => {
     expect(res.body.proposals[0].renderable).toBe(true);
     expect(res.body.proposals[0].headline).toBe('アップセル候補');
     expect(res.body.truncated).toBe(false);
+    expect(res.body.proposals[0].period_yyyymm).toBe('202609');
+    expect(res.body.proposals[0].stale).toBe(false);
+  });
+
+  it('★長期pendingで作成月(period_yyyymm)が今月と違えば stale:true を返す(P2b)★', async () => {
+    mockCurrentPeriod.mockReturnValue('202611'); // 今は11月。提案は9月投稿のまま。
+    mockListRules.mockResolvedValue([{
+      id: 1, tenant_id: 't1', trigger_pattern: 'upsell:202609:text_overage',
+      expected_behavior: 'Growthへの変更を提案', is_active: false, proposal_type: 'upsell',
+      status: 'pending', created_at: '2026-09-04T00:00:00Z', updated_at: '2026-09-04T00:00:00Z',
+      created_by: null, source_message_id: null,
+      evidence: { upsell: { signal: 'text_overage', current_plan: 'standard', recommended_plan: 'growth', period_yyyymm: '202609' } },
+    }]);
+    const res = await request(makeApp('super_admin')).get('/v1/admin/upsell-proposals');
+    expect(res.status).toBe(200);
+    expect(res.body.proposals[0].period_yyyymm).toBe('202609');
+    expect(res.body.proposals[0].stale).toBe(true);
+    // 陳腐化検知は表示だけ(黙って隠さない)。figures計算のロジック自体は変えない。
+    expect(res.body.proposals[0].renderable).toBe(true);
+  });
+
+  it('figures計算が失敗(renderable:false)した行にも period_yyyymm/stale を付ける(事実を隠さない)', async () => {
+    mockCurrentPeriod.mockReturnValue('202611');
+    mockListRules.mockResolvedValue([{
+      id: 1, tenant_id: 'fail', trigger_pattern: 'x', expected_behavior: 'y',
+      is_active: false, proposal_type: 'upsell', status: 'pending',
+      created_at: 'x', updated_at: 'x', created_by: null, source_message_id: null,
+      evidence: { upsell: { signal: 'text_overage', current_plan: 'standard', recommended_plan: 'growth', period_yyyymm: '202609' } },
+    }]);
+    mockBuildFigures.mockRejectedValueOnce(new Error('stripe timeout'));
+    const res = await request(makeApp('super_admin')).get('/v1/admin/upsell-proposals');
+    expect(res.body.proposals[0].renderable).toBe(false);
+    expect(res.body.proposals[0].period_yyyymm).toBe('202609');
+    expect(res.body.proposals[0].stale).toBe(true);
   });
 
   it('★上限(50件)を超えるpending提案は truncated:true で切り、figures計算も上限件数までしか行わない(P1a)★', async () => {
