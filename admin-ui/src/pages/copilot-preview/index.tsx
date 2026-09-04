@@ -239,7 +239,12 @@ type Card =
   // GID 1217972976609524 (H-5): suggest_faq_import_from_text / suggest_faq_import_from_urls
   // が返す、DB未登録のFAQ案一覧。フィールド形状は
   // FaqImportPreviewAgentActionCard(useAgentChatTransport.ts)と同一に保つ(weeklySummaryと同じ作法)。
-  | ({ kind: "faqImportPreview" } & Omit<FaqImportPreviewAgentActionCard, "kind">)
+  // selection はGID 1218166714484055で追加したUI専用フィールド(バックエンドpayloadには無い)。
+  // チェックボックスからの件単位登録(POST /faq-import/commit-selected)の進行状態を
+  // このカード自身に持たせ、二重送信・チャット経由の全件登録との混在を防ぐ。
+  | ({ kind: "faqImportPreview" } & Omit<FaqImportPreviewAgentActionCard, "kind"> & {
+      selection?: { status: "committing" | "done" | "failed"; message: string };
+    })
   // AI品質評価(get_conversation_evaluation)。4軸ラベルはサーバ側で確定済みのものを
   // そのまま描画する(旧UIの JudgeEvaluationSection.tsx と同一語彙)。
   | {
@@ -613,6 +618,10 @@ const VOICE_CLONE_TYPE_ERROR = "対応していない音声形式です。MP3・
 const VOICE_CLONE_SIZE_ERROR = "ファイルが大きすぎます。10MB以下の音声にしてください。";
 const VOICE_CLONE_EMPTY_ERROR = "空のファイルは送信できませんでした。別の音声を試してください。";
 const VOICE_CLONE_GENERIC_ERROR = "音声クローンの作成に失敗しました。少し時間をおいてもう一度お試しください。";
+
+// GID 1218166714484055: faq_import_previewカードの件単位選択登録。
+const FAQ_IMPORT_COMMIT_GENERIC_ERROR = "選択したFAQの登録に失敗しました。少し時間をおいてもう一度お試しください。";
+const FAQ_IMPORT_COMMIT_NONE_SELECTED_ERROR = "登録する項目を1件以上選んでください。";
 
 function validateVoiceCloneFile(file: File): string | null {
   if (file.size === 0) return VOICE_CLONE_EMPTY_ERROR;
@@ -2045,6 +2054,54 @@ export default function CopilotPreviewPage() {
     }
   };
 
+  const updateFaqImportPreviewCard = useCallback((msgId: number, patch: Partial<Extract<Card, { kind: "faqImportPreview" }>>) => {
+    setMsgs((prev) =>
+      prev.map((m) =>
+        m.id === msgId && m.card?.kind === "faqImportPreview" ? { ...m, card: { ...m.card, ...patch } } : m,
+      ),
+    );
+  }, []);
+
+  // GID 1218166714484055: faq_import_previewカードのチェックボックスから件単位で登録する。
+  // __real:チップ経由の自然文(「登録してください」= commit_faq_import、チャット/LLM)とは
+  // 別の直叩き経路(POST /faq-import/commit-selected)。両者は同じサーバー側ステージング
+  // (knowledgeImportStaging.ts)を読むため、どちらを先に使っても後発は「プレビューが
+  // ありません」で終わる(二重登録は起きない)。
+  const commitFaqImportSelection = async (msgId: number, selectedIndices: number[]) => {
+    if (selectedIndices.length === 0) {
+      updateFaqImportPreviewCard(msgId, { selection: { status: "failed", message: FAQ_IMPORT_COMMIT_NONE_SELECTED_ERROR } });
+      return;
+    }
+    updateFaqImportPreviewCard(msgId, { selection: { status: "committing", message: "" } });
+
+    try {
+      const res = await authFetch(`${API_BASE}/v1/admin/agent/faq-import/commit-selected`, {
+        method: "POST",
+        body: JSON.stringify({
+          sessionId: realSessionId,
+          ...(isSuperAdmin && scopedTenantId ? { targetTenantId: scopedTenantId } : {}),
+          selectedIndices,
+        }),
+      });
+      const body = (await res.json().catch(() => null)) as { error?: string; inserted?: number; skipped?: number } | null;
+      if (!res.ok) {
+        updateFaqImportPreviewCard(msgId, { selection: { status: "failed", message: body?.error || FAQ_IMPORT_COMMIT_GENERIC_ERROR } });
+        return;
+      }
+      const inserted = body?.inserted ?? 0;
+      const skipped = body?.skipped ?? 0;
+      const message = `${inserted}件を登録しました` + (skipped > 0 ? `（重複のため${skipped}件はスキップしました）` : "");
+      updateFaqImportPreviewCard(msgId, { selection: { status: "done", message } });
+      setRealActionCount((n) => n + 1);
+    } catch (err) {
+      const message =
+        (err as { message?: string } | null)?.message === "__AUTH_REQUIRED__"
+          ? AGENT_CHAT_AUTH_REQUIRED_MESSAGE
+          : FAQ_IMPORT_COMMIT_GENERIC_ERROR;
+      updateFaqImportPreviewCard(msgId, { selection: { status: "failed", message } });
+    }
+  };
+
   const handlePdfDrop = (e: React.DragEvent) => {
     e.preventDefault();
     pdfDragCounterRef.current = 0;
@@ -2237,6 +2294,7 @@ export default function CopilotPreviewPage() {
                 onAdoptAvatarVoice={adoptAvatarVoice}
                 onDesignAvatarVoice={designAvatarVoice}
                 onAdoptDesignedVoice={adoptDesignedVoice}
+                onCommitFaqImportSelection={commitFaqImportSelection}
               />
             ))}
             {/* key に直近メッセージのidを与え、回答が変わるたびに新しい確認として出す
@@ -2494,6 +2552,7 @@ function MessageRow({
   onAdoptAvatarVoice,
   onDesignAvatarVoice,
   onAdoptDesignedVoice,
+  onCommitFaqImportSelection,
 }: {
   m: Msg;
   onChip: (a: string, id: number) => void;
@@ -2506,6 +2565,7 @@ function MessageRow({
   onAdoptAvatarVoice: (cardMsgId: number, configId: string, voiceId: string) => void | Promise<void>;
   onDesignAvatarVoice: (configId: string, instruction: string) => void | Promise<void>;
   onAdoptDesignedVoice: (cardMsgId: number, configId: string, candidateId: string) => void | Promise<void>;
+  onCommitFaqImportSelection: (msgId: number, selectedIndices: number[]) => void | Promise<void>;
 }) {
   const isMe = m.role === "me";
   return (
@@ -2539,6 +2599,7 @@ function MessageRow({
           onAdoptAvatarVoice={onAdoptAvatarVoice}
           onDesignAvatarVoice={onDesignAvatarVoice}
           onAdoptDesignedVoice={onAdoptDesignedVoice}
+          onCommitFaqImportSelection={onCommitFaqImportSelection}
           onSendReal={(action) => onChip(action, m.id)}
         />
       )}
@@ -2741,6 +2802,7 @@ function CardView({
   onAdoptAvatarVoice,
   onDesignAvatarVoice,
   onAdoptDesignedVoice,
+  onCommitFaqImportSelection,
   onSendReal,
 }: {
   card: Card;
@@ -2754,6 +2816,7 @@ function CardView({
   onAdoptAvatarVoice: (cardMsgId: number, configId: string, voiceId: string) => void | Promise<void>;
   onDesignAvatarVoice: (configId: string, instruction: string) => void | Promise<void>;
   onAdoptDesignedVoice: (cardMsgId: number, configId: string, candidateId: string) => void | Promise<void>;
+  onCommitFaqImportSelection: (msgId: number, selectedIndices: number[]) => void | Promise<void>;
   onSendReal?: (action: string) => void;
 }) {
   switch (card.kind) {
@@ -3131,14 +3194,97 @@ function CardView({
         </CardShell>
       );
     // H-5: suggest_faq_import_from_text/urls のFAQ案一覧。件数は「全total件中faqs.length件」
-    // で20件上限の切り詰めを黙って隠さない(chatSessionListと同じ作法)。登録/取り消しの
-    // 実行導線はカード内ボタンではなく、メッセージのchips(登録して/やめておく)側に持たせる
-    // (sessionListCard・weeklySummary等の他カードと同じく、実行はチップ、カードは提示に徹する)。
+    // で上限撤廃済み(#1170)の生成数を黙って隠さない(chatSessionListと同じ作法)。
+    // 「登録して」の自然文(チャットのchips)経路はcommit_faq_importで従来どおり残しつつ、
+    // GID 1218166714484055でチェックボックスによる件単位選択登録をカード自身に持たせた
+    // (直叩きAPIなのでLLM/自然文経路とは独立。詳細はFaqImportPreviewCard参照)。
     case "faqImportPreview":
-      return (
-        <CardShell hd={<><span>📥</span>FAQ取り込み候補（全{card.total}件中{card.faqs.length}件）</>}>
-          {card.faqs.map((f, i) => (
-            <div key={i} style={{ display: "flex", flexDirection: "column", gap: 4, paddingBottom: 10, borderBottom: "1px solid var(--border)" }}>
+      return <FaqImportPreviewCard card={card} msgId={msgId} onCommitSelected={onCommitFaqImportSelection} />;
+    default:
+      return null;
+  }
+}
+
+// GID 1218166714484055: faq_import_previewカードのチェックボックスから件単位で登録する。
+// 重複判定済みの項目(f.duplicate)はどのみち登録時にスキップされるため、初期状態から
+// チェックを外しておく(「見た目どおりに登録される」の原則)。selectedIndicesは
+// card.faqsが並ぶ順(=knowledgeImportStaging.selectFromStagedFaqImportが期待するフラット順)。
+function FaqImportPreviewCard({
+  card,
+  msgId,
+  onCommitSelected,
+}: {
+  card: Extract<Card, { kind: "faqImportPreview" }>;
+  msgId: number;
+  onCommitSelected: (msgId: number, selectedIndices: number[]) => void | Promise<void>;
+}) {
+  const [selected, setSelected] = useState<boolean[]>(() => card.faqs.map((f) => !f.duplicate));
+
+  const status = card.selection?.status;
+  const busy = status === "committing";
+  const done = status === "done";
+  const locked = busy || done;
+  const selectedCount = selected.filter(Boolean).length;
+
+  const toggle = (i: number) => {
+    if (locked) return;
+    setSelected((prev) => prev.map((v, idx) => (idx === i ? !v : v)));
+  };
+
+  const handleSubmit = () => {
+    const indices = selected.reduce<number[]>((acc, v, i) => {
+      if (v) acc.push(i);
+      return acc;
+    }, []);
+    void onCommitSelected(msgId, indices);
+  };
+
+  return (
+    <CardShell
+      tone={done ? "good" : "agent"}
+      hd={<><span>📥</span>FAQ取り込み候補（全{card.total}件中{card.faqs.length}件）</>}
+      foot={
+        done ? (
+          <CardActionsNote note={card.selection?.message ?? ""} />
+        ) : (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "10px 18px", borderTop: "1px solid var(--border)" }}>
+            <button
+              onClick={handleSubmit}
+              disabled={busy || selectedCount === 0}
+              style={{
+                fontSize: 13.5, fontWeight: 700, padding: "7px 16px", borderRadius: 999, minHeight: 36,
+                border: "none", background: AGENT, color: "#fff",
+                cursor: busy || selectedCount === 0 ? "not-allowed" : "pointer",
+                opacity: busy || selectedCount === 0 ? 0.6 : 1,
+              }}
+            >
+              {busy ? "登録しています…" : `選択した${selectedCount}件を登録して`}
+            </button>
+            {status === "failed" && card.selection?.message && (
+              <span style={{ fontSize: 13, color: "#dc2626" }}>{card.selection.message}</span>
+            )}
+          </div>
+        )
+      }
+    >
+      <div style={{ display: "flex", flexDirection: "column", gap: 10, maxHeight: 420, overflowY: "auto" }}>
+        {card.faqs.map((f, i) => (
+          <label
+            key={i}
+            style={{
+              display: "flex", alignItems: "flex-start", gap: 10, paddingBottom: 10,
+              borderBottom: "1px solid var(--border)", cursor: locked ? "default" : "pointer",
+              opacity: done && !selected[i] ? 0.5 : 1,
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={selected[i] ?? false}
+              disabled={locked}
+              onChange={() => toggle(i)}
+              style={{ marginTop: 4, flexShrink: 0, width: 16, height: 16 }}
+            />
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
               <div style={{ display: "flex", alignItems: "flex-start", gap: 8, flexWrap: "wrap" }}>
                 <span style={{ fontSize: 16, fontWeight: 600, color: "var(--foreground)" }}>{f.question}</span>
                 {f.duplicate && (
@@ -3152,30 +3298,31 @@ function CardView({
                 <div style={{ fontSize: 12.5, color: "var(--muted-foreground)", wordBreak: "break-all" }}>取得元: {f.sourceUrl}</div>
               )}
             </div>
+          </label>
+        ))}
+      </div>
+      {card.errorUrls.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 700, color: "#dc2626" }}>取得できなかったURL（{card.errorUrls.length}件）</div>
+          {card.errorUrls.map((e) => (
+            <div key={e.url} style={{ fontSize: 12.5, color: "var(--muted-foreground)", wordBreak: "break-all" }}>
+              {e.url}（{e.error}）
+            </div>
           ))}
-          {card.errorUrls.length > 0 && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <div style={{ fontSize: 12.5, fontWeight: 700, color: "#dc2626" }}>取得できなかったURL（{card.errorUrls.length}件）</div>
-              {card.errorUrls.map((e) => (
-                <div key={e.url} style={{ fontSize: 12.5, color: "var(--muted-foreground)", wordBreak: "break-all" }}>
-                  {e.url}（{e.error}）
-                </div>
-              ))}
-            </div>
-          )}
-          {card.truncated && (
-            <div style={{ fontSize: 12.5, color: "var(--muted-foreground)" }}>
-              ※ 生成数が上限を超えたため、先頭{card.faqs.length}件のみを対象にしています。
-            </div>
-          )}
-          <div style={{ fontSize: 12.5, color: "var(--muted-foreground)" }}>
-            下のボタンから登録するか決められます。
-          </div>
-        </CardShell>
-      );
-    default:
-      return null;
-  }
+        </div>
+      )}
+      {card.truncated && (
+        <div style={{ fontSize: 12.5, color: "var(--muted-foreground)" }}>
+          ※ 生成数が上限を超えたため、先頭{card.faqs.length}件のみを対象にしています。
+        </div>
+      )}
+      {!done && (
+        <div style={{ fontSize: 12.5, color: "var(--muted-foreground)" }}>
+          チェックを外した項目は登録されません。チャットで「登録してください」と伝えると、重複以外の全件をまとめて登録できます。
+        </div>
+      )}
+    </CardShell>
+  );
 }
 
 // 週次まとめ。数値はすべてサーバ集計値(card)をそのまま描画し、LLMの生成文を経由しない

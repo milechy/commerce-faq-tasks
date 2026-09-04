@@ -11,6 +11,8 @@ import { ADMIN_AGENT_TOOLS, LEGACY_UI_FEATURES } from './toolDefinitions';
 import { executeToolCall, parseBooleanArg } from './actionExecutor';
 import type { ActionResult, ActionCardPayload } from './actionExecutor';
 import { requiresConfirmation, WRITE_TOOL_RISK_TIERS } from './confirmPolicy';
+import { getStagedFaqImport, clearStagedFaqImport, selectFromStagedFaqImport } from './knowledgeImportStaging';
+import { commitTextFaqs, commitScrapeFaqs } from '../../../lib/knowledge/faqImport';
 import { trackUsage } from '../../../lib/billing/usageTracker';
 import { queryTenantPlanResult } from '../../../lib/billing/planFeatures';
 import { getMonthRangeJst, isFreeAdAdminConsultQuotaExceeded, FREE_AD_MONTHLY_ADMIN_CONSULT_LIMIT } from '../../../lib/billing/planQuota';
@@ -294,6 +296,16 @@ const chatSchema = z.object({
 const uiEventSchema = z.object({
   event: z.literal('chat_first_toggle'),
   enabled: z.boolean(),
+});
+
+// GID 1218166714484055: faqImportPreviewカードのチェックボックスから直接叩く。
+// LLM/自然文経路(commit_faq_import)を通さず、選択indexを確定的に渡すための専用エンドポイント。
+// selectedIndicesはカード(faq_import_preview)のfaqsが並ぶ順(source==='urls'ならitems.flatMap順)の
+// フラットindex。上限は上限撤廃済み(#1170)のFAQ生成件数に合わせて余裕を持たせる。
+const faqImportCommitSelectedSchema = z.object({
+  sessionId: z.string().min(1).max(100),
+  targetTenantId: z.string().optional(),
+  selectedIndices: z.array(z.number().int().min(0)).max(1000),
 });
 
 // ---------------------------------------------------------------------------
@@ -1368,6 +1380,63 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
     } catch (err) {
       logger.warn('[POST /v1/admin/agent/chat]', err);
       return res.status(500).json({ error: 'AIエージェントの応答生成に失敗しました' });
+    }
+  });
+
+  // GID 1218166714484055: faq_import_previewカードのチェックボックスから直接叩く登録エンドポイント。
+  // commit_faq_import(チャット/LLM経由の「登録してください」)とは別経路で、こちらは自然文を介さず
+  // 選択indexを確定的に受け取る。ステージング済みデータの読み書き・実際のINSERTは commit_faq_import
+  // と同じ knowledgeImportStaging / commitTextFaqs・commitScrapeFaqs をそのまま使い、登録ロジックの
+  // 二重実装はしない。
+  app.post('/v1/admin/agent/faq-import/commit-selected', async (req: Request, res: Response) => {
+    const { role, tenantId, isSuperAdmin } = extractAuth(req);
+
+    if (role !== 'super_admin' && role !== 'client_admin') {
+      return res.status(403).json({ error: 'この操作を実行する権限がありません' });
+    }
+
+    const parsed = faqImportCommitSelectedSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'invalid_request', details: parsed.error.issues });
+    }
+    const { sessionId, targetTenantId, selectedIndices } = parsed.data;
+
+    // ステージングのキーは commit_faq_import と同じ「effectiveTenantId」(super_adminは
+    // targetTenantIdを併用可、client_adminはJWT由来のみ)。target(登録先)とは別概念。
+    const effectiveTenantId = isSuperAdmin ? (targetTenantId ?? tenantId) : tenantId;
+    if (!effectiveTenantId) {
+      return res.status(403).json({ error: 'テナント情報が取得できません' });
+    }
+
+    const staged = getStagedFaqImport(effectiveTenantId, sessionId);
+    if (!staged) {
+      return res.status(404).json({ error: 'プレビューがありません。先にFAQ案を作成してください' });
+    }
+
+    const target = targetTenantId || effectiveTenantId;
+    if (target === 'global' && !isSuperAdmin) {
+      return res.status(403).json({ error: '全店舗共通の知識データはSuper Adminのみ登録可能です' });
+    }
+    // commit_faq_import と同じ判断基準: target は client 制御値のため、super_admin 以外の
+    // 越境書き込みをここで塞ぐ。
+    if (target !== effectiveTenantId && !isSuperAdmin) {
+      return res.status(403).json({ error: '他のテナントには登録できません' });
+    }
+
+    try {
+      const categoryOverride = staged.categoryOverride ?? undefined;
+      const selected = selectFromStagedFaqImport(staged, selectedIndices);
+      const result =
+        selected.kind === 'text'
+          ? await commitTextFaqs(db, target, selected.faqs, categoryOverride, 'admin_agent_text_import')
+          : await commitScrapeFaqs(db, target, selected.items, categoryOverride, 'admin_agent_scrape_import');
+
+      clearStagedFaqImport(effectiveTenantId, sessionId);
+
+      return res.json({ ok: true, inserted: result.inserted, skipped: result.skipped });
+    } catch (err) {
+      logger.warn('[POST /v1/admin/agent/faq-import/commit-selected]', err);
+      return res.status(500).json({ error: 'FAQの登録に失敗しました' });
     }
   });
 

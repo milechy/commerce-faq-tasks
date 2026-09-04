@@ -100,6 +100,30 @@ export function __resetKnowledgeImportStagingForTest(): void {
   staging.clear();
 }
 
+// GID 1218166714484055: 件単位選択インポート。カード(FaqImportPreviewCardPayload.faqs)は
+// text/urlsどちらの場合もフラットな配列として店主に見せているため、選択indexもそのフラット順
+// (kind==='scrape'ならitems.flatMap(item => item.faqs)の順)で受け取る。ここでは「絞り込むだけ」
+// で登録ロジックは持たない(commitTextFaqs/commitScrapeFaqsは呼び出し側で従来どおり呼ぶ)。
+export type SelectedFaqImport =
+  | { kind: 'text'; faqs: FaqEntryWithDuplicate[] }
+  | { kind: 'scrape'; items: ScrapeUrlResult[] };
+
+export function selectFromStagedFaqImport(staged: StagedFaqImport, selectedIndices: number[]): SelectedFaqImport {
+  const indexSet = new Set(selectedIndices);
+
+  if (staged.kind === 'text') {
+    return { kind: 'text', faqs: staged.faqs.filter((_, i) => indexSet.has(i)) };
+  }
+
+  let flatIndex = 0;
+  const items: ScrapeUrlResult[] = [];
+  for (const item of staged.items) {
+    const faqs = item.faqs.filter(() => indexSet.has(flatIndex++));
+    if (faqs.length > 0) items.push({ ...item, faqs });
+  }
+  return { kind: 'scrape', items };
+}
+
 // ---------------------------------------------------------------------------
 // プラン制限の案内済みフラグ
 // ---------------------------------------------------------------------------
