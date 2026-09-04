@@ -233,6 +233,26 @@ jest.mock('../../../lib/logger', () => ({
   logger: { warn: jest.fn(), info: jest.fn(), error: jest.fn() },
 }));
 
+// S7(free_adの管理AI月次上限)が使う queryTenantPlanResult のみをモックする。
+// actionExecutor.ts の各ツールが使う queryTenantPlan(db, tenantId)は実装(jest.requireActual)
+// のまま — こちらは注入済みmockDbに対して実行され、既存の「プラン制限」テスト群の
+// mockQuery順序に影響しない。queryTenantPlanResult は agentRoutes.ts側でgetPool()(実Pool)
+// を渡して呼ぶため、注入済みmockDbのクエリ順序とは無関係の別チャネルとしてモックする
+// (actionExecutor.tsのqueryTenantPlan直呼びと同じ理由: 実PoolとモックPoolの食い違いを避ける)。
+// getPool() 自体もモックする(テスト環境はDATABASE_URL未設定でgetPool()が例外を投げるため、
+// モックしないとqueryTenantPlanResultモックまで到達できない。戻り値の中身はモック側で無視
+// されるためダミーでよい)。既定値は beforeEach で growth(非free_ad)にし、
+// 全既存テストのmockQuery消費量を変えない。
+const mockQueryTenantPlanResult = jest.fn();
+jest.mock('../../../lib/billing/planFeatures', () => ({
+  ...jest.requireActual('../../../lib/billing/planFeatures'),
+  queryTenantPlanResult: (...args: any[]) => mockQueryTenantPlanResult(...args),
+}));
+jest.mock('../../../lib/db', () => ({
+  ...jest.requireActual('../../../lib/db'),
+  getPool: () => ({}),
+}));
+
 // usageTracker モック（GID 1215915182786983: admin_agent 課金計上のテスト用）
 const mockTrackUsage = jest.fn();
 // CP-3: change_my_plan(→changeTenantPlan.ts)がCOMMIT後に呼ぶ。呼ばれること自体は
@@ -368,6 +388,9 @@ describe('POST /v1/admin/agent/chat', () => {
     // 実装(モック値)も含めて毎回完全にリセットする。
     jest.resetAllMocks();
     process.env.GROQ_API_KEY = 'test-groq-key';
+    // S7の管理AI月次上限が全リクエストで参照するため、既定は非free_adにしておく
+    // (free_ad固有のテストだけが個別に上書きする)。
+    mockQueryTenantPlanResult.mockResolvedValue('growth');
     mockListRules.mockResolvedValue([]);
     mockGetGaps.mockResolvedValue({ gaps: [], total: 0 });
     mockSearchKnowledgeForSuggestion.mockResolvedValue({ results: [] });
@@ -920,6 +943,81 @@ describe('POST /v1/admin/agent/chat', () => {
         .send({ message: 'hello', sessionId: 'sess-013' });
 
       expect(mockTrackUsage).not.toHaveBeenCalled();
+    });
+
+    // GID 1218162837824797(admin_agent 計上の冪等化): requestId が Date.now() を含むと
+    // 再送・二重クリックのたびに別行になり原価が二重計上される(usage_logsのON CONFLICTが効かない)。
+    // (sessionId, ターン, メッセージ内容)だけから決定的に決まることを固定する。
+    describe('requestId の冪等化(GID 1218162837824797)', () => {
+      it('同一sessionId・同一履歴長・同一メッセージで2回実行 → requestIdが同じ値になる', async () => {
+        mockFetch
+          .mockResolvedValueOnce(makeGroqResponse('1回目の返答です。'))
+          .mockResolvedValueOnce(makeGroqResponse('2回目の返答です。'));
+
+        await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: '同じ質問です', sessionId: 'sess-idem-001' });
+        await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: '同じ質問です', sessionId: 'sess-idem-001' });
+
+        expect(mockTrackUsage).toHaveBeenCalledTimes(2);
+        const firstRequestId = mockTrackUsage.mock.calls[0][0].requestId;
+        const secondRequestId = mockTrackUsage.mock.calls[1][0].requestId;
+        expect(firstRequestId).toBe(secondRequestId);
+        // Date.now()由来の可変値が混ざっていないことの担保(混ざっていれば一致しないはず)。
+        expect(firstRequestId).toMatch(/^admin-agent-sess-idem-001-0-[0-9a-f]{8}$/);
+      });
+
+      it('メッセージが違う → requestIdが変わる', async () => {
+        mockFetch
+          .mockResolvedValueOnce(makeGroqResponse('返答A'))
+          .mockResolvedValueOnce(makeGroqResponse('返答B'));
+
+        await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: '質問A', sessionId: 'sess-idem-002' });
+        await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: '質問B', sessionId: 'sess-idem-002' });
+
+        const firstRequestId = mockTrackUsage.mock.calls[0][0].requestId;
+        const secondRequestId = mockTrackUsage.mock.calls[1][0].requestId;
+        expect(firstRequestId).not.toBe(secondRequestId);
+      });
+
+      it('履歴の長さが違う(ターンが違う) → requestIdが変わる', async () => {
+        mockFetch
+          .mockResolvedValueOnce(makeGroqResponse('1ターン目'))
+          .mockResolvedValueOnce(makeGroqResponse('2ターン目'));
+
+        await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: '続きです', sessionId: 'sess-idem-003' });
+        await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({
+            message: '続きです',
+            sessionId: 'sess-idem-003',
+            history: [{ role: 'user', content: '前のターンの発言' }],
+          });
+
+        const firstRequestId = mockTrackUsage.mock.calls[0][0].requestId;
+        const secondRequestId = mockTrackUsage.mock.calls[1][0].requestId;
+        expect(firstRequestId).not.toBe(secondRequestId);
+      });
+
+      it('trackUsageにsessionIdが渡る(会話単位の課金の集計キー)', async () => {
+        mockFetch.mockResolvedValueOnce(makeGroqResponse('返答です。'));
+
+        await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: 'こんにちは', sessionId: 'sess-idem-004' });
+
+        expect(mockTrackUsage).toHaveBeenCalledWith(
+          expect.objectContaining({ sessionId: 'sess-idem-004' }),
+        );
+      });
     });
   });
 
@@ -14482,6 +14580,166 @@ describe('POST /v1/admin/agent/chat', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.reply).toBe('AIアシスタントは現在利用できません');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // S7(docs/ADMIN_AGENT_COST_REQUIREMENTS.md): free_ad の管理AI月次上限。
+  // プラン解決は mockQueryTenantPlanResult(queryTenantPlanResultのモック。beforeEachの既定は
+  // growth)、当月相談件数の集計はmockQuery(実装どおりcountFreeAdAdminConsultsが叩く、
+  // 注入済みdb)。queryTenantPlan/getTenantPlan(機能ゲート用fail-safe。例外時'free_ad'に
+  // 丸める)ではなく queryTenantPlanResult(判定不能はnull)を使う理由は本体側のコメント参照。
+  // -------------------------------------------------------------------------
+  describe('free_adの管理AI月次上限', () => {
+    /** getTenantPlanをfree_adにし、countFreeAdAdminConsultsのmockQuery応答を積む */
+    function mockFreeAdAndConsultCount(count: number, countedToday: boolean) {
+      mockQueryTenantPlanResult.mockResolvedValueOnce('free_ad');
+      mockQuery.mockResolvedValueOnce({ rows: [{ count: String(count), counted_today: countedToday }] });
+    }
+
+    it('上限未満なら通常どおりGroqが呼ばれる', async () => {
+      mockFreeAdAndConsultCount(10, false);
+      mockFetch.mockResolvedValueOnce(makeGroqResponse('お答えします。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '設定を教えて', sessionId: 'sess-freead-01' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.reply).toBe('お答えします。');
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(mockTrackUsage).toHaveBeenCalledTimes(1);
+    });
+
+    it('上限到達かつ新しい相談ならGroqを呼ばず案内文を返す(trackUsageも呼ばない)', async () => {
+      mockFreeAdAndConsultCount(30, false);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'もう一度相談したい', sessionId: 'sess-freead-02' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.reply).toContain('30件');
+      expect(res.body.reply).not.toContain('使いすぎ');
+      expect(res.body.reply).not.toContain('上限に達し');
+      expect(res.body.reply).not.toContain('エラー');
+      expect(res.body.actions).toEqual([]);
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(mockTrackUsage).not.toHaveBeenCalled();
+    });
+
+    it('上限到達でも今日すでに計上済みのsession_idなら通常どおり通る', async () => {
+      mockFreeAdAndConsultCount(30, true);
+      mockFetch.mockResolvedValueOnce(makeGroqResponse('続きをお答えします。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '続けて教えて', sessionId: 'sess-freead-03' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.reply).toBe('続きをお答えします。');
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(mockTrackUsage).toHaveBeenCalledTimes(1);
+    });
+
+    it('free_ad以外のプランでは上限判定が一切効かない(件数取得すら行わない)', async () => {
+      mockQueryTenantPlanResult.mockResolvedValueOnce('growth');
+      mockFetch.mockResolvedValueOnce(makeGroqResponse('お答えします。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '設定を教えて', sessionId: 'sess-freead-04' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.reply).toBe('お答えします。');
+      expect(mockQuery).not.toHaveBeenCalled(); // 件数集計クエリ自体が実行されない
+    });
+
+    it('相談件数の取得がDBエラーになっても相談は止まらない(fail-open)', async () => {
+      mockQueryTenantPlanResult.mockResolvedValueOnce('free_ad');
+      mockQuery.mockRejectedValueOnce(new Error('DB down'));
+      mockFetch.mockResolvedValueOnce(makeGroqResponse('お答えします。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '設定を教えて', sessionId: 'sess-freead-05' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.reply).toBe('お答えします。');
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('プラン取得自体がDBエラーになっても相談は止まらない(fail-open)', async () => {
+      mockQueryTenantPlanResult.mockRejectedValueOnce(new Error('DB down'));
+      mockFetch.mockResolvedValueOnce(makeGroqResponse('お答えします。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '設定を教えて', sessionId: 'sess-freead-05b' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.reply).toBe('お答えします。');
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    // 回帰テスト本体(team-lead指摘): queryTenantPlanResult は DB例外・未確定を
+    // 例外を投げず null で返す(queryTenantPlan/getTenantPlanのように'free_ad'へ丸めない)。
+    // ここでplanが null(=判定不能)のとき、たとえ当月の相談件数が上限を超えていても
+    // 遮断してはならない(機能ゲート用fail-safeの向きをこの経路に混ぜない)。
+    it('プランが判定不能(null)のときは当月件数が上限超過でも遮断しない', async () => {
+      mockQueryTenantPlanResult.mockResolvedValueOnce(null);
+      mockFetch.mockResolvedValueOnce(makeGroqResponse('お答えします。'));
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '設定を教えて', sessionId: 'sess-freead-06' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.reply).toBe('お答えします。');
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(mockTrackUsage).toHaveBeenCalledTimes(1);
+      // plan が null と確定した時点で判定は終わるため、件数集計クエリにも到達しない
+      // (= 上限超過かどうかを見るまでもなく通す)。
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      [29, false],
+      [30, true],
+      [31, true],
+    ])('境界値: 当月%i件目はブロック=%s', async (count, shouldBlock) => {
+      mockFreeAdAndConsultCount(count, false);
+      if (!shouldBlock) {
+        mockFetch.mockResolvedValueOnce(makeGroqResponse('お答えします。'));
+      }
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '設定を教えて', sessionId: `sess-freead-boundary-${count}` });
+
+      expect(res.status).toBe(200);
+      if (shouldBlock) {
+        expect(res.body.reply).toContain('30件');
+        expect(mockFetch).not.toHaveBeenCalled();
+      } else {
+        expect(res.body.reply).toBe('お答えします。');
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+      }
+    });
+
+    it('stream:true でも上限到達時はGroqを呼ばずevent: doneで同じ文言の案内文を返す', async () => {
+      mockFreeAdAndConsultCount(30, false);
+
+      const res = await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: 'もう一度相談したい', sessionId: 'sess-freead-stream-01', stream: true });
+
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toContain('text/event-stream');
+      expect(res.text).toContain('event: done');
+      expect(res.text).toContain('30件');
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(mockTrackUsage).not.toHaveBeenCalled();
     });
   });
 });

@@ -1882,6 +1882,7 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
                 plan: "growth",
                 text: { used: 3100, included: 3000, overage: 100 },
                 avatar: { usedMinutes: 160, includedMinutes: 150, overageMinutes: 10 },
+                admin: { used: 320, included: 300, overage: 20 },
                 freeAd: null,
               },
             },
@@ -1894,7 +1895,44 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
       expect(await screen.findByText("今月の利用枠")).toBeTruthy();
       expect(screen.getByText(/3,100 \/ 3,000会話/)).toBeTruthy();
       expect(screen.getByText(/160 \/ 150分/)).toBeTruthy();
+      expect(screen.getByText(/320 \/ 300件/)).toBeTruthy();
       expect(screen.getByText(/込み枠を超過しています/)).toBeTruthy();
+    });
+
+    // §8(docs/ADMIN_AGENT_COST_REQUIREMENTS.md): 管理AIの相談件数は込み枠バーとして
+    // 常設するが、込み枠内では警告文言を伴わせない(能動的な報告をしない)。
+    it("管理AIへの相談は込み枠バーとして描画され、込み枠内では超過文言を伴わない", async () => {
+      mockAgent({
+        reply: "ご利用状況をお伝えします。",
+        actions: [
+          {
+            tool: "get_billing_summary",
+            result: "ご利用状況・お支払い（直近30日間）",
+            card: {
+              kind: "billing_summary",
+              period: "30d",
+              plan: "Growth",
+              billingEstimateJpy: 3300,
+              breakdown: [],
+              invoicesAvailable: false,
+              invoices: [],
+              portalUrl: null,
+              quota: {
+                plan: "growth",
+                text: { used: 100, included: 3000, overage: 0 },
+                avatar: { usedMinutes: 0, includedMinutes: 150, overageMinutes: 0 },
+                admin: { used: 20, included: 300, overage: 0 },
+                freeAd: null,
+              },
+            },
+          },
+        ],
+      });
+
+      await send("今月の利用枠を教えて");
+
+      expect(await screen.findByText(/20 \/ 300件/)).toBeTruthy();
+      expect(screen.queryByText(/込み枠を超過しています/)).toBeNull();
     });
 
     it("free_adは無料枠の残量バーが描画され、上限到達時は新規会話停止を明言する", async () => {
@@ -1917,7 +1955,8 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
                 plan: "free_ad",
                 text: { used: 200, included: null, overage: 0 },
                 avatar: { usedMinutes: 0, includedMinutes: null, overageMinutes: 0 },
-                freeAd: { used: 200, limit: 200, remaining: 0 },
+                admin: { used: 5, included: null, overage: 0 },
+                freeAd: { used: 200, limit: 200, remaining: 0, adminUsed: 5, adminLimit: 50, adminRemaining: 45 },
               },
             },
           },
@@ -1927,6 +1966,7 @@ describe("CopilotPreviewPage — 構造化カード(card)からの描画", () =>
       await send("今月の利用枠を教えて");
 
       expect(await screen.findByText(/200 \/ 200会話/)).toBeTruthy();
+      expect(screen.getByText(/5 \/ 50件/)).toBeTruthy();
       expect(screen.getByText(/今月の上限に到達しています。新しい会話は翌月まで開始できません。/)).toBeTruthy();
     });
 

@@ -1,6 +1,10 @@
 // src/lib/billing/costCalculator.ts
 // Phase32: コスト計算（金額はセント単位の整数で管理）
 
+// type-only import。usageTracker.ts は costCalculator.ts の値(calculateBillingAmountCents等)を
+// importする側なので、型だけをここへ逆輸入しても実行時の循環importにはならない
+// (type-only importはコンパイル時に消える)。
+
 export type ModelKey = 'groq-8b' | 'groq-70b' | 'openai-embedding' | 'gemini-2.5-flash' | 'perplexity-sonar-pro' | 'gpt-oss-20b' | 'gpt-oss-120b';
 
 export interface ModelCost {
@@ -53,8 +57,76 @@ export const MARGIN_MULTIPLIER = Number(process.env.MARGIN_RATE ?? '5') || 5;
  * agent_search([A2A-1a] 外部エージェント連携API)は、テナントが従量課金で
  * 契約する対外向けAPIであり運用ツールではないため、chat/avatar/voiceと同格。
  * 'chat' から分離した経緯は usageTracker.ts の FeatureUsed コメント参照。
+ *
+ * ★admin_agent(管理AIへの相談)はここに含めない★
+ * FEATURE_BILLING_DIMENSION では 'admin' という独自の課金次元を持つが、
+ * マージン(原価表示)は別の関心事。管理AIは原価のみ(×1)のまま据え置く
+ * (.claude/rules/billing.md、原価表示は cost_total_cents=原価×マージンで
+ * 請求額とは別系統。請求額は数量×Stripe priceで決まる)。
  */
 export const END_USER_FEATURES: ReadonlySet<string> = new Set(['chat', 'avatar', 'voice', 'agent_search']);
+
+/**
+ * S4(2026-09-04, 管理AI原価の課金・可視化 GID 1218086647623729系):
+ * feature_used ごとの課金次元を宣言する唯一の出どころ。
+ *
+ * 課題B「請求数量の次元がテキスト/アバターの2つしかなく、それ以外の feature_used が
+ * "残り全部を1行=1単位で拾う受け皿"へ自動的に落ちる」の再発防止。
+ * Record<FeatureUsed, BillingDimension> にすることで、FeatureUsed に新しいメンバーを
+ * 足したのにここへ次元を宣言しないと typecheck が落ちる(未宣言を許さない)。
+ *
+ * - 'text'   : テキスト会話と同じ数え方(session_idごと、1会話=1単位)。
+ *              stripeSync.ts の TEXT_DIMENSION_FEATURES がSQLパラメータとして使う。
+ * - 'avatar' : アバターと同じ数え方(時間→分に切り上げ)。
+ * - 'admin'  : 管理AIへの相談。(session_id, JST暦日)ごとに1単位。今回新設した次元。
+ *              stripeSync.ts の ADMIN_DIMENSION_FEATURES がSQLパラメータとして使う。
+ * - 'request': 1行=1単位でそのまま請求数量に入る(従来の"受け皿"の挙動をそのまま
+ *              宣言したもの)。★これらを他の次元へ移す判断は本タスクのスコープ外★。
+ * - 'none'   : NON_BILLABLE_FEATURES(下記、この map から導出)。請求数量に一切入らない。
+ */
+export type BillingDimension = 'text' | 'avatar' | 'admin' | 'request' | 'none';
+
+/**
+ * ★このmapのキーが FeatureUsed の唯一の定義元である★
+ * usageTracker.ts の `FeatureUsed` は `keyof typeof FEATURE_BILLING_DIMENSION` として
+ * ここから導出される。したがって「featureUsed を増やしたのに課金次元を宣言し忘れる」は
+ * テストで検出する話ではなく、そもそも書けない（新しい名前を trackUsage に渡した時点で
+ * 型エラーになる）。逆向き(costCalculator が usageTracker の型を import する形)にすると
+ * 循環依存になるため、依存の向きは usageTracker → costCalculator の一方向に保つこと。
+ */
+export const FEATURE_BILLING_DIMENSION = {
+  chat: 'text',
+  agent_search: 'text',
+  avatar: 'avatar',
+  anam_session: 'avatar',
+  admin_agent: 'admin',
+  voice: 'request',
+  admin_guide: 'request',
+  avatar_config_image: 'request',
+  avatar_config_voice: 'request',
+  avatar_config_prompt: 'request',
+  avatar_config_test: 'request',
+  feedback_ai: 'request',
+  book_analysis: 'request',
+  book_structurize: 'request',
+  option_service: 'request',
+  premium_avatar_generation: 'request',
+  admin_tuning: 'none',
+  admin_ai_assist: 'none',
+  admin_engagement_suggest: 'none',
+  admin_option_estimator: 'none',
+  sai_agent: 'none',
+} as const satisfies Record<string, BillingDimension>;
+
+/** 'text' 次元の feature_used 名一覧(FEATURE_BILLING_DIMENSION から導出)。 */
+export const TEXT_DIMENSION_FEATURES: readonly string[] = Object.entries(FEATURE_BILLING_DIMENSION)
+  .filter(([, dimension]) => dimension === 'text')
+  .map(([feature]) => feature);
+
+/** 'admin' 次元の feature_used 名一覧(FEATURE_BILLING_DIMENSION から導出)。 */
+export const ADMIN_DIMENSION_FEATURES: readonly string[] = Object.entries(FEATURE_BILLING_DIMENSION)
+  .filter(([, dimension]) => dimension === 'admin')
+  .map(([feature]) => feature);
 
 /**
  * GID 1216944003337186: usage_logs の行として記録はする（cost_total_centsで原価は可視化する）が、
@@ -67,14 +139,15 @@ export const END_USER_FEATURES: ReadonlySet<string> = new Set(['chat', 'avatar',
  * - sai_agent: テナント請求は既に chargeOneOffJpy（代行作業完了時の単発JPY請求、
  *   options/routes.ts の /complete エンドポイント）で完結している。ここでも
  *   billedQuantityのCOUNT(*)に含めると二重計上になるため非課金とする。
+ *
+ * ★S4以降はFEATURE_BILLING_DIMENSIONの'none'エントリから導出する★
+ * 2箇所に同じ判定(非課金リストと課金次元)を書くと片方だけ直す事故(禁止6)を招く。
  */
-export const NON_BILLABLE_FEATURES: ReadonlySet<string> = new Set([
-  'admin_tuning',
-  'admin_ai_assist',
-  'admin_engagement_suggest',
-  'admin_option_estimator',
-  'sai_agent',
-]);
+export const NON_BILLABLE_FEATURES: ReadonlySet<string> = new Set(
+  Object.entries(FEATURE_BILLING_DIMENSION)
+    .filter(([, dimension]) => dimension === 'none')
+    .map(([feature]) => feature)
+);
 
 /** Phase40: Fish Audio TTS単価: $15.00 / 1M UTF-8バイト */
 export const FISH_AUDIO_COST_PER_BYTE_USD = 15.0 / 1_000_000;

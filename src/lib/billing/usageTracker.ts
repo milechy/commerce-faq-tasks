@@ -3,7 +3,8 @@
 
 import type pino from 'pino';
 import { calculateLLMCostCents, calculateBillingAmountCents,
-  calculateBaseCostCents, normalizeModelKey, NON_BILLABLE_FEATURES } from './costCalculator';
+  calculateBaseCostCents, normalizeModelKey, NON_BILLABLE_FEATURES,
+  FEATURE_BILLING_DIMENSION } from './costCalculator';
 import { queryTenantPlanResult, type TenantPlan } from './planFeatures';
 import { planMultiplier } from './planPricing';
 
@@ -20,7 +21,11 @@ import { planMultiplier } from './planPricing';
 // stripeSync.ts の text_units 集計SQLにも 'chat' の兄弟として追加済み。この2箇所を
 // 追随させないと、Growth/Standardプランのテナントで agent_search 分が
 // 一切請求されなくなる — CLAUDE.md 禁止55と同じ「複数箇所を同時に直す」種類の罠）。
-export type FeatureUsed = 'chat' | 'avatar' | 'voice' | 'admin_guide' | 'avatar_config_image' | 'avatar_config_voice' | 'avatar_config_prompt' | 'avatar_config_test' | 'anam_session' | 'feedback_ai' | 'book_analysis' | 'book_structurize' | 'option_service' | 'premium_avatar_generation' | 'admin_agent' | 'sai_agent' | 'admin_tuning' | 'admin_ai_assist' | 'admin_engagement_suggest' | 'admin_option_estimator' | 'agent_search';
+// ★値そのものは costCalculator.ts の FEATURE_BILLING_DIMENSION が唯一の定義元★
+// ここはそのキーから導出するだけ。新しい featureUsed を足すときは、あちらの map に
+// 課金次元を宣言する以外に方法が無い（宣言しないとこの型に現れず trackUsage に渡せない）。
+// 依存の向きは usageTracker → costCalculator の一方向。逆向きに import しないこと。
+export type FeatureUsed = keyof typeof FEATURE_BILLING_DIMENSION;
 
 export interface TrackUsageParams {
   tenantId: string;

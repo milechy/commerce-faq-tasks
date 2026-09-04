@@ -453,13 +453,13 @@ describe('集計SQL: 倍率は行ごとに適用する（月全体への遡及�
     return fs.readFileSync(path.join(__dirname, 'stripeSync.ts'), 'utf-8');
   };
 
-  // 会話単位の課金で単位の作り方が2系統(行単位 / 会話単位)に分かれたが、
-  // どちらも「その行に焼き付けた倍率」を持ち回る点は変わらない。
-  // 片方でも tenants.plan 由来の倍率を月全体に掛けると遡及が復活する。
-  it('請求数量は行に焼き付けた plan_multiplier を持ち回って集計する（行単位・会話単位の両系統）', () => {
+  // 会話単位の課金で単位の作り方が3系統(行単位 / 会話単位 / 管理AI相談単位)に
+  // 分かれたが、どれも「その行に焼き付けた倍率」を持ち回る点は変わらない。
+  // 1つでも tenants.plan 由来の倍率を月全体に掛けると遡及が復活する。
+  it('請求数量は行に焼き付けた plan_multiplier を持ち回って集計する（行単位・会話単位・管理AI単位の3系統）', () => {
     const src = readSource();
     const occurrences = src.match(/COALESCE\(r\.plan_multiplier,\s*\$4::numeric\)\s+AS multiplier/g);
-    expect(occurrences).toHaveLength(2); // conversation_units と row_units
+    expect(occurrences).toHaveLength(3); // conversation_units と row_units と admin_units
     expect(src).toMatch(/SUM\(units \* multiplier\)/);
   });
 
@@ -586,7 +586,8 @@ describe('集計SQL: 絞り込み条件(壊れると請求額が変わる)', () 
   it('フォールバック倍率は planMultiplier(currentPlan) を $4 として渡す', () => {
     const src = readSource();
     expect(src).toMatch(/const fallbackMultiplier = planMultiplier\(currentPlan\);/);
-    expect(src).toMatch(/\[tenantId, startDate, endDate, fallbackMultiplier\]/);
+    // $5 = ADMIN_DIMENSION_FEATURES(管理AI次元のfeature_used名。admin_units/row_unitsのSQLパラメータ)。
+    expect(src).toMatch(/\[tenantId, startDate, endDate, fallbackMultiplier, ADMIN_DIMENSION_FEATURES\]/);
   });
 
   // 焼き付け済みの行にフォールバックが効いてしまうと、月中変更の按分が消える。
@@ -641,6 +642,64 @@ describe('集計SQL: 絞り込み条件(壊れると請求額が変わる)', () 
   // 突き合わせると、他テナントの同名セッションの message_count で課金可否が決まる。
   it('chat_sessions の結合条件にテナント述語を含む', () => {
     expect(aggregationSql()).toMatch(/ON cs\.tenant_id = \$1\s*\n\s*AND cs\.session_id = r\.session_id/);
+  });
+
+  // ─────────────────────────────────────────────────────────────────────
+  // S3(管理AI原価の課金・可視化): admin_units CTE の不変条件。
+  // 実DBでの(session_id, JST暦日)グルーピング自体はSQL意味論なので実Postgres
+  // でしか検証できない(実DB突合はAsana 1217806758545725と同じ扱い)。
+  // ここでは「壊れると請求が静かにズレる」構造をソース上で固定する。
+  // ─────────────────────────────────────────────────────────────────────
+  it('管理AI(admin_units)は (session_id, JST暦日) の DISTINCT ON で1相談=1単位に畳む', () => {
+    const sql = aggregationSql();
+    expect(sql).toMatch(/DISTINCT ON \(r\.session_id, \(r\.created_at AT TIME ZONE 'Asia\/Tokyo'\)::date\)/);
+    expect(sql).toMatch(/r\.feature_used = ANY\(\$5::text\[\]\)/);
+    expect(sql).toMatch(/r\.session_id IS NOT NULL/);
+  });
+
+  // ★CLAUDE.md 禁止16: AT TIME ZONE を片側だけ書かない★
+  // ここでの AT TIME ZONE は「JSTの壁時計日付を取り出す」ための一方向の変換であり、
+  // 期間の絞り込み($2/$3)には使わない(呼び出し元が渡すUTC境界のまま比較する)。
+  it('AT TIME ZONEは集計キー(暦日)の算出にのみ使い、期間の絞り込み($2/$3)には使わない', () => {
+    const sql = aggregationSql();
+    expect(sql).toMatch(/AT TIME ZONE 'Asia\/Tokyo'/);
+    expect(sql).not.toMatch(/created_at AT TIME ZONE[^)]*>=\s*\$2/);
+    expect(sql).not.toMatch(/created_at AT TIME ZONE[^)]*<\s*\$3/);
+  });
+
+  // 管理AIの倍率も「最初の行」から採る。conversation_units(会話)と同じ思想。
+  it('管理AI相談の倍率は最初の行(created_at 昇順)から採る', () => {
+    expect(aggregationSql()).toMatch(
+      /ORDER BY r\.session_id, \(r\.created_at AT TIME ZONE 'Asia\/Tokyo'\)::date, r\.created_at, r\.request_id/
+    );
+  });
+
+  // ★二重計上防止★ 管理AI(session_idあり)の行は row_units 側から除外されていること。
+  // 除外していないと、admin_units と row_units の両方で同じ行が数えられる。
+  it('row_units は管理AI(session_idあり)の行を除外する(admin_unitsとの二重計上防止)', () => {
+    expect(aggregationSql()).toMatch(
+      /NOT \(r\.feature_used = ANY\(\$5::text\[\]\) AND r\.session_id IS NOT NULL\)/
+    );
+  });
+
+  // session_id を持たない管理AI行(記録漏れ・配線前の既存行)は、chat の
+  // フォールバックと同じ思想で row_units に残り 1行=1単位のまま救済される
+  // (admin_consults の SELECT 式が row_units をも数えることで担保する)。
+  it('admin_consults は admin_units の件数 + session_idを持たない管理AI行(row_units)を合算する', () => {
+    const sql = aggregationSql();
+    expect(sql).toMatch(
+      /\(SELECT COUNT\(\*\) FROM admin_units\)\s*\n\s*\+ \(SELECT COALESCE\(SUM\(units\), 0\) FROM row_units WHERE feature_used = ANY\(\$5::text\[\]\)\)/
+    );
+  });
+
+  // billable_units / billed_units_weighted にも admin_units 分が合算されていること
+  // (合算し忘れると、admin_unitsで数えた相談が billedQuantity に反映されない)。
+  it('billable_units / billed_units_weighted は admin_units の分も合算する', () => {
+    const sql = aggregationSql();
+    expect(sql).toMatch(/\(SELECT COUNT\(\*\) FROM admin_units\)\s*\)::integer AS billable_units/);
+    expect(sql).toMatch(
+      /\(SELECT COALESCE\(SUM\(multiplier\), 0\) FROM admin_units\)\s*\)::numeric AS billed_units_weighted/
+    );
   });
 });
 

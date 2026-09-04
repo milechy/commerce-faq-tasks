@@ -2,6 +2,7 @@
 // Phase B-Admin: POST /v1/admin/agent/chat
 
 import type { Express, Request, Response } from 'express';
+import { createHash } from 'node:crypto';
 import { Pool } from 'pg';
 import { z } from 'zod';
 import { supabaseAuthMiddleware } from '../../../admin/http/supabaseAuthMiddleware';
@@ -11,6 +12,11 @@ import { executeToolCall, parseBooleanArg } from './actionExecutor';
 import type { ActionResult, ActionCardPayload } from './actionExecutor';
 import { requiresConfirmation, WRITE_TOOL_RISK_TIERS } from './confirmPolicy';
 import { trackUsage } from '../../../lib/billing/usageTracker';
+import { queryTenantPlanResult } from '../../../lib/billing/planFeatures';
+import { getMonthRangeJst, isFreeAdAdminConsultQuotaExceeded, FREE_AD_MONTHLY_ADMIN_CONSULT_LIMIT } from '../../../lib/billing/planQuota';
+import { ADMIN_DIMENSION_FEATURES } from '../../../lib/billing/costCalculator';
+import { shiftToJstWallClock } from '../../../lib/date/jstOffset';
+import { getPool } from '../../../lib/db';
 import { recordAgentMetric, type AgentMetricInput } from '../../../lib/metrics/agentMetrics';
 import { recordAgentSettingsChange } from './agentAuditLog';
 import { GPT_OSS_120B, groqReasoningParams } from '../../../config/groqModels';
@@ -863,6 +869,21 @@ function messageIndicatesHumanApproval(message: string): boolean {
   return HUMAN_APPROVAL_INTENT.test(message);
 }
 
+// admin_agent の trackUsage 冪等キー。旧実装は `admin-agent-${sessionId}-${Date.now()}` で、
+// Date.now() を含むため再送・二重クリックのたびに別のrequestIdになり usage_logs の
+// ON CONFLICT (request_id) DO NOTHING が効かず二重計上されていた
+// (CLAUDE.md「request_id はリトライ・二重クリックで同じ値になる形式にする」)。
+// 同一ターンの再送は同じ値、別ターンは別の値になるよう、決定的な入力だけから組み立てる:
+//   - historyLength: 呼び出し側で組み立て済みの historyMessages.length をターン番号として使う
+//   - message: ユーザー入力のハッシュ。history を送らないクライアントでも、
+//     直前と異なるメッセージが同じターン番号に丸め込まれて同一requestIdへ潰れないようにする。
+//     sanitizedUserMessage(注入マーカー除去後)ではなく元の message を使う — どちらも決定的だが、
+//     「店主が実際に送った入力に対する計上」という意図をハッシュの入力に明示するため。
+function buildAdminAgentUsageRequestId(sessionId: string, historyLength: number, message: string): string {
+  const messageHash = createHash('sha256').update(message).digest('hex').slice(0, 8);
+  return `admin-agent-${sessionId}-${historyLength}-${messageHash}`;
+}
+
 // MAX_TOOL_HOPS到達後の強制まとめ呼び出し用。tools無しにしただけでは、モデルがまだ
 // ツールを呼びたい場合に "<function=...>" のような擬似構文をテキストとして出力することが
 // 実測で確認されたため、明示的に禁止する一文を最後に差し込む。
@@ -871,6 +892,108 @@ const WRAP_UP_NOTICE: GroqMessage = {
   content:
     'これ以上ツールは呼び出せません。ここまでの情報をもとに、自然な日本語の文章だけで回答してください（関数呼び出しの構文などは一切書かないでください）。',
 };
+
+// ---------------------------------------------------------------------------
+// free_ad の管理AI月次上限（S7, docs/ADMIN_AGENT_COST_REQUIREMENTS.md §4-1・§8）。
+//
+// 到達時はGroqを一切呼ばず(原価0)、正常系の分岐として案内文を返す
+// （CLAUDE.md 絶対にやってはいけないこと21。プラン起因の制限はエラーではない）。
+// 文言はストリーミング・非ストリーミング両経路で使い回すため、この定数1つにまとめる。
+// 「使いすぎです」「上限に達しました」「エラー」は使わず、制限ではなく状態として書く。
+const ADMIN_AGENT_FREE_AD_LIMIT_MESSAGE =
+  `今月のAIへのご相談は${FREE_AD_MONTHLY_ADMIN_CONSULT_LIMIT}件のご利用となりました。` +
+  `無料プランでは今月分はここまでとなりますが、来月になるとまたご相談いただけます。` +
+  `今月中にもっと相談したい場合は、プランを変更するとそのままお使いいただけます。`;
+
+/**
+ * 当月(JST暦月)の管理AI相談件数と、今日(JST暦日)この session_id が既に計上済みかを
+ * 1クエリで取得する。相談の数え方は (session_id, JST暦日) のDISTINCT
+ * (docs/ADMIN_AGENT_COST_REQUIREMENTS.md §4-1)。
+ *
+ * created_at の月範囲比較は getMonthRangeJst が返す UTC 境界をそのまま使う
+ * （CLAUDE.md 絶対にやってはいけないこと16「AT TIME ZONE を片側だけ書く」を避けるため、
+ * 境界比較には AT TIME ZONE を使わない）。AT TIME ZONE は JST 暦日を取り出す
+ * （グルーピング用の日付キーを作る）ためだけに使う。
+ */
+async function countFreeAdAdminConsults(
+  db: Pool,
+  tenantId: string,
+  sessionId: string,
+  now: Date,
+): Promise<{ count: number; countedToday: boolean }> {
+  const { monthStart, monthEnd } = getMonthRangeJst(now);
+  const shifted = shiftToJstWallClock(now);
+  const todayJst =
+    `${shifted.getUTCFullYear()}-` +
+    `${String(shifted.getUTCMonth() + 1).padStart(2, '0')}-` +
+    `${String(shifted.getUTCDate()).padStart(2, '0')}`;
+
+  const result = await db.query<{ count: string; counted_today: boolean }>(
+    `WITH admin_consults AS (
+       SELECT DISTINCT session_id, (created_at AT TIME ZONE 'Asia/Tokyo')::date AS jst_date
+         FROM usage_logs
+        WHERE tenant_id = $1
+          AND feature_used = ANY($2::text[])
+          AND billable = true
+          AND session_id IS NOT NULL
+          AND created_at >= $3
+          AND created_at <  $4
+     )
+     SELECT
+       (SELECT COUNT(*) FROM admin_consults)::text AS count,
+       EXISTS(
+         SELECT 1 FROM admin_consults WHERE session_id = $5 AND jst_date = $6::date
+       ) AS counted_today`,
+    [tenantId, ADMIN_DIMENSION_FEATURES, monthStart, monthEnd, sessionId, todayJst],
+  );
+
+  const row = result.rows[0];
+  return { count: Number(row?.count ?? 0), countedToday: Boolean(row?.counted_today) };
+}
+
+/**
+ * free_ad プランの管理AI月次上限に到達しているか。到達していても、同じ相談
+ * (同一 session_id × 今日)が既に計上済みなら継続を許す — 返事の途中で打ち切ると
+ * 「途中で切れた」体験になるため（呼び出し元はこの結果に応じてGroqを呼ぶ前に打ち切る）。
+ *
+ * ★プラン解決に queryTenantPlan(db, tenantId) も getTenantPlan(tenantId) も使わない★
+ * どちらも「機能ゲート用の fail-safe」（DB例外・plan列null・未知の文字列・テナント不在を
+ * 例外を投げずに最も制限の強い 'free_ad' へ丸める）を内蔵している。ここは向きが逆で、
+ * 「制限をかけてよいか」ではなく「有料テナントを誤って止めないか」が主眼
+ * （CLAUDE.md「fail-safe の向きは用途ごとに逆であり、統合しない」）。
+ * queryTenantPlan/getTenantPlan をそのまま使うと、tenants への SELECT が一瞬失敗しただけで
+ * Growth のテナントが free_ad 扱いになり、下の集計クエリが生きていれば実際に遮断されてしまう
+ * （catch で 'free_ad' に丸められるため、下の try/catch の fail-open が発火しない）。
+ * queryTenantPlanResult は DB例外・未確定(未知文字列・null・テナント不在)を
+ * すべて null で返す（free_ad に丸めない）ため、null も「free_ad と確定しなかった」
+ * として下の `plan !== 'free_ad'` で止めない側に倒れる。
+ * getPool() を渡すのは、注入された db（テストの mockQuery キュー）を消費させないため
+ * — actionExecutor.ts の各ツールが都度 queryTenantPlan(db, tenantId) を叩くのとは
+ * 別チャネルにする。60秒キャッシュ付き getTenantPlan は上記の理由で使わない
+ * （この経路は店主の相談＝低トラフィックで、主キー1本のSELECTなのでキャッシュなしを許容する）。
+ *
+ * fail-open: 集計クエリが失敗した場合も false(止めない)を返す。
+ * 計測の失敗で店主の相談を止めない、という既存の fire-and-forget 方針と同じ考え方。
+ * free_ad 以外のプランは常に false（既存動作は一切変えない）。
+ */
+async function isAdminAgentFreeAdLimitReached(
+  db: Pool,
+  tenantId: string,
+  sessionId: string,
+  now: Date = new Date(),
+): Promise<boolean> {
+  try {
+    const plan = await queryTenantPlanResult(getPool(), tenantId);
+    if (plan !== 'free_ad') return false; // null(判定不能)もここで止めない側に倒れる
+
+    const { count, countedToday } = await countFreeAdAdminConsults(db, tenantId, sessionId, now);
+    if (countedToday) return false;
+    return isFreeAdAdminConsultQuotaExceeded(count);
+  } catch (err) {
+    logger.warn('[admin-agent] free_ad admin consult quota check failed', err);
+    return false;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // ルート登録
@@ -945,6 +1068,32 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
     const humanApprovedThisRequest = messageIndicatesHumanApproval(message);
 
     try {
+      // free_ad の管理AI月次上限(S7)。Groqを呼ぶ「前」に判定し、到達時は原価0で
+      // 正常系の案内文を返す。同一 session_id で今日既に計上済みの相談は継続を許す。
+      if (
+        effectiveTenantId &&
+        (await isAdminAgentFreeAdLimitReached(db, effectiveTenantId, sessionId))
+      ) {
+        logger.info('[admin-agent] free_ad monthly admin consult limit reached', { tenantId: effectiveTenantId });
+        if (parsed.data.stream === true) {
+          res.writeHead(200, {
+            'Content-Type': 'text/event-stream; charset=utf-8',
+            'Cache-Control': 'no-cache',
+            Connection: 'keep-alive',
+          });
+          res.write(
+            `event: done\ndata: ${JSON.stringify({
+              reply: ADMIN_AGENT_FREE_AD_LIMIT_MESSAGE,
+              actions: [],
+              answered_from: 'general',
+            })}\n\n`,
+          );
+          res.end();
+          return;
+        }
+        return res.json({ reply: ADMIN_AGENT_FREE_AD_LIMIT_MESSAGE, actions: [], answered_from: 'general' });
+      }
+
       const systemPrompt =
         `あなたはテナント管理AIエージェントです。テナントID "${effectiveTenantId}" の管理者をサポートします。` +
         `必要に応じてツールを呼び出して設定を確認・変更してください。回答は日本語で簡潔に行ってください。` +
@@ -1058,7 +1207,10 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
           if (effectiveTenantId) {
             trackUsage({
               tenantId: effectiveTenantId,
-              requestId: `admin-agent-${sessionId}-${Date.now()}`,
+              requestId: buildAdminAgentUsageRequestId(sessionId, historyMessages.length, message),
+              // 会話単位の課金(第3次元「管理AIの相談」)を成立させるには session_id が必須。
+              // 省略すると usage_logs から (session_id, JST暦日) の DISTINCT が集計できない。
+              sessionId,
               model: GPT_OSS_120B,
               inputTokens: totalPromptTokens,
               outputTokens: totalCompletionTokens,
@@ -1104,7 +1256,10 @@ export function registerAdminAgentRoutes(app: Express, db: Pool): void {
         if (!effectiveTenantId) return;
         trackUsage({
           tenantId: effectiveTenantId,
-          requestId: `admin-agent-${sessionId}-${Date.now()}`,
+          requestId: buildAdminAgentUsageRequestId(sessionId, historyMessages.length, message),
+          // 会話単位の課金(第3次元「管理AIの相談」)を成立させるには session_id が必須。
+          // 省略すると usage_logs から (session_id, JST暦日) の DISTINCT が集計できない。
+          sessionId,
           model: GPT_OSS_120B,
           inputTokens: totalPromptTokens,
           outputTokens: totalCompletionTokens,

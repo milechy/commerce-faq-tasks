@@ -24,8 +24,11 @@ import {
   GROWTH_TEXT_UNITS_ENTERPRISE_NUDGE_THRESHOLD,
 } from './planPricing';
 // 込み枠(基本料に含まれる利用量)の定義は planQuota.ts が唯一の出どころ。
-// 1000/30/3000/150 をここへ書き写さないこと(禁止6)。
+// 1000/30/3000/150/100/300 をここへ書き写さないこと(禁止6)。
 import { computeQuotaOverage, type QuotaOverage } from './planQuota';
+// 課金次元の宣言は costCalculator.ts の FEATURE_BILLING_DIMENSION が唯一の出どころ。
+// 'admin' 次元に属する feature_used 名をSQLパラメータとして使う(禁止6: 書き写さない)。
+import { ADMIN_DIMENSION_FEATURES } from './costCalculator';
 
 /** 環境変数から LemonSlice 月額固定費(JPY)を取得。未設定/0 なら按分課金は無効。 */
 export function getLemonsliceMonthlyFeeJpy(): number {
@@ -443,6 +446,13 @@ export interface ExpectedBilling {
    * 込み枠の差し引き前・プラン倍率の適用前。
    */
   avatarMinutes: number;
+  /**
+   * 管理AIへの相談の**生の**件数(込み枠の差し引き前・プラン倍率の適用前)。
+   *
+   * 数え方は `(session_id, JST暦日)` の DISTINCT(admin_units)＋ session_id を持たない
+   * admin行(1行=1単位、取りこぼし救済)の合計。詳細は computeExpectedBilling 本体のコメント参照。
+   */
+  adminConsults: number;
 }
 
 /**
@@ -569,6 +579,8 @@ export async function computeExpectedBilling(
      ),
      -- 行単位で数える分。会話に紐付かないチャット行(migration 適用前の既存行)も
      -- ここへ落ちて従来どおり 1行=1単位 になる（黙って請求から消さない）。
+     -- 管理AI(ADMIN_DIMENSION_FEATURES)かつ session_id を持つ行は admin_units 側で
+     -- 数えるため、二重計上を避けるためここから除外する(下記 admin_units 参照)。
      row_units AS (
        SELECT
          r.feature_used,
@@ -581,14 +593,35 @@ export async function computeExpectedBilling(
          COALESCE(r.plan_multiplier, $4::numeric) AS multiplier
          FROM billable_rows r
         WHERE NOT (r.feature_used = 'chat' AND r.session_id IS NOT NULL)
+          AND NOT (r.feature_used = ANY($5::text[]) AND r.session_id IS NOT NULL)
+     ),
+     -- 管理AIへの相談を数える分。1相談 = (session_id, JST暦日) の DISTINCT。
+     --
+     -- ★暦日で区切る理由★ Copilot UI の session_id はクライアント制御でリロードを
+     -- 跨いで生き続けるため、session_id だけでグルーピングすると月1件に潰れて
+     -- 過少請求になる(docs/ADMIN_AGENT_COST_REQUIREMENTS.md §4-1)。
+     --
+     -- ★AT TIME ZONE の向き(禁止16の誤適用を避ける)★
+     -- created_at は timestamptz なので AT TIME ZONE 'Asia/Tokyo' は「JSTの壁時計
+     -- 日付を取り出す」ための一方向の変換であり、期間の絞り込み($2/$3)は呼び出し元が
+     -- 渡すUTC境界のままで正しい。ここでの変換は集計キー(暦日)の算出にのみ使う。
+     admin_units AS (
+       SELECT DISTINCT ON (r.session_id, (r.created_at AT TIME ZONE 'Asia/Tokyo')::date)
+              COALESCE(r.plan_multiplier, $4::numeric) AS multiplier
+         FROM billable_rows r
+        WHERE r.feature_used = ANY($5::text[])
+          AND r.session_id IS NOT NULL
+        ORDER BY r.session_id, (r.created_at AT TIME ZONE 'Asia/Tokyo')::date, r.created_at, r.request_id
      )
      SELECT
        (SELECT COUNT(*) FROM billable_rows)::integer AS total_requests,
        (SELECT COALESCE(SUM(cost_total_cents), 0) FROM billable_rows)::integer AS total_cost_cents,
        ( (SELECT COALESCE(SUM(units), 0) FROM row_units)
-       + (SELECT COUNT(*) FROM conversation_units) )::integer AS billable_units,
+       + (SELECT COUNT(*) FROM conversation_units)
+       + (SELECT COUNT(*) FROM admin_units) )::integer AS billable_units,
        ( (SELECT COALESCE(SUM(units * multiplier), 0) FROM row_units)
-       + (SELECT COALESCE(SUM(multiplier), 0) FROM conversation_units) )::numeric AS billed_units_weighted,
+       + (SELECT COALESCE(SUM(multiplier), 0) FROM conversation_units)
+       + (SELECT COALESCE(SUM(multiplier), 0) FROM admin_units) )::numeric AS billed_units_weighted,
        (SELECT COUNT(*) FILTER (WHERE plan_multiplier IS NULL) FROM billable_rows)::integer AS unstamped_rows,
        -- 込み枠(planQuota.ts)を差し引くための「生の」次元別数量。倍率は掛けない。
        -- テキスト = 会話数 + session_id を持たない chat 行(1行=1単位のフォールバック)
@@ -601,8 +634,12 @@ export async function computeExpectedBilling(
        + (SELECT COALESCE(SUM(units), 0) FROM row_units WHERE feature_used IN ('chat', 'agent_search')) )::integer AS text_units,
        -- アバター = 分。avatar(ミリ秒) と anam_session(秒) は同じ「時間」の次元なので合算する。
        (SELECT COALESCE(SUM(units), 0) FROM row_units
-         WHERE feature_used IN ('avatar', 'anam_session'))::integer AS avatar_minutes`,
-    [tenantId, startDate, endDate, fallbackMultiplier]
+         WHERE feature_used IN ('avatar', 'anam_session'))::integer AS avatar_minutes,
+       -- 管理AI = admin_units の件数 + session_id を持たない管理AI行(1行=1単位のフォールバック。
+       -- 'text_units' が session_id を持たない chat 行を row_units から救済するのと同じ形)。
+       ( (SELECT COUNT(*) FROM admin_units)
+       + (SELECT COALESCE(SUM(units), 0) FROM row_units WHERE feature_used = ANY($5::text[])) )::integer AS admin_consults`,
+    [tenantId, startDate, endDate, fallbackMultiplier, ADMIN_DIMENSION_FEATURES]
   );
 
   const totalRequests: number = aggResult.rows[0].total_requests;
@@ -634,10 +671,11 @@ export async function computeExpectedBilling(
   // 旧スキーマ相当のモックDBが列を返さない場合に NaN を撒かないよう 0 に倒す。
   const textUnits: number = aggResult.rows[0].text_units ?? 0;
   const avatarMinutes: number = aggResult.rows[0].avatar_minutes ?? 0;
+  const adminConsults: number = aggResult.rows[0].admin_consults ?? 0;
 
   return {
     totalRequests, totalCostCents, billableUnits, unstampedRows, billedQuantity, fallbackMultiplier,
-    textUnits, avatarMinutes,
+    textUnits, avatarMinutes, adminConsults,
   };
 }
 
@@ -1023,7 +1061,7 @@ async function _reportTenantUsage(
 
   // 込み枠を持つプラン(standard/growth)だけが (B) の経路へ分岐する。
   // starter / free_ad / enterprise / 未知プランは null が返り、従来経路のまま。
-  const overage = computeQuotaOverage(plan, expected.textUnits, expected.avatarMinutes);
+  const overage = computeQuotaOverage(plan, expected.textUnits, expected.avatarMinutes, expected.adminConsults);
   if (overage) {
     // LB-4: Growthの月間テキスト会話数が実効単価逆転点(GROWTH_TEXT_UNITS_ENTERPRISE_NUDGE_THRESHOLD)を
     // 超えたら、請求は変えずEnterprise個別見積りへの案内通知だけ出す。best-effortなので
@@ -1124,8 +1162,12 @@ async function _reportQuotaOverageUsage(
   // 周期に依らず同一。ここでは基本料へ送らないので既定(monthly)で引いてよい。
   const { text: textPriceId, avatarOverage: avatarPriceId } = priceResult.prices;
 
+  // ★テキストへ送る数量は overage.textPriceQuantity(= テキスト超過 + 管理AI超過)★
+  // 管理AIの相談はテキスト会話と同じStripe priceを流用する(単価テーブルを新設しない。
+  // docs/ADMIN_AGENT_COST_REQUIREMENTS.md §4-1)。dimension値は 'text' のまま
+  // (新しいdimension値は作らない。請求書上は1行に合算されるのが意図)。
   const dimensions: Array<{ dimension: 'text' | 'avatar'; priceId: string | undefined; quantity: number }> = [
-    { dimension: 'text',   priceId: textPriceId,   quantity: overage.textConversations },
+    { dimension: 'text',   priceId: textPriceId,   quantity: overage.textPriceQuantity },
     { dimension: 'avatar', priceId: avatarPriceId, quantity: overage.avatarMinutes },
   ];
 
@@ -1139,7 +1181,8 @@ async function _reportQuotaOverageUsage(
   }
   if (pending.length === 0) {
     logger.debug(
-      { tenantId, periodYyyyMm, textOverage: overage.textConversations, avatarOverage: overage.avatarMinutes },
+      { tenantId, periodYyyyMm, textOverage: overage.textConversations, adminOverage: overage.adminConsults,
+        avatarOverage: overage.avatarMinutes },
       '[stripeSync] same overage already reported on both dimensions, skipping'
     );
     return;
@@ -1186,8 +1229,8 @@ async function _reportQuotaOverageUsage(
   logger.info(
     { tenantId, periodYyyyMm, currentPlan: plan,
       totalRequests: expected.totalRequests, totalCostCents: expected.totalCostCents,
-      textUnits: expected.textUnits, avatarMinutes: expected.avatarMinutes,
-      textOverage: overage.textConversations, avatarOverage: overage.avatarMinutes },
+      textUnits: expected.textUnits, avatarMinutes: expected.avatarMinutes, adminConsults: expected.adminConsults,
+      textOverage: overage.textConversations, adminOverage: overage.adminConsults, avatarOverage: overage.avatarMinutes },
     '[stripeSync] quota overage reported to Stripe'
   );
 }

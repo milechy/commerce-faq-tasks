@@ -25,6 +25,9 @@ import {
   LEMONSLICE_AVATAR_REGISTRATION_COST_USD,
   NON_BILLABLE_FEATURES,
   LIVEKIT_ROOM_TOKEN_MODEL,
+  FEATURE_BILLING_DIMENSION,
+  TEXT_DIMENSION_FEATURES,
+  ADMIN_DIMENSION_FEATURES,
 } from './costCalculator';
 
 // ---------------------------------------------------------------------------
@@ -995,6 +998,49 @@ describe('NON_BILLABLE_FEATURES', () => {
     expect(NON_BILLABLE_FEATURES.has('admin_agent')).toBe(false);
     expect(NON_BILLABLE_FEATURES.has('avatar_config_image')).toBe(false);
     expect(NON_BILLABLE_FEATURES.has('premium_avatar_generation')).toBe(false);
+  });
+
+  // S4(GID 1218086647623729系): FEATURE_BILLING_DIMENSION の 'none' エントリから
+  // 導出するようになった後も、従来と同じ5要素のままであることを固定する。
+  it('FEATURE_BILLING_DIMENSIONから導出した後も従来と同じ5要素のまま', () => {
+    expect(NON_BILLABLE_FEATURES.size).toBe(5);
+    expect([...NON_BILLABLE_FEATURES].sort()).toEqual([
+      'admin_ai_assist',
+      'admin_engagement_suggest',
+      'admin_option_estimator',
+      'admin_tuning',
+      'sai_agent',
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S4: FEATURE_BILLING_DIMENSION 定数チェック(管理AI原価の課金・可視化)
+// ---------------------------------------------------------------------------
+describe('FEATURE_BILLING_DIMENSION', () => {
+  it('admin_agent(管理AIへの相談)は"admin"次元', () => {
+    expect(FEATURE_BILLING_DIMENSION.admin_agent).toBe('admin');
+  });
+
+  it('chat / agent_search は"text"次元', () => {
+    expect(FEATURE_BILLING_DIMENSION.chat).toBe('text');
+    expect(FEATURE_BILLING_DIMENSION.agent_search).toBe('text');
+  });
+
+  it('avatar / anam_session は"avatar"次元', () => {
+    expect(FEATURE_BILLING_DIMENSION.avatar).toBe('avatar');
+    expect(FEATURE_BILLING_DIMENSION.anam_session).toBe('avatar');
+  });
+
+  it('NON_BILLABLE_FEATURESの5機能は"none"次元', () => {
+    for (const feature of NON_BILLABLE_FEATURES) {
+      expect(FEATURE_BILLING_DIMENSION[feature as keyof typeof FEATURE_BILLING_DIMENSION]).toBe('none');
+    }
+  });
+
+  it('TEXT_DIMENSION_FEATURES / ADMIN_DIMENSION_FEATURES はFEATURE_BILLING_DIMENSIONから導出される', () => {
+    expect([...TEXT_DIMENSION_FEATURES].sort()).toEqual(['agent_search', 'chat']);
+    expect(ADMIN_DIMENSION_FEATURES).toEqual(['admin_agent']);
   });
 });
 

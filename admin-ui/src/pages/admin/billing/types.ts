@@ -94,6 +94,23 @@ export interface BillingQuota {
     includedMinutes: number | null;
     overageMinutes: number;
   };
+  /** 管理AIへの相談(Copilot UI)。単位は相談件数((session_id, JST暦日)のDISTINCT)。 */
+  admin: {
+    used: number;
+    /** 込み枠(相談件数)。null=このプランに込み枠という概念が無い。 */
+    included: number | null;
+    overage: number;
+  };
   /** free_ad のときだけ非null。 */
-  freeAd: { used: number; limit: number; remaining: number } | null;
+  freeAd: {
+    used: number;
+    limit: number;
+    remaining: number;
+    /** free_ad の管理AI月次上限の当月消費件数。 */
+    adminUsed: number;
+    /** free_ad の管理AI月次上限。 */
+    adminLimit: number;
+    /** 上限までの残数。 */
+    adminRemaining: number;
+  } | null;
 }

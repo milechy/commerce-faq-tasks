@@ -5,7 +5,16 @@ import type { DailyUsage } from "./types";
 // PR-5(2026-08-25収益監査): costCalculator.ts由来のUSDセントを無変換のまま¥表示していた
 // (禁止48違反)。為替換算は持ち込まず、実態通り$表示に直す。実際にStripeへ請求される
 // 円建て金額(JPYはStripe上ゼロ小数通貨)は下のfmtJpyで別に表示する。
+//
+// S5(管理AI原価の課金・可視化): 整数丸めのみだと$1未満の原価が一律$0に潰れ、
+// 「利用がある」と「利用が無い(=0)」を区別できなかった(CLAUDE.md禁止48・
+// docs/ADMIN_AGENT_COST_REQUIREMENTS.md §8)。管理系の費目は数セント〜十数セント
+// が常態のため、$1未満かつ0より大きい原価だけは小数第2位まで残す。$1以上の
+// 既存表示(丸め)は変えない。
 export function fmtCents(cents: number): string {
+  if (cents > 0 && cents < 100) {
+    return `$${(cents / 100).toFixed(2)}`;
+  }
   return `$${Math.round(cents / 100).toLocaleString("en-US")}`;
 }
 
