@@ -3644,6 +3644,9 @@ function BillingSummaryCard({ card }: { card: Extract<Card, { kind: "billingSumm
           {quota.freeAd ? (
             <>
               <BillingQuotaBar label="会話数" used={quota.freeAd.used} included={quota.freeAd.limit} unit="会話" />
+              {/* §8: 込み枠内は黙る。バーは常設だが、警告色(BillingQuotaBar内部の閾値判定)は
+                  上限に近い/超えたときだけ自然に付く。件数を能動的な文言で報告しない。 */}
+              <BillingQuotaBar label="管理AIへのご相談" used={quota.freeAd.adminUsed} included={quota.freeAd.adminLimit} unit="件" />
               {quota.freeAd.remaining === 0 && (
                 <div style={{ fontSize: 12.5, color: "#f87171", fontWeight: 700 }}>
                   今月の上限に到達しています。新しい会話は翌月まで開始できません。
@@ -3654,7 +3657,10 @@ function BillingSummaryCard({ card }: { card: Extract<Card, { kind: "billingSumm
             <>
               <BillingQuotaBar label="テキスト会話" used={quota.text.used} included={quota.text.included} unit="会話" />
               <BillingQuotaBar label="アバター利用" used={quota.avatar.usedMinutes} included={quota.avatar.includedMinutes} unit="分" />
-              {(quota.text.overage > 0 || quota.avatar.overageMinutes > 0) && (
+              {quota.admin.included !== null && (
+                <BillingQuotaBar label="管理AIへのご相談" used={quota.admin.used} included={quota.admin.included} unit="件" />
+              )}
+              {(quota.text.overage > 0 || quota.avatar.overageMinutes > 0 || quota.admin.overage > 0) && (
                 <div style={{ fontSize: 12, color: "#fbbf24" }}>
                   込み枠を超過しています(超過分は従量で加算されます)
                 </div>

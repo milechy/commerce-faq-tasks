@@ -727,7 +727,19 @@ export type BillingSummaryCardPayload = {
     plan: string | null;
     text: { used: number; included: number | null; overage: number };
     avatar: { usedMinutes: number; includedMinutes: number | null; overageMinutes: number };
-    freeAd: { used: number; limit: number; remaining: number } | null;
+    /** 管理AIへの相談(Copilot UI)。単位は相談件数((session_id, JST暦日)のDISTINCT)。 */
+    admin: { used: number; included: number | null; overage: number };
+    freeAd: {
+      used: number;
+      limit: number;
+      remaining: number;
+      /** free_ad の管理AI月次上限の当月消費件数。 */
+      adminUsed: number;
+      /** free_ad の管理AI月次上限。 */
+      adminLimit: number;
+      /** 上限までの残数。 */
+      adminRemaining: number;
+    } | null;
   } | null;
 };
 
@@ -4945,6 +4957,7 @@ export async function executeToolCall(
                 plan: quota.plan,
                 text: quota.text,
                 avatar: quota.avatar,
+                admin: quota.admin,
                 freeAd: quota.freeAd,
               }
             : null,

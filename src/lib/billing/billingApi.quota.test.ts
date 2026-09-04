@@ -20,11 +20,13 @@ jest.mock("./stripeSync", () => ({
 
 const mockComputeExpectedBilling = computeExpectedBilling as jest.Mock;
 
-function billingResult(overrides: Partial<{ textUnits: number; avatarMinutes: number }> = {}) {
+function billingResult(
+  overrides: Partial<{ textUnits: number; avatarMinutes: number; adminConsults: number }> = {},
+) {
   return {
     totalRequests: 0, totalCostCents: 0, billableUnits: 0, unstampedRows: 0,
     billedQuantity: 0, fallbackMultiplier: 1,
-    textUnits: 0, avatarMinutes: 0,
+    textUnits: 0, avatarMinutes: 0, adminConsults: 0,
     ...overrides,
   };
 }
@@ -53,29 +55,37 @@ describe("fetchBillingQuota", () => {
     expect(result).toBeNull();
   });
 
-  it("free_ad: text/avatarの込み枠はnull、freeAdに使用数・上限・残数を返す", async () => {
-    mockComputeExpectedBilling.mockResolvedValue(billingResult({ textUnits: 150 }));
+  it("free_ad: text/avatar/adminの込み枠はnull、freeAdに使用数・上限・残数を返す", async () => {
+    mockComputeExpectedBilling.mockResolvedValue(billingResult({ textUnits: 150, adminConsults: 12 }));
     const result = await fetchBillingQuota(makeDb("free_ad"), "tenant-a");
 
     expect(result?.text).toEqual({ used: 150, included: null, overage: 0 });
     expect(result?.avatar).toEqual({ usedMinutes: 0, includedMinutes: null, overageMinutes: 0 });
-    expect(result?.freeAd).toEqual({ used: 150, limit: 200, remaining: 50 });
+    expect(result?.admin).toEqual({ used: 12, included: null, overage: 0 });
+    expect(result?.freeAd).toEqual({
+      used: 150, limit: 200, remaining: 50,
+      adminUsed: 12, adminLimit: 30, adminRemaining: 18,
+    });
   });
 
   // ★上限到達後もマイナスの残数を出さない★ 「あと-5会話」のような表示は
   // 直感に反するテナント向けUI事故になる。
-  it("free_ad: 上限超過時は remaining が0で止まる(負数にならない)", async () => {
-    mockComputeExpectedBilling.mockResolvedValue(billingResult({ textUnits: 250 }));
+  it("free_ad: 上限超過時は remaining が0で止まる(負数にならない、会話・管理AIの両方)", async () => {
+    mockComputeExpectedBilling.mockResolvedValue(billingResult({ textUnits: 250, adminConsults: 40 }));
     const result = await fetchBillingQuota(makeDb("free_ad"), "tenant-a");
 
-    expect(result?.freeAd).toEqual({ used: 250, limit: 200, remaining: 0 });
+    expect(result?.freeAd).toEqual({
+      used: 250, limit: 200, remaining: 0,
+      adminUsed: 40, adminLimit: 30, adminRemaining: 0,
+    });
   });
 
-  it("starter: 込み枠という概念自体が無い(included=null, overage=0, freeAd=null)", async () => {
-    mockComputeExpectedBilling.mockResolvedValue(billingResult({ textUnits: 500 }));
+  it("starter: 込み枠という概念自体が無い(included=null, overage=0, freeAd=null。管理AIも同様)", async () => {
+    mockComputeExpectedBilling.mockResolvedValue(billingResult({ textUnits: 500, adminConsults: 20 }));
     const result = await fetchBillingQuota(makeDb("starter"), "tenant-a");
 
     expect(result?.text).toEqual({ used: 500, included: null, overage: 0 });
+    expect(result?.admin).toEqual({ used: 20, included: null, overage: 0 });
     expect(result?.freeAd).toBeNull();
   });
 
@@ -84,17 +94,30 @@ describe("fetchBillingQuota", () => {
     const result = await fetchBillingQuota(makeDb("enterprise"), "tenant-a");
 
     expect(result?.text).toEqual({ used: 99999, included: null, overage: 0 });
+    expect(result?.admin).toEqual({ used: 0, included: null, overage: 0 });
     expect(result?.plan).toBe("enterprise");
   });
 
-  describe("standard(込み枠1,000会話/30分)", () => {
+  describe("standard(込み枠1,000会話/30分/管理AI100件)", () => {
     it("込み枠内なら overage=0", async () => {
-      mockComputeExpectedBilling.mockResolvedValue(billingResult({ textUnits: 800, avatarMinutes: 20 }));
+      mockComputeExpectedBilling.mockResolvedValue(
+        billingResult({ textUnits: 800, avatarMinutes: 20, adminConsults: 90 }),
+      );
       const result = await fetchBillingQuota(makeDb("standard"), "tenant-a");
 
       expect(result?.text).toEqual({ used: 800, included: 1000, overage: 0 });
       expect(result?.avatar).toEqual({ usedMinutes: 20, includedMinutes: 30, overageMinutes: 0 });
+      expect(result?.admin).toEqual({ used: 90, included: 100, overage: 0 });
       expect(result?.freeAd).toBeNull();
+    });
+
+    it("管理AIの相談だけ込み枠を超えた分が overage に出る", async () => {
+      mockComputeExpectedBilling.mockResolvedValue(
+        billingResult({ textUnits: 800, avatarMinutes: 20, adminConsults: 130 }),
+      );
+      const result = await fetchBillingQuota(makeDb("standard"), "tenant-a");
+
+      expect(result?.admin).toEqual({ used: 130, included: 100, overage: 30 });
     });
 
     it("込み枠ちょうどなら overage=0(境界)", async () => {
@@ -124,12 +147,15 @@ describe("fetchBillingQuota", () => {
     });
   });
 
-  it("growth: 込み枠(3,000会話/150分)がstandardと別の数値で適用される", async () => {
-    mockComputeExpectedBilling.mockResolvedValue(billingResult({ textUnits: 3100, avatarMinutes: 160 }));
+  it("growth: 込み枠(3,000会話/150分/管理AI300件)がstandardと別の数値で適用される", async () => {
+    mockComputeExpectedBilling.mockResolvedValue(
+      billingResult({ textUnits: 3100, avatarMinutes: 160, adminConsults: 320 }),
+    );
     const result = await fetchBillingQuota(makeDb("growth"), "tenant-a");
 
     expect(result?.text).toEqual({ used: 3100, included: 3000, overage: 100 });
     expect(result?.avatar).toEqual({ usedMinutes: 160, includedMinutes: 150, overageMinutes: 10 });
+    expect(result?.admin).toEqual({ used: 320, included: 300, overage: 20 });
   });
 
   it("プランがnull(未確定)でも例外を投げず、込み枠なし扱いで返す", async () => {

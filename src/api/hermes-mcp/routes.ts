@@ -189,8 +189,8 @@ export function registerHermesMcpRoutes(app: Express): void {
       }
       const plan = planRow.rows[0]!.plan ?? null;
 
-      const { textUnits, avatarMinutes } = await computeExpectedBilling(pool, tenantId, from, to, plan);
-      const s = computeUpsellSignals({ plan, textUnits, avatarMinutes });
+      const { textUnits, avatarMinutes, adminConsults } = await computeExpectedBilling(pool, tenantId, from, to, plan);
+      const s = computeUpsellSignals({ plan, textUnits, avatarMinutes, adminConsults });
 
       return res.json({
         tenant_id: tenantId,

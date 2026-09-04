@@ -112,6 +112,38 @@ export function isFreeAdMonthlyQuotaExceeded(
 }
 
 // ---------------------------------------------------------------------------
+// free_ad の管理AI(Copilot UI)月次上限。
+//
+// D3(2026-09-04, docs/ADMIN_AGENT_COST_REQUIREMENTS.md)により free_ad でも
+// 管理AIをゲートで塞がず開放する(アップグレード動線)が、原価はR2C負担のため
+// 禁止39(原価が当社負担に反転する経路の上限)により天井が要る。
+// 原価¥2〜3/相談 × 30件 = 月¥60〜90のR2C負担。上のFREE_AD_MONTHLY_CONVERSATION_LIMIT
+// と同じ作法(サーバ側で保持、超えたら止める・従量請求はしない)。
+// ---------------------------------------------------------------------------
+
+export const FREE_AD_MONTHLY_ADMIN_CONSULT_LIMIT = 30;
+
+/**
+ * 当月の既存管理AI相談件数(このリクエストを記録する「前」の件数)が上限に達しているかを
+ * 判定する。相談の数え方(session_id, JST暦日のDISTINCT)は呼び出し元が担う——
+ * このファイルは数値比較のみの純関数。
+ *
+ * @throws currentMonthAdminConsultCount / limit が負の場合
+ */
+export function isFreeAdAdminConsultQuotaExceeded(
+  currentMonthAdminConsultCount: number,
+  limit: number = FREE_AD_MONTHLY_ADMIN_CONSULT_LIMIT,
+): boolean {
+  if (currentMonthAdminConsultCount < 0) {
+    throw new Error(`Invalid currentMonthAdminConsultCount: ${currentMonthAdminConsultCount}`);
+  }
+  if (limit < 0) {
+    throw new Error(`Invalid limit: ${limit}`);
+  }
+  return currentMonthAdminConsultCount >= limit;
+}
+
+// ---------------------------------------------------------------------------
 // 有料プランの「込み枠」(基本料に含まれる利用量)。
 //
 // 上の FREE_AD_MONTHLY_REQUEST_LIMIT が「超えたら止める上限」なのに対し、
@@ -130,12 +162,14 @@ export function isFreeAdMonthlyQuotaExceeded(
 // 単価をここに複製すると、Stripe 側を変えたときに黙ってドリフトする。
 // ---------------------------------------------------------------------------
 
-/** 1プラン分の込み枠。単位はテキスト=会話数、アバター=分。 */
+/** 1プラン分の込み枠。単位はテキスト=会話数、アバター=分、管理AI=相談件数。 */
 export interface PlanIncludedQuota {
   /** 基本料に含まれるテキスト会話数(/月)。 */
   textConversations: number;
   /** 基本料に含まれるアバター利用分数(/月)。 */
   avatarMinutes: number;
+  /** 基本料に含まれる管理AIへの相談件数(/月)。 */
+  adminConsults: number;
 }
 
 /**
@@ -147,10 +181,14 @@ export interface PlanIncludedQuota {
  *   - enterprise… 個別交渉。自動化しない。
  * したがって未知プランを starter へ倒す planMultiplier とは違い、
  * ここは「無い」を null で返す(勝手に枠を与えると請求漏れになる)。
+ *
+ * ★adminConsults(管理AIへの相談)は docs/ADMIN_AGENT_COST_REQUIREMENTS.md §4-2 の推奨値★
+ * 原価¥2〜3/相談を基準に、基本料に対する原価比率を約2.5%に揃えた暫定値であり、
+ * Stripe price 作成時に人間(hkobayashi)が確定させる。
  */
 export const PLAN_INCLUDED_QUOTAS: Record<string, PlanIncludedQuota> = {
-  standard: { textConversations: 1000, avatarMinutes: 30 },
-  growth:   { textConversations: 3000, avatarMinutes: 150 },
+  standard: { textConversations: 1000, avatarMinutes: 30, adminConsults: 100 },
+  growth:   { textConversations: 3000, avatarMinutes: 150, adminConsults: 300 },
 };
 
 /** プラン名から込み枠を引く。込み枠を持たないプラン(starter/free_ad/enterprise/未知)は null。 */
@@ -165,10 +203,21 @@ export function includedQuotaForPlan(plan: string | null | undefined): PlanInclu
 
 /** 込み枠を超えた分の数量。Stripe の従量 price へ送る絶対値そのもの。 */
 export interface QuotaOverage {
-  /** 込み枠超過のテキスト会話数。 */
+  /** 込み枠超過のテキスト会話数(表示用)。 */
   textConversations: number;
   /** 込み枠超過のアバター分数。 */
   avatarMinutes: number;
+  /** 込み枠超過の管理AI相談件数(表示用)。 */
+  adminConsults: number;
+  /**
+   * Stripe のテキストpriceへ送る唯一の数量 = textConversations + adminConsults。
+   *
+   * ★管理AIの相談はテキスト会話と同じ Stripe price を流用する(単価テーブルを新設しない)★
+   * (docs/ADMIN_AGENT_COST_REQUIREMENTS.md §4-1)。込み枠は別々に持つが、超過は同じ
+   * price へ合算して送るため、送信側(stripeSync.ts)と突合側(billingReconciliation.ts)が
+   * 別々にこの足し算をすると必ずズレる。だから足し算はここ1箇所だけで行う。
+   */
+  textPriceQuantity: number;
 }
 
 /**
@@ -183,16 +232,25 @@ export interface QuotaOverage {
  * アバターに至っては単価が倍率と逆向き(上位ほど安い)なので、掛けると向きごと壊れる
  * (CLAUDE.md 禁止56 / .claude/rules/billing.md §7)。
  * 単価を持つのは Stripe、数量を持つのはこのコード、という分担を崩さないこと。
+ *
+ * @param adminConsults 当月の管理AI相談件数(生。込み枠差し引き前)。
+ *   ★既定値を持たせない(必須引数)★ 呼び忘れを 0 に静かに丸めると、
+ *   管理AIの超過が永久に請求されない経路になり得るため、呼び出し元に明示させる。
  */
 export function computeQuotaOverage(
   plan: string | null | undefined,
   textConversations: number,
   avatarMinutes: number,
+  adminConsults: number,
 ): QuotaOverage | null {
   const quota = includedQuotaForPlan(plan);
   if (!quota) return null;
+  const textOverage = Math.max(0, textConversations - quota.textConversations);
+  const adminOverage = Math.max(0, adminConsults - quota.adminConsults);
   return {
-    textConversations: Math.max(0, textConversations - quota.textConversations),
-    avatarMinutes:     Math.max(0, avatarMinutes - quota.avatarMinutes),
+    textConversations: textOverage,
+    avatarMinutes:      Math.max(0, avatarMinutes - quota.avatarMinutes),
+    adminConsults:       adminOverage,
+    textPriceQuantity:   textOverage + adminOverage,
   };
 }

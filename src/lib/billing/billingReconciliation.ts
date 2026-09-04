@@ -86,7 +86,7 @@ export async function reconcileTenantPeriod(
   // 書かれた片方の次元だけを全体と比較することになり、**毎月かならず乖離と報告し続ける**
   // (CLAUDE.md 禁止50「壊れているときに何も言わない」の裏返しで、常に鳴り続けて
   // 誰も見なくなる方の失敗)。次元ごとに突き合わせる。
-  const overage = computeQuotaOverage(plan, expected.textUnits, expected.avatarMinutes);
+  const overage = computeQuotaOverage(plan, expected.textUnits, expected.avatarMinutes, expected.adminConsults);
   if (overage) {
     // 次元ごとに直近の送信成功行を引く。
     const sentByDimension = await db.query(
@@ -102,18 +102,23 @@ export async function reconcileTenantPeriod(
     const textReported = reported.get('text') ?? null;
     const avatarReported = reported.get('avatar') ?? null;
 
+    // ★送信側(stripeSync.ts の _reportQuotaOverageUsage)と同じ値で突き合わせる★
+    // 'text' dimension として実際にStripeへ送っているのは overage.textPriceQuantity
+    // (テキスト超過 + 管理AI超過の合算。管理AIはテキストpriceを流用するため)。
+    // ここを overage.textConversations と比べると、管理AIの超過がある月は
+    // 毎回「乖離あり」と誤報し続ける。
+    const matches =
+      textReported === overage.textPriceQuantity && avatarReported === overage.avatarMinutes;
+
     // 一度も送信していない次元は null。null と 0 を同一視しない
     // (「0と報告済み」と「まだ何も送っていない」は別の状態で、後者は調査対象)。
-    const matches =
-      textReported === overage.textConversations && avatarReported === overage.avatarMinutes;
-
     // 表示用の合計。どちらの次元がズレたかは matches=false の調査で
     // 上の2値を見れば分かるため、結果の形は純従量プランと共通のまま保つ。
     const anyReported = textReported !== null || avatarReported !== null;
     return {
       tenantId,
       periodYyyyMm,
-      expectedBilledQuantity: overage.textConversations + overage.avatarMinutes,
+      expectedBilledQuantity: overage.textPriceQuantity + overage.avatarMinutes,
       lastReportedQuantity: anyReported ? (textReported ?? 0) + (avatarReported ?? 0) : null,
       matches,
     };

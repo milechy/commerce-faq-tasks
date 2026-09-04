@@ -104,12 +104,13 @@ describe('reconcileTenantPeriod（込み枠プラン: 次元ごとに突合す�
     };
   }
 
-  /** Standard(込み枠 テキスト1,000会話 / アバター30分)のテナント。 */
-  const AGG = (textUnits: number, avatarMinutes: number) => () => ({
+  /** Standard(込み枠 テキスト1,000会話 / アバター30分 / 管理AI100件)のテナント。 */
+  const AGG = (textUnits: number, avatarMinutes: number, adminConsults = 0) => () => ({
     rows: [{
       total_requests: textUnits + avatarMinutes, total_cost_cents: 500,
       billable_units: textUnits + avatarMinutes, billed_units_weighted: '99999',
       unstamped_rows: 0, text_units: textUnits, avatar_minutes: avatarMinutes,
+      admin_consults: adminConsults,
     }],
   });
 
@@ -179,6 +180,36 @@ describe('reconcileTenantPeriod（込み枠プラン: 次元ごとに突合す�
     expect(result.expectedBilledQuantity).toBe(550);
     expect(result.expectedBilledQuantity).not.toBe(99999);
     expect(result.matches).toBe(true);
+  });
+
+  // ─────────────────────────────────────────────────────────────────────
+  // S3(管理AI原価の課金・可視化): 送信側(stripeSync.ts)は 'text' dimension へ
+  // overage.textPriceQuantity(= テキスト超過 + 管理AI超過)を送る。突合側も
+  // 同じ値と比べないと、管理AIの超過がある月は常に「乖離あり」と誤報し続ける。
+  // ─────────────────────────────────────────────────────────────────────
+  it('管理AIの相談超過はテキスト次元に合算されて突合される(送信側と同じ値)', async () => {
+    const db = makeDb({
+      'SELECT plan FROM tenants': () => ({ rows: [{ plan: 'standard' }] }),
+      // Standard 込み枠: テキスト1,000 / 管理AI100件 → text超過200 + admin超過50 = 250
+      'billed_units_weighted': AGG(1200, 0, 150),
+      "status = 'sent'": () => ({ rows: [
+        { dimension: 'text', billed_quantity: 250 },
+        { dimension: 'avatar', billed_quantity: 0 },
+      ] }),
+    });
+    const result = await reconcileTenantPeriod(db as any, mockLogger, 't1', '202603');
+    expect(result).toMatchObject({ expectedBilledQuantity: 250, lastReportedQuantity: 250, matches: true });
+  });
+
+  it('管理AIの超過を合算せずテキスト超過だけと比べると乖離になる(退行検知)', async () => {
+    const db = makeDb({
+      'SELECT plan FROM tenants': () => ({ rows: [{ plan: 'standard' }] }),
+      'billed_units_weighted': AGG(1200, 0, 150), // text超過200 + admin超過50
+      // 送信側は250を送っているのに、突合が200(テキストのみ)と比べると不一致になってしまう
+      "status = 'sent'": () => ({ rows: [{ dimension: 'text', billed_quantity: 200 }] }),
+    });
+    const result = await reconcileTenantPeriod(db as any, mockLogger, 't1', '202603');
+    expect(result.matches).toBe(false);
   });
 
   // 純従量プランは dimension 列を読まない = migration 未適用でも従来どおり突合できる。

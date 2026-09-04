@@ -138,6 +138,10 @@ d("computeExpectedBilling（実 Postgres に対する集計SQL実行）", () => 
       // アバター: anam_session 90秒 → CEIL(90/60) = 2分。
       textUnits: 211,
       avatarMinutes: 2,
+      // 管理AI(admin_agent等)の行をこのフィクスチャに一切投入していないため 0。
+      // admin_units CTE(session_id, JST暦日単位)自体の検証は下の
+      // 「管理AIへの相談(admin_units)」ブロックで別途行う。
+      adminConsults: 0,
     });
   });
 
@@ -169,6 +173,7 @@ d("computeExpectedBilling（実 Postgres に対する集計SQL実行）", () => 
       fallbackMultiplier: 1.5,
       textUnits: 0,
       avatarMinutes: 0,
+      adminConsults: 0, // 行が無いので admin_units / row_units とも0
     });
   });
 
@@ -702,6 +707,173 @@ d("computeExpectedBilling（実 Postgres に対する集計SQL実行）", () => 
     const result = await computeExpectedBilling(db, "t1", "2026-03-01", "2026-04-01", "growth");
     expect(result.textUnits).toBe(0);
     expect(result.billedQuantity).toBe(0);
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // 管理AIへの相談(admin_units) — 課金の第3次元(docs/ADMIN_AGENT_COST_REQUIREMENTS.md)。
+  //
+  // `DISTINCT ON (r.session_id, (r.created_at AT TIME ZONE 'Asia/Tokyo')::date)` は
+  // AT TIME ZONE と DISTINCT ON の実挙動に依存するため、モックDBでは一切検証できない
+  // (CLAUDE.md 禁止16「本番でのみズレ、数値はもっともらしく出る」の典型)。ここでは
+  // 実Postgresに対して実行し、特にJST暦日の境界(UTCで数えると壊れる形)を固定する。
+  // ───────────────────────────────────────────────────────────────────────────
+  it("同一session_idの管理AI相談が同じJST暦日に3件あれば1単位(ターン数ではなく相談数)", async () => {
+    await db.query(`
+      INSERT INTO usage_logs (tenant_id, request_id, session_id, feature_used, plan_multiplier, created_at)
+      VALUES
+        ('t1','m1','copilot-1','admin_agent', 1.5, '2026-03-10 09:00:00+00'),
+        ('t1','m2','copilot-1','admin_agent', 1.5, '2026-03-10 10:00:00+00'),
+        ('t1','m3','copilot-1','admin_agent', 1.5, '2026-03-10 11:00:00+00')
+    `);
+
+    const result = await computeExpectedBilling(db, "t1", "2026-03-01", "2026-04-01", "growth");
+    // 3ターンだが同一相談として1単位。ターン単位で数えると3になる(課題C: 長く
+    // 相談するほど高くなると、Copilot UIの利用そのものを避けさせてしまう)。
+    expect(result.adminConsults).toBe(1);
+    expect(result.billableUnits).toBe(1);
+    expect(result.billedQuantity).toBe(2); // ceil(1単位 × 1.5)
+  });
+
+  it("同一session_idでもJST暦日が違えば2単位(日をまたぐと別の相談)", async () => {
+    await db.query(`
+      INSERT INTO usage_logs (tenant_id, request_id, session_id, feature_used, plan_multiplier, created_at)
+      VALUES
+        ('t1','m1','copilot-1','admin_agent', 1.0, '2026-03-10 09:00:00+00'),
+        ('t1','m2','copilot-1','admin_agent', 1.0, '2026-03-11 09:00:00+00')
+    `);
+
+    const result = await computeExpectedBilling(db, "t1", "2026-03-01", "2026-04-01", "growth");
+    expect(result.adminConsults).toBe(2);
+  });
+
+  // ★本命の検査★ UTC暦日では同じ2026-03-02のままだが、JSTでは03-02→03-03を
+  // またぐペア。UTC基準で数えていたら1になる(=このテストがそれを検知する)。
+  it("JST暦日の境界をまたぐと、UTC上は同じ日でも別の相談として数える(AT TIME ZONEの向きの検査)", async () => {
+    await db.query(`
+      INSERT INTO usage_logs (tenant_id, request_id, session_id, feature_used, plan_multiplier, created_at)
+      VALUES
+        ('t1','m1','copilot-1','admin_agent', 1.0, '2026-03-02T14:30:00Z'), -- JST 2026-03-02 23:30
+        ('t1','m2','copilot-1','admin_agent', 1.0, '2026-03-02T15:30:00Z')  -- JST 2026-03-03 00:30
+    `);
+
+    const result = await computeExpectedBilling(db, "t1", "2026-03-01", "2026-04-01", "growth");
+    expect(result.adminConsults).toBe(2);
+    expect(result.adminConsults).not.toBe(1); // UTC暦日で数えた場合に出る誤った値
+  });
+
+  it("session_idがNULLの管理AI行(配線前の既存行)は1行=1単位でrow_units側に残り、adminConsultsに合流する(黙って請求から消えない)", async () => {
+    await db.query(`
+      INSERT INTO usage_logs (tenant_id, request_id, session_id, feature_used, plan_multiplier, created_at)
+      VALUES
+        ('t1','m1', NULL, 'admin_agent', 1.0, '2026-03-05'),
+        ('t1','m2', NULL, 'admin_agent', 1.0, '2026-03-05')
+    `);
+
+    const result = await computeExpectedBilling(db, "t1", "2026-03-01", "2026-04-01", "growth");
+    expect(result.adminConsults).toBe(2);
+    expect(result.billableUnits).toBe(2);
+  });
+
+  it("session_idを持つ管理AI行はrow_units側で二重計上されない(admin_unitsとの合算がそのまま件数になる)", async () => {
+    await db.query(`
+      INSERT INTO usage_logs (tenant_id, request_id, session_id, feature_used, plan_multiplier, created_at)
+      VALUES
+        -- 相談A: 同日3ターン → 1単位
+        ('t1','a1','copilot-a','admin_agent', 1.0, '2026-03-05 09:00:00+00'),
+        ('t1','a2','copilot-a','admin_agent', 1.0, '2026-03-05 10:00:00+00'),
+        ('t1','a3','copilot-a','admin_agent', 1.0, '2026-03-05 11:00:00+00'),
+        -- 相談B(別session_id): 1ターン → 1単位
+        ('t1','b1','copilot-b','admin_agent', 1.0, '2026-03-06 09:00:00+00'),
+        -- session_idなしの既存行 → 1行=1単位
+        ('t1','c1', NULL,       'admin_agent', 1.0, '2026-03-07 09:00:00+00')
+    `);
+
+    const result = await computeExpectedBilling(db, "t1", "2026-03-01", "2026-04-01", "growth");
+    // A(1) + B(1) + legacy(1) = 3。二重計上ならA単体で3(row_unitsにも残る)になり
+    // 合計が5以上に膨らむ。
+    expect(result.adminConsults).toBe(3);
+    expect(result.billableUnits).toBe(3);
+    expect(result.totalRequests).toBe(5); // 原価可視化の生リクエスト数は畳まない
+  });
+
+  it("管理AIの相談も月の半開区間で数える(月またぎを二重計上・取りこぼししない)", async () => {
+    await db.query(`
+      INSERT INTO usage_logs (tenant_id, request_id, session_id, feature_used, plan_multiplier, created_at)
+      VALUES
+        ('t1','before','admin-before','admin_agent', 1.0, '2026-02-28 23:59:59+00'),
+        ('t1','start','admin-start',  'admin_agent', 1.0, '2026-03-01 00:00:00+00'),
+        ('t1','end','admin-end',      'admin_agent', 1.0, '2026-03-31 23:59:59+00'),
+        ('t1','after','admin-after',  'admin_agent', 1.0, '2026-04-01 00:00:00+00')
+    `);
+
+    const result = await computeExpectedBilling(db, "t1", "2026-03-01", "2026-04-01", "growth");
+    // start・end のみ(before/afterは対象月の外)。session_idが異なるので各1単位。
+    expect(result.adminConsults).toBe(2);
+  });
+
+  it("相談内でplan_multiplierが割れたら、その相談(session_id, JST暦日)内で最初の行(created_at昇順)の倍率を採る", async () => {
+    await db.query(`
+      INSERT INTO usage_logs (tenant_id, request_id, session_id, feature_used, plan_multiplier, created_at)
+      VALUES
+        ('t1','m2','copilot-1','admin_agent', 2.5, '2026-03-05 10:05:00+00'),
+        ('t1','m1','copilot-1','admin_agent', 1.0, '2026-03-05 10:00:00+00')
+    `);
+
+    const result = await computeExpectedBilling(db, "t1", "2026-03-01", "2026-04-01", "growth");
+    // 相談開始時点は倍率1.0。後から倍率が上がっても遡って高くならない。
+    expect(result.adminConsults).toBe(1);
+    expect(result.billedQuantity).toBe(1); // ceil(1 * 1.0)、2.5だとceil(2.5)=3になる
+  });
+
+  it("次元が混ざらない: 管理AIの相談がテキスト会話数(textUnits)やアバター分数(avatarMinutes)に入らない", async () => {
+    await insertSession("t1", "s-1", 2);
+    await db.query(`
+      INSERT INTO usage_logs (tenant_id, request_id, session_id, feature_used, plan_multiplier, created_at)
+      VALUES ('t1','c1','s-1','chat', 1.0, '2026-03-05');
+      INSERT INTO usage_logs (tenant_id, request_id, session_id, feature_used, plan_multiplier, created_at)
+      VALUES ('t1','m1','copilot-1','admin_agent', 1.0, '2026-03-05');
+    `);
+
+    const result = await computeExpectedBilling(db, "t1", "2026-03-01", "2026-04-01", "growth");
+    expect(result.textUnits).toBe(1);
+    expect(result.avatarMinutes).toBe(0);
+    expect(result.adminConsults).toBe(1);
+  });
+
+  it("billable=falseの管理AI行はadminConsultsにもbilledQuantityにも入らない", async () => {
+    await db.query(`
+      INSERT INTO usage_logs (tenant_id, request_id, session_id, feature_used, plan_multiplier, billable, created_at)
+      VALUES ('t1','m1','copilot-1','admin_agent', 1.0, false, '2026-03-05');
+    `);
+
+    const result = await computeExpectedBilling(db, "t1", "2026-03-01", "2026-04-01", "growth");
+    expect(result.adminConsults).toBe(0);
+    expect(result.billedQuantity).toBe(0);
+  });
+
+  it("他テナントの管理AI相談は数えない(テナント境界)", async () => {
+    await db.query(`
+      INSERT INTO usage_logs (tenant_id, request_id, session_id, feature_used, plan_multiplier, created_at)
+      VALUES ('other','m1','copilot-1','admin_agent', 1.0, '2026-03-05');
+    `);
+
+    const result = await computeExpectedBilling(db, "t1", "2026-03-01", "2026-04-01", "growth");
+    expect(result.adminConsults).toBe(0);
+  });
+
+  it("管理AIの相談も絶対値の再計算は冪等(同じ入力で何度呼んでも同じ値)", async () => {
+    await db.query(`
+      INSERT INTO usage_logs (tenant_id, request_id, session_id, feature_used, plan_multiplier, billing_status, created_at)
+      VALUES
+        ('t1','m1','copilot-1','admin_agent', 1.0, 'reported', '2026-03-05 09:00:00+00'),
+        ('t1','m2','copilot-1','admin_agent', 1.0, 'pending',  '2026-03-05 10:00:00+00')
+    `);
+
+    const first  = await computeExpectedBilling(db, "t1", "2026-03-01", "2026-04-01", "growth");
+    const second = await computeExpectedBilling(db, "t1", "2026-03-01", "2026-04-01", "growth");
+
+    expect(second).toEqual(first);
+    expect(first.adminConsults).toBe(1);
   });
 
   // PR-6(2026-08-25 収益監査): SCRIPTS/ci-billing-schema.sh の FILES 配列と

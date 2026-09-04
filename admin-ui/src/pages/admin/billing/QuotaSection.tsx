@@ -89,7 +89,7 @@ export function QuotaSection({
     );
   }
 
-  const { plan, text, avatar, freeAd } = quota;
+  const { plan, text, avatar, admin, freeAd } = quota;
 
   return (
     <section style={{ ...CARD, marginBottom: 20 }}>
@@ -111,12 +111,30 @@ export function QuotaSection({
             overageUnit="会話"
           />
           {freeAd.remaining === 0 ? (
-            <p style={{ margin: "0", fontSize: 13, color: "#f87171", fontWeight: 600 }}>
+            <p style={{ margin: "0 0 14px", fontSize: 13, color: "#f87171", fontWeight: 600 }}>
               今月の上限に到達しています。新しい会話は翌月まで開始できません。
             </p>
           ) : freeAd.remaining <= freeAd.limit * 0.2 ? (
-            <p style={{ margin: "0", fontSize: 13, color: "#fbbf24" }}>
+            <p style={{ margin: "0 0 14px", fontSize: 13, color: "#fbbf24" }}>
               残り{freeAd.remaining.toLocaleString("ja-JP")}会話です。上限に近づいています。
+            </p>
+          ) : null}
+
+          <QuotaBar
+            label="管理AIへのご相談"
+            used={freeAd.adminUsed}
+            included={freeAd.adminLimit}
+            unit="件"
+            overage={0}
+            overageUnit="件"
+          />
+          {freeAd.adminRemaining === 0 ? (
+            <p style={{ margin: "0", fontSize: 13, color: "#f87171" }}>
+              今月の管理AIへのご相談は上限に達しました。翌月に自動でリセットされます(プランのご変更でも増やせます)。
+            </p>
+          ) : freeAd.adminRemaining <= freeAd.adminLimit * 0.2 ? (
+            <p style={{ margin: "0", fontSize: 13, color: "#fbbf24" }}>
+              残り{freeAd.adminRemaining.toLocaleString("ja-JP")}件です。上限に近づいています。
             </p>
           ) : null}
         </>
@@ -124,13 +142,13 @@ export function QuotaSection({
 
       {plan === "enterprise" && (
         <p style={{ margin: 0, fontSize: 13, color: "var(--muted-foreground)" }}>
-          Enterpriseプランは利用量に上限がありません(当月{text.used.toLocaleString("ja-JP")}会話・{avatar.usedMinutes.toLocaleString("ja-JP")}分のアバター利用)。
+          Enterpriseプランは利用量に上限がありません(当月{text.used.toLocaleString("ja-JP")}会話・{avatar.usedMinutes.toLocaleString("ja-JP")}分のアバター利用・管理AIへのご相談{admin.used.toLocaleString("ja-JP")}件)。
         </p>
       )}
 
       {plan === "starter" && (
         <p style={{ margin: 0, fontSize: 13, color: "var(--muted-foreground)" }}>
-          Starterは込み枠の無い純従量プランです(当月{text.used.toLocaleString("ja-JP")}会話をご利用中)。
+          Starterは込み枠の無い純従量プランです(当月{text.used.toLocaleString("ja-JP")}会話をご利用中)。管理AIへのご相談(当月{admin.used.toLocaleString("ja-JP")}件)も、会話と同じ単価で加算されます。
         </p>
       )}
 
@@ -152,8 +170,19 @@ export function QuotaSection({
             overage={avatar.overageMinutes}
             overageUnit="分"
           />
+          {admin.included !== null && (
+            <QuotaBar
+              label="管理AIへのご相談"
+              used={admin.used}
+              included={admin.included}
+              unit="件"
+              overage={admin.overage}
+              overageUnit="件"
+            />
+          )}
           <p style={{ margin: "8px 0 0", fontSize: 12, color: "var(--muted-foreground)" }}>
-            テキストとアバターは別枠です。月の途中でプランを変更した場合、その月の込み枠は変更後のプランの枠が月全体に適用されます(日割りしません)。
+            テキストとアバターと管理AIへのご相談は別枠です。月の途中でプランを変更した場合、その月の込み枠は変更後のプランの枠が月全体に適用されます(日割りしません)。
+            管理AIへのご相談は、同じご相談を続けている間は1件としてカウントし、日付が変わると新しい1件になります。
           </p>
         </>
       )}

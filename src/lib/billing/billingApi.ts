@@ -13,6 +13,7 @@ import {
   includedQuotaForPlan,
   computeQuotaOverage,
   FREE_AD_MONTHLY_CONVERSATION_LIMIT,
+  FREE_AD_MONTHLY_ADMIN_CONSULT_LIMIT,
 } from './planQuota';
 import {
   fetchTenantEconomics, fetchTenantEconomicsDetail,
@@ -192,9 +193,9 @@ export async function computeBillingEstimateJpy(
 
   const stripe = getStripe(stripeSecretKey);
 
-  // textUnits/avatarMinutes は「倍率適用前・込み枠差し引き前」の生の数量。
+  // textUnits/avatarMinutes/adminConsults は「倍率適用前・込み枠差し引き前」の生の数量。
   // 込み枠の差し引きは生の数量に対して行う必要がある(computeQuotaOverage 参照)。
-  const { textUnits, avatarMinutes } = await computeExpectedBilling(db, tenantId, from, to, plan);
+  const { textUnits, avatarMinutes, adminConsults } = await computeExpectedBilling(db, tenantId, from, to, plan);
 
   if (plan === 'standard' || plan === 'growth') {
     const priceResult = getSubscriptionItemPrices(plan, 'monthly');
@@ -202,7 +203,7 @@ export async function computeBillingEstimateJpy(
     const { base, text: textOveragePriceId, avatarOverage: avatarOveragePriceId } = priceResult.prices;
     if (!base || !textOveragePriceId || !avatarOveragePriceId) return null;
 
-    const overage = computeQuotaOverage(plan, textUnits, avatarMinutes);
+    const overage = computeQuotaOverage(plan, textUnits, avatarMinutes, adminConsults);
     // standard/growth は必ず込み枠を持つ(PLAN_INCLUDED_QUOTASに定義済み)ので
     // null になるのは設定不整合のみ。誤った金額を出すより算出不可を返す。
     if (!overage) return null;
@@ -214,9 +215,12 @@ export async function computeBillingEstimateJpy(
     ]);
     if (baseAmountJpy === null || textOverageUnitJpy === null || avatarOverageUnitJpy === null) return null;
 
+    // ★textPriceQuantity(=テキスト超過+管理AI超過)を使う★
+    // Stripeへ実際に送信する数量(stripeSync.ts の _reportQuotaOverageUsage)と同じ値。
+    // overage.textConversations だけを使うと、管理AIの超過分が請求見積りから漏れる。
     return (
       baseAmountJpy +
-      overage.textConversations * textOverageUnitJpy +
+      overage.textPriceQuantity * textOverageUnitJpy +
       overage.avatarMinutes * avatarOverageUnitJpy
     );
   }
@@ -269,8 +273,8 @@ export async function buildTenantUpsellFigures(
   const from = monthStart.toISOString();
   const to = monthEnd.toISOString();
 
-  const { textUnits, avatarMinutes } = await computeExpectedBilling(db, tenantId, from, to, currentPlan);
-  const overage = computeQuotaOverage(currentPlan, textUnits, avatarMinutes);
+  const { textUnits, avatarMinutes, adminConsults } = await computeExpectedBilling(db, tenantId, from, to, currentPlan);
+  const overage = computeQuotaOverage(currentPlan, textUnits, avatarMinutes, adminConsults);
 
   const includedNow = includedQuotaForPlan(currentPlan);
   const includedAfter = includedQuotaForPlan(recommendedPlan);
@@ -468,10 +472,30 @@ export async function fetchBillingCostBreakdown(
     params,
   );
 
+  // 画面に内部語(feature_used の生の文字列)を出さないための日本語ラベル。
+  // 未知キーは `?? feature` で英語のまま出すフォールバックを残す。
   const LABELS: Record<string, string> = {
     chat: 'AI応答',
     avatar: 'アバター映像',
     voice: '音声合成',
+    admin_agent: '管理AIへの相談',
+    agent_search: '外部エージェント連携',
+    anam_session: 'アバター会話',
+    admin_guide: '管理AIの下準備',
+    book_analysis: '書籍ナレッジの取り込み',
+    book_structurize: '書籍ナレッジの取り込み',
+    avatar_config_image: 'アバター画像の生成',
+    avatar_config_voice: 'アバター音声の生成',
+    avatar_config_prompt: 'アバター性格の生成',
+    avatar_config_test: 'アバターの動作確認',
+    feedback_ai: 'フィードバックAI',
+    option_service: '代行サービス',
+    premium_avatar_generation: 'プレミアムアバター生成',
+    admin_tuning: '指示ルールの自動提案',
+    admin_ai_assist: '管理AIの下書き作成',
+    admin_engagement_suggest: 'エンゲージメント施策の提案',
+    admin_option_estimator: '代行サービスの見積り',
+    sai_agent: '設定代行エージェント',
   };
 
   const totalCents = result.rows.reduce(
@@ -482,18 +506,23 @@ export async function fetchBillingCostBreakdown(
   // PR-5: この内訳は機能別の「原価」構成比であり、USD建て(costCalculator.ts)。
   // Stripeは機能別に請求を分けないため実単価ベースには変換できない。
   // 変換なしに¥表示していたのが禁止48違反の一つだったので、正直に$のまま返す。
+  //
+  // ★小数第2位まで残す(整数へ丸めない)★
+  // 管理系(admin_agent等)は1機能あたり数セント〜十数セントの少額が常態で、
+  // 従来の Math.round(cents/100) だと全て $0 に潰れていた(是正対象)。
+  // 単位は USD のまま(円に変換しない。禁止48)。
   const breakdown: Record<string, BillingCostBreakdownItem> = {};
   for (const row of result.rows) {
     const feature = row.feature_used as string;
     breakdown[feature] = {
       label: LABELS[feature] ?? feature,
-      cost_usd: Math.round(Number(row.total_cents) / 100),
+      cost_usd: Math.round(Number(row.total_cents)) / 100,
       request_count: Number(row.request_count),
       percentage: totalCents > 0 ? Math.round((Number(row.total_cents) / totalCents) * 100) : 0,
     };
   }
 
-  return { tenantId: tenantId ?? 'all', total_usd: Math.round(totalCents / 100), breakdown };
+  return { tenantId: tenantId ?? 'all', total_usd: Math.round(totalCents) / 100, breakdown };
 }
 
 export type BillingInvoicesResult =
@@ -632,11 +661,26 @@ export interface BillingQuota {
     includedMinutes: number | null;
     overageMinutes: number;
   };
+  /** 管理AIへの相談(Copilot UI)。単位は相談件数((session_id, JST暦日)のDISTINCT)。 */
+  admin: {
+    /** 当月の相談件数(生の数量。込み枠差し引き前)。 */
+    used: number;
+    /** 込み枠(相談件数)。null=このプランに込み枠という概念が無い。 */
+    included: number | null;
+    /** 込み枠を超えた分。included が null なら常に0。 */
+    overage: number;
+  };
   /** free_ad のときだけ非null(月200会話の無料枠)。 */
   freeAd: {
     used: number;
     limit: number;
     remaining: number;
+    /** free_ad の管理AI月次上限(FREE_AD_MONTHLY_ADMIN_CONSULT_LIMIT)の当月消費件数。 */
+    adminUsed: number;
+    /** free_ad の管理AI月次上限。 */
+    adminLimit: number;
+    /** 上限までの残数。 */
+    adminRemaining: number;
   } | null;
 }
 
@@ -663,10 +707,11 @@ export async function fetchBillingQuota(db: any, tenantId: string): Promise<Bill
   const periodFrom = monthStart.toISOString();
   const periodTo = monthEnd.toISOString();
 
-  const { textUnits, avatarMinutes } = await computeExpectedBilling(db, tenantId, periodFrom, periodTo, plan);
+  const { textUnits, avatarMinutes, adminConsults } =
+    await computeExpectedBilling(db, tenantId, periodFrom, periodTo, plan);
 
   const included = includedQuotaForPlan(plan);
-  const overage = computeQuotaOverage(plan, textUnits, avatarMinutes);
+  const overage = computeQuotaOverage(plan, textUnits, avatarMinutes, adminConsults);
 
   return {
     plan,
@@ -682,12 +727,22 @@ export async function fetchBillingQuota(db: any, tenantId: string): Promise<Bill
       includedMinutes: included?.avatarMinutes ?? null,
       overageMinutes: overage?.avatarMinutes ?? 0,
     },
+    admin: {
+      used: adminConsults,
+      included: included?.adminConsults ?? null,
+      overage: overage?.adminConsults ?? 0,
+    },
     freeAd:
       plan === 'free_ad'
         ? {
             used: textUnits,
             limit: FREE_AD_MONTHLY_CONVERSATION_LIMIT,
             remaining: Math.max(0, FREE_AD_MONTHLY_CONVERSATION_LIMIT - textUnits),
+            // free_ad は込み枠(PLAN_INCLUDED_QUOTAS)を持たないため、管理AIの残量は
+            // 別枠のFREE_AD_MONTHLY_ADMIN_CONSULT_LIMITで判定する(禁止39)。
+            adminUsed: adminConsults,
+            adminLimit: FREE_AD_MONTHLY_ADMIN_CONSULT_LIMIT,
+            adminRemaining: Math.max(0, FREE_AD_MONTHLY_ADMIN_CONSULT_LIMIT - adminConsults),
           }
         : null,
   };

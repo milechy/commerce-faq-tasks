@@ -5,7 +5,16 @@
  * - isFreeAdMonthlyQuotaExceeded: 境界値(N-1/N/N+1) / 上限0 / 負の値で例外
  */
 
-import { getMonthRangeJst, isFreeAdMonthlyQuotaExceeded, FREE_AD_MONTHLY_CONVERSATION_LIMIT, FREE_AD_MONTHLY_REQUEST_LIMIT, includedQuotaForPlan, computeQuotaOverage } from './planQuota';
+import {
+  getMonthRangeJst,
+  isFreeAdMonthlyQuotaExceeded,
+  FREE_AD_MONTHLY_CONVERSATION_LIMIT,
+  FREE_AD_MONTHLY_REQUEST_LIMIT,
+  includedQuotaForPlan,
+  computeQuotaOverage,
+  isFreeAdAdminConsultQuotaExceeded,
+  FREE_AD_MONTHLY_ADMIN_CONSULT_LIMIT,
+} from './planQuota';
 
 describe('getMonthRangeJst', () => {
   it('JST月初(1日00:00:00.000)ちょうどでは monthStart が現在時刻と一致する', () => {
@@ -144,12 +153,12 @@ describe('isFreeAdMonthlyQuotaExceeded', () => {
 //   Growth   ¥29,800/月 = テキスト3,000会話 + アバター150分 込み、超過 ¥30/会話・¥80/分
 // ─────────────────────────────────────────────────────────────────────────────
 describe('PLAN_INCLUDED_QUOTAS / includedQuotaForPlan', () => {
-  it('Standard は テキスト1,000会話 + アバター30分', () => {
-    expect(includedQuotaForPlan('standard')).toEqual({ textConversations: 1000, avatarMinutes: 30 });
+  it('Standard は テキスト1,000会話 + アバター30分 + 管理AI100件', () => {
+    expect(includedQuotaForPlan('standard')).toEqual({ textConversations: 1000, avatarMinutes: 30, adminConsults: 100 });
   });
 
-  it('Growth は テキスト3,000会話 + アバター150分', () => {
-    expect(includedQuotaForPlan('growth')).toEqual({ textConversations: 3000, avatarMinutes: 150 });
+  it('Growth は テキスト3,000会話 + アバター150分 + 管理AI300件', () => {
+    expect(includedQuotaForPlan('growth')).toEqual({ textConversations: 3000, avatarMinutes: 150, adminConsults: 300 });
   });
 
   // ★込み枠を持たないプランに枠を与えない★
@@ -173,21 +182,33 @@ describe('PLAN_INCLUDED_QUOTAS / includedQuotaForPlan', () => {
 
 describe('computeQuotaOverage（込み枠の差し引き）', () => {
   it('込み枠内なら両次元とも超過0（基本料だけが請求される）', () => {
-    expect(computeQuotaOverage('standard', 999, 29)).toEqual({ textConversations: 0, avatarMinutes: 0 });
-    expect(computeQuotaOverage('standard', 1000, 30)).toEqual({ textConversations: 0, avatarMinutes: 0 });
+    expect(computeQuotaOverage('standard', 999, 29, 0)).toEqual({
+      textConversations: 0, avatarMinutes: 0, adminConsults: 0, textPriceQuantity: 0,
+    });
+    expect(computeQuotaOverage('standard', 1000, 30, 100)).toEqual({
+      textConversations: 0, avatarMinutes: 0, adminConsults: 0, textPriceQuantity: 0,
+    });
   });
 
   it('テキストだけ超過したらテキストだけが超過数量になる', () => {
-    expect(computeQuotaOverage('standard', 1200, 10)).toEqual({ textConversations: 200, avatarMinutes: 0 });
+    expect(computeQuotaOverage('standard', 1200, 10, 0)).toEqual({
+      textConversations: 200, avatarMinutes: 0, adminConsults: 0, textPriceQuantity: 200,
+    });
   });
 
   it('アバターだけ超過したらアバターだけが超過数量になる', () => {
-    expect(computeQuotaOverage('standard', 500, 45)).toEqual({ textConversations: 0, avatarMinutes: 15 });
+    expect(computeQuotaOverage('standard', 500, 45, 0)).toEqual({
+      textConversations: 0, avatarMinutes: 15, adminConsults: 0, textPriceQuantity: 0,
+    });
   });
 
   it('Growth は枠が大きいぶん、同じ利用量でも超過が小さい', () => {
-    expect(computeQuotaOverage('growth', 1200, 45)).toEqual({ textConversations: 0, avatarMinutes: 0 });
-    expect(computeQuotaOverage('growth', 3500, 200)).toEqual({ textConversations: 500, avatarMinutes: 50 });
+    expect(computeQuotaOverage('growth', 1200, 45, 0)).toEqual({
+      textConversations: 0, avatarMinutes: 0, adminConsults: 0, textPriceQuantity: 0,
+    });
+    expect(computeQuotaOverage('growth', 3500, 200, 0)).toEqual({
+      textConversations: 500, avatarMinutes: 50, adminConsults: 0, textPriceQuantity: 500,
+    });
   });
 
   // ★★★ 本PRで最も壊れやすい点 ★★★
@@ -199,31 +220,108 @@ describe('computeQuotaOverage（込み枠の差し引き）', () => {
   it('超過数量にプラン倍率(PLAN_MULTIPLIERS)を掛けない — 掛けると二重適用で過剰請求になる', () => {
     // Standard: 1,200会話 → 超過200会話。×1.25 した 250 になってはいけない。
     // (¥25 の price × 250 = ¥6,250 で、正しい ¥25 × 200 = ¥5,000 より 25% 多い)
-    expect(computeQuotaOverage('standard', 1200, 0)!.textConversations).toBe(200);
-    expect(computeQuotaOverage('standard', 1200, 0)!.textConversations).not.toBe(250);
+    expect(computeQuotaOverage('standard', 1200, 0, 0)!.textConversations).toBe(200);
+    expect(computeQuotaOverage('standard', 1200, 0, 0)!.textConversations).not.toBe(250);
 
     // Growth: 3,500会話 → 超過500会話。×1.5 した 750 になってはいけない。
-    expect(computeQuotaOverage('growth', 3500, 0)!.textConversations).toBe(500);
-    expect(computeQuotaOverage('growth', 3500, 0)!.textConversations).not.toBe(750);
+    expect(computeQuotaOverage('growth', 3500, 0, 0)!.textConversations).toBe(500);
+    expect(computeQuotaOverage('growth', 3500, 0, 0)!.textConversations).not.toBe(750);
 
     // アバターはさらに危険で、分単価が倍率と**逆向き**(Standard ¥100 → Growth ¥80)。
     // 倍率を掛けると「上位プランほど高くなる」向きに反転する(CLAUDE.md 禁止56)。
-    expect(computeQuotaOverage('standard', 0, 50)!.avatarMinutes).toBe(20);
-    expect(computeQuotaOverage('standard', 0, 50)!.avatarMinutes).not.toBe(25); // ×1.25
-    expect(computeQuotaOverage('growth', 0, 250)!.avatarMinutes).toBe(100);
-    expect(computeQuotaOverage('growth', 0, 250)!.avatarMinutes).not.toBe(150); // ×1.5
+    expect(computeQuotaOverage('standard', 0, 50, 0)!.avatarMinutes).toBe(20);
+    expect(computeQuotaOverage('standard', 0, 50, 0)!.avatarMinutes).not.toBe(25); // ×1.25
+    expect(computeQuotaOverage('growth', 0, 250, 0)!.avatarMinutes).toBe(100);
+    expect(computeQuotaOverage('growth', 0, 250, 0)!.avatarMinutes).not.toBe(150); // ×1.5
   });
 
   // 同じ利用量に対して、上位プランほどアバターの超過"金額"が安くなること
   // (数量ではなく単価で効く設計であることの確認)。
   it('込み枠を持たないプランは null を返し、呼び出し側は純従量経路へ倒れる', () => {
-    expect(computeQuotaOverage('starter', 5000, 100)).toBeNull();
-    expect(computeQuotaOverage('free_ad', 5000, 100)).toBeNull();
-    expect(computeQuotaOverage('enterprise', 5000, 100)).toBeNull();
-    expect(computeQuotaOverage(null, 5000, 100)).toBeNull();
+    expect(computeQuotaOverage('starter', 5000, 100, 0)).toBeNull();
+    expect(computeQuotaOverage('free_ad', 5000, 100, 0)).toBeNull();
+    expect(computeQuotaOverage('enterprise', 5000, 100, 0)).toBeNull();
+    expect(computeQuotaOverage(null, 5000, 100, 0)).toBeNull();
   });
 
   it('超過は負にならない(0で下げ止まる)', () => {
-    expect(computeQuotaOverage('standard', 0, 0)).toEqual({ textConversations: 0, avatarMinutes: 0 });
+    expect(computeQuotaOverage('standard', 0, 0, 0)).toEqual({
+      textConversations: 0, avatarMinutes: 0, adminConsults: 0, textPriceQuantity: 0,
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────
+  // S3(管理AI原価の課金・可視化): textPriceQuantity = テキスト超過 + 管理AI超過。
+  // 管理AIの相談はテキスト会話と同じStripe priceを流用するため、送信数量は
+  // この合算値で1本になる(docs/ADMIN_AGENT_COST_REQUIREMENTS.md §4-1)。
+  // ─────────────────────────────────────────────────────────────────────
+  describe('adminConsults / textPriceQuantity(管理AIの相談)', () => {
+    it('Standard は 100件/月 の込み枠を持つ', () => {
+      expect(includedQuotaForPlan('standard')).toEqual({ textConversations: 1000, avatarMinutes: 30, adminConsults: 100 });
+    });
+
+    it('Growth は 300件/月 の込み枠を持つ', () => {
+      expect(includedQuotaForPlan('growth')).toEqual({ textConversations: 3000, avatarMinutes: 150, adminConsults: 300 });
+    });
+
+    it('管理AIの相談だけ超過した場合、adminConsultsに現れ、textPriceQuantityに合算される', () => {
+      const overage = computeQuotaOverage('standard', 500, 0, 150);
+      expect(overage).toEqual({ textConversations: 0, avatarMinutes: 0, adminConsults: 50, textPriceQuantity: 50 });
+    });
+
+    it('テキストと管理AIが両方超過したら、textPriceQuantityは両方の合計になる', () => {
+      const overage = computeQuotaOverage('standard', 1200, 0, 150);
+      expect(overage).toEqual({ textConversations: 200, avatarMinutes: 0, adminConsults: 50, textPriceQuantity: 250 });
+    });
+
+    it('込み枠を持たないプランはadminConsultsを渡してもnullのまま', () => {
+      expect(computeQuotaOverage('starter', 0, 0, 1000)).toBeNull();
+      expect(computeQuotaOverage('free_ad', 0, 0, 1000)).toBeNull();
+    });
+
+    it('管理AIの超過にプラン倍率を掛けない(テキストと同じ理由)', () => {
+      // Growth: 350件 → 超過50件。×1.5 した 75 になってはいけない。
+      expect(computeQuotaOverage('growth', 0, 0, 350)!.adminConsults).toBe(50);
+      expect(computeQuotaOverage('growth', 0, 0, 350)!.adminConsults).not.toBe(75);
+    });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// free_ad の管理AI月次上限(docs/ADMIN_AGENT_COST_REQUIREMENTS.md §4-1 / CLAUDE.md 禁止39)。
+// isFreeAdMonthlyQuotaExceeded と同じ作法・同じ引数検証。
+// ─────────────────────────────────────────────────────────────────────────────
+describe('isFreeAdAdminConsultQuotaExceeded / FREE_AD_MONTHLY_ADMIN_CONSULT_LIMIT', () => {
+  it('既定の上限は30である', () => {
+    expect(FREE_AD_MONTHLY_ADMIN_CONSULT_LIMIT).toBe(30);
+  });
+
+  it('上限未満(29件)なら false', () => {
+    expect(isFreeAdAdminConsultQuotaExceeded(29)).toBe(false);
+  });
+
+  it('ちょうど上限(30件)なら true', () => {
+    expect(isFreeAdAdminConsultQuotaExceeded(30)).toBe(true);
+  });
+
+  it('上限超過(31件)なら true', () => {
+    expect(isFreeAdAdminConsultQuotaExceeded(31)).toBe(true);
+  });
+
+  it('0件なら false', () => {
+    expect(isFreeAdAdminConsultQuotaExceeded(0)).toBe(false);
+  });
+
+  it('負のcountは例外を投げる', () => {
+    expect(() => isFreeAdAdminConsultQuotaExceeded(-1)).toThrow(/Invalid currentMonthAdminConsultCount/);
+  });
+
+  it('負のlimitは例外を投げる', () => {
+    expect(() => isFreeAdAdminConsultQuotaExceeded(5, -1)).toThrow(/Invalid limit/);
+  });
+
+  it('カスタム上限を指定できる', () => {
+    expect(isFreeAdAdminConsultQuotaExceeded(9, 10)).toBe(false);
+    expect(isFreeAdAdminConsultQuotaExceeded(10, 10)).toBe(true);
   });
 });
