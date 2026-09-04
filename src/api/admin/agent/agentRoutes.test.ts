@@ -15431,6 +15431,109 @@ describe('POST /v1/admin/agent/chat', () => {
       expect(mockTrackUsage).toHaveBeenCalledTimes(1);
     });
 
+    it('通常応答が成功した場合、予約行の取り消し(DELETE)は発生しない', async () => {
+      mockFreeAdAndConsultCount(10, false);
+      mockFetch.mockResolvedValueOnce(makeGroqResponse('お答えします。'));
+
+      await request(makeApp(CLIENT_ADMIN_USER))
+        .post('/v1/admin/agent/chat')
+        .send({ message: '設定を教えて', sessionId: 'sess-freead-01b' });
+
+      // mockQuery(注入済みdb.query。ロック保持中のclientQueryとは別チャネル)には
+      // 一切呼ばれない — 予約はそのまま残ってよい(成功時に取り消す設計にはしていない)。
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    // GID 1218162837824797 レビュー是正(2026-09-04): 予約行を作った後にGroq呼び出しが
+    // 失敗すると、何も回答が返らないまま free_ad の月間上限を1件消費していた
+    // (trackUsageが呼ばれず記録は残らないが、予約行だけが残ってカウントされ続けるため)。
+    describe('Groq呼び出し失敗時の予約取り消し(2026-09-04是正)', () => {
+      it('新規予約後にGroqが失敗すると、予約行を取り消す(DELETE)', async () => {
+        mockFreeAdAndConsultCount(5, false); // countedToday=false → 新規予約が作られる
+        mockFetch.mockRejectedValueOnce(new Error('Groq API down'));
+        mockQuery.mockResolvedValueOnce({ rowCount: 1 }); // 予約取り消しのDELETE
+
+        const res = await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: '設定を教えて', sessionId: 'sess-freead-rollback-01' });
+
+        expect(res.status).toBe(500);
+        expect(mockTrackUsage).not.toHaveBeenCalled();
+        expect(mockQuery).toHaveBeenCalledWith(
+          expect.stringContaining('DELETE FROM usage_logs'),
+          expect.arrayContaining(['tenant-abc']), // effectiveTenantId
+        );
+      });
+
+      it('同一セッションが取り消し後に再送すると、通常どおり通る(クォータが消費されたままにならない)', async () => {
+        // 1回目: 予約→Groq失敗→取り消し
+        mockFreeAdAndConsultCount(5, false);
+        mockFetch.mockRejectedValueOnce(new Error('Groq API down'));
+        mockQuery.mockResolvedValueOnce({ rowCount: 1 });
+
+        await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: '設定を教えて', sessionId: 'sess-freead-rollback-02' });
+
+        // 2回目: 取り消し済みなので当月件数は変わらず(count=5のまま)、通常どおり許可される
+        mockFreeAdAndConsultCount(5, false);
+        mockFetch.mockResolvedValueOnce(makeGroqResponse('今度はお答えできます。'));
+
+        const res2 = await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: '設定を教えて', sessionId: 'sess-freead-rollback-02' });
+
+        expect(res2.status).toBe(200);
+        expect(res2.body.reply).toBe('今度はお答えできます。');
+        expect(mockTrackUsage).toHaveBeenCalledTimes(1);
+      });
+
+      it('継続扱い(countedToday=true)でGroqが失敗しても、削除は発生しない(既存の実利用行を誤って消さない)', async () => {
+        mockFreeAdAndConsultCount(30, true); // 上限到達済みだが今日はcountedToday=trueで継続許可
+        mockFetch.mockRejectedValueOnce(new Error('Groq API down'));
+
+        const res = await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: '続けて教えて', sessionId: 'sess-freead-rollback-03' });
+
+        expect(res.status).toBe(500);
+        // 新規予約が無い(reservationRequestId=null)ため、削除クエリ自体が発行されない。
+        // ここでもし誤って削除を試みると、今日の本物の利用行を消しかねない。
+        expect(mockQuery).not.toHaveBeenCalled();
+      });
+
+      it('ストリーミング経路でも同様に、Groq失敗時に予約行を取り消す', async () => {
+        mockFreeAdAndConsultCount(5, false);
+        mockFetch.mockRejectedValueOnce(new Error('Groq API down'));
+        mockQuery.mockResolvedValueOnce({ rowCount: 1 });
+
+        const res = await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: '設定を教えて', sessionId: 'sess-freead-rollback-stream', stream: true });
+
+        expect(res.status).toBe(200); // SSEは常にHTTP 200、エラーはevent:errorで表現
+        expect(res.text).toContain('event: error');
+        expect(mockTrackUsage).not.toHaveBeenCalled();
+        expect(mockQuery).toHaveBeenCalledWith(
+          expect.stringContaining('DELETE FROM usage_logs'),
+          expect.any(Array),
+        );
+      });
+
+      it('予約取り消し自体が失敗しても、エラー応答は変わらない(fail-open。取り消し失敗を新たなエラーにしない)', async () => {
+        mockFreeAdAndConsultCount(5, false);
+        mockFetch.mockRejectedValueOnce(new Error('Groq API down'));
+        mockQuery.mockRejectedValueOnce(new Error('DB down during rollback'));
+
+        const res = await request(makeApp(CLIENT_ADMIN_USER))
+          .post('/v1/admin/agent/chat')
+          .send({ message: '設定を教えて', sessionId: 'sess-freead-rollback-04' });
+
+        expect(res.status).toBe(500);
+        expect(res.body.error).toBe('AIエージェントの応答生成に失敗しました');
+      });
+    });
+
     it('上限到達かつ新しい相談ならGroqを呼ばず案内文を返す(trackUsageも呼ばない)', async () => {
       mockFreeAdAndConsultCount(30, false);
 
