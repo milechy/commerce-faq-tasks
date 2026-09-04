@@ -53,16 +53,20 @@ export const SELF_SERVICE_PLAN_VALUES = planValues.filter(
 );
 
 // S5b(共有学習プールの参加モデル・D1決定案): free_adはshareが強制ONだが、消費者向け
-// 同意バナーの開示基盤が整うまでfree_adテナントを増やさない、という一時的なブロック。
+// 同意バナーの開示基盤が整うまでfree_adテナントを増やさない、という一時的なブロックだった。
 //
-// ★free_ad へ遷移しうる経路が増えたら、必ずこの関数を通すこと★
-// 導入時(PR #918)は super_admin の POST/PATCH の2経路しか無かったが、その後
-// テナント自身のプラン変更(PUT /v1/admin/my-tenant/plan)が加わった。経路ごとに
-// if を書き写すと、新しい経路がガードを素通りする(実際に一度素通りした)。
+// ★2026-09-04 解除(WordPressプラグイン計画 WP-1 着手時)★
+// 撤去の前提だったバナー実装(S5a・PR #919、tests/widget/consentBannerLogic.test.ts)と、
+// LP の対価開示(public/lp/index.html「会話データは...共有学習プールに提供されます」
+// 「ウィジェットにR2Cの広告が表示されます」)がともに完了済みであることを確認して解除した。
+// 解除の引き金は、WP-1(WordPressプラグインのセルフサインアップ)が plan=free_ad で
+// テナントを作成する経路として新設され、このブロックが存在するとその経路が常に403に
+// なるため。super_admin の POST/PATCH と自己申告(PUT /v1/admin/my-tenant/plan)も
+// 同時に解除される(下記の通り、この関数の中身だけを変えることで全経路に効く設計)。
+//
+// ★free_ad へ遷移しうる経路を増やす際は、引き続きこの関数を通すこと★
+// (再ブロックが必要になった場合に1箇所で効かせるため、呼び出し元は残してある)。
 // 環境変数化しない(CLAUDE.md 禁止41の精神。誰にも開ける余地を残さないため)。
-//
-// 撤去する際は、この関数の呼び出し元をすべて外すのではなく、この関数の中身だけを
-// 変えれば全経路に効く。撤去の前提だったバナー実装(S5a・PR #919)は完了済み。
 
 // computeFeatureRevocationOnDowngrade は src/lib/billing/changeTenantPlan.ts へ移設した
 // (CP-3, GID 1218086647623729)。PUT /v1/admin/my-tenant/plan の本体を丸ごとそちらへ
@@ -80,13 +84,10 @@ export function isFreeAdTransition(plan: string | undefined): boolean {
   return plan === "free_ad";
 }
 
-function blockFreeAdTransition(plan: string | undefined, res: Response): boolean {
-  if (!isFreeAdTransition(plan)) return false;
-  res.status(403).json({
-    error: "free_ad_plan_not_yet_available",
-    message: "free_adプランは消費者向け同意バナー実装まで新規発行できません(D1決定案)。",
-  });
-  return true;
+// 解除済み(上のコメント参照)。呼び出し元は残したまま常に false を返す — 再ブロックが
+// 要る場合はここだけを直せば全経路(POST/PATCH/PUT self-service)に効く。
+function blockFreeAdTransition(_plan: string | undefined, _res: Response): boolean {
+  return false;
 }
 
 // enterprise は個別契約(planPricing.ts の isSelfServeBillablePlan が既に
