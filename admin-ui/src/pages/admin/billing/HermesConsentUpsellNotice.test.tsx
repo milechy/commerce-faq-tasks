@@ -63,6 +63,7 @@ describe("HermesConsentUpsellNotice", () => {
 
   it("「今すぐ参加する」を押すと share:true でPATCHし、完了メッセージに切り替わる", async () => {
     mockAuthFetch.mockImplementation((url: string, opts?: RequestInit) => {
+      expect(url).toContain("/v1/admin/my-tenant");
       if (!opts) {
         return Promise.resolve(jsonResponse(200, {
           features: { learning: { learn: true, share: false } },
