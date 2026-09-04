@@ -59,7 +59,27 @@ pm2 logs rajiuce-avatar --lines 300 --nostream \
 |---|---|---|
 | `[avatar-config] API returned 500` | **DBクエリが落ちている**（本手順の対象） | 手順3へ |
 | `[avatar-config] API returned 403` | ループバック判定 / `X-Internal-Request` で弾かれている | API と agent が同一ホストか、`RAJIUCE_API_URL` を確認 |
-| `[avatar-config] fetch failed: INTERNAL_API_HMAC_SECRET not set ...` | VPS の `.env` に HMAC 署名用シークレットが無く、内部API呼び出しに署名できない（2026-09-04 実例、テナント `accept`） | `.env` に `INTERNAL_API_HMAC_SECRET` を追加 → `pm2 restart rajiuce-avatar` → ログで `config_fetch_ok=True` を再確認 |
+| `[avatar-config] fetch failed: INTERNAL_API_HMAC_SECRET not set ...` | VPS の `.env` に HMAC 署名用シークレットが無く、内部API呼び出しに署名できない（2026-09-04 実例、テナント `accept`） | ⚠️ 下記「`.env` が2つある」を必ず先に読んでから追加すること |
+
+> ⚠️ **`.env` が2つある。`avatar-agent/.env` が存在すれば、親の `/opt/rajiuce/.env` は一切読まれない。**
+> `avatar-agent/agent.py` の dotenv 読み込みは `avatar-agent/.env` を優先し、それが存在する時点で
+> `break` して親ディレクトリの `.env` にはフォールバックしない（実装は `avatar-agent/agent.py` 冒頭の
+> `for _candidate in [_here / ".env", _here.parent / ".env"]: ... break` を参照）。
+>
+> 2026-09-04 の実例: `/opt/rajiuce/.env` に `INTERNAL_API_HMAC_SECRET` を追加したのに
+> `config_fetch_ok=False` のままだった。原因は `/opt/rajiuce/avatar-agent/.env`（8/18作成、
+> 別の小さな設定ファイルとして既に存在）が優先され、そちらには該当キーが無かったこと。
+>
+> **対処**: 値は必ず `/opt/rajiuce/avatar-agent/.env` の方に追加する（`ls -la` で存在確認してから）。
+> 親の `.env` にも同じ値を置いておくこと自体は害にならないが、**avatar-agent が実際に読むのは
+> 前者だけ**と覚えておく。追加後は `pm2 restart rajiuce-avatar`（`--update-env` は不要 — この値は
+> pm2 ではなく Python の `dotenv` がプロセス起動時に自身で読む）。
+>
+> **確実な検証方法**（ログ待ちより確実）: 同じVPS上で
+> `cd /opt/rajiuce/avatar-agent && source venv/bin/activate && python3 -c`
+> `"import asyncio,sys; sys.path.insert(0,'.'); from agent import fetch_avatar_config; print(asyncio.run(fetch_avatar_config('<任意のtenant_id>','http://localhost:3100')))"`
+> を実行し、`config_fetch_ok=True` を直接確認する。HMAC署名検証が実際に通った証拠になる
+> （ログに新しいセッションが載るのを待つ必要がない）。
 | `[avatar-config] fetch failed ...`（上記以外） | API に到達できていない | `RAJIUCE_API_URL` とポート(既定 3100)を確認 |
 | 警告が何も出ずフォールバック | API は 200 だが該当行が 0 件 | 当該テナントに `is_active = true` のアバターが無い。管理画面 `/admin/avatar` で有効化する |
 | `extracted tenant_id=None` | room 名からのテナント抽出失敗 | 別問題（room 名の形式 `rajiuce-{tenantId}-{16hex}` を確認） |
