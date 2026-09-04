@@ -1143,3 +1143,37 @@ describe('calculateBaseCostCents', () => {
     expect(zero).toBe(Math.ceil(SERVER_COST_PER_REQUEST_USD * 100));
   });
 });
+
+// ---------------------------------------------------------------------------
+// NaN/Infinity 耐性（2026-09-04 テスト強化）
+//
+// `< 0` チェックだけでは NaN/Infinity を素通りさせてしまう(NaN < 0 は false)。
+// LLM API のレスポンス異常・パース失敗等で上流から NaN/Infinity が来ると、
+// 原価計算全体が NaN 汚染され、DB の INTEGER 列への書き込みで例外になる
+// (usageTracker.ts の catch で 0 にフォールバックされることを期待する経路)。
+// ---------------------------------------------------------------------------
+describe('NaN/Infinity 耐性', () => {
+  const base = { model: 'llama-3.1-8b-instant', outputTokens: 100 };
+
+  it('★inputTokens が NaN なら throw する（素通りしない）★', () => {
+    expect(() => calculateBillingAmountCents({ ...base, inputTokens: NaN })).toThrow();
+    expect(() => calculateBaseCostCents({ ...base, inputTokens: NaN })).toThrow();
+  });
+
+  it('★outputTokens が Infinity なら throw する★', () => {
+    expect(() => calculateBillingAmountCents({ model: 'llama-3.1-8b-instant', inputTokens: 100, outputTokens: Infinity })).toThrow();
+  });
+
+  it('-Infinity も throw する(負値ガードとは独立した経路)', () => {
+    expect(() => calculateBillingAmountCents({ ...base, inputTokens: -Infinity })).toThrow();
+  });
+
+  it('NEGATIVE_GUARD_FIELDS が NaN でも throw する(値 < 0 は false で素通りする経路)', () => {
+    expect(() => calculateBillingAmountCents({ ...base, inputTokens: 100, ttsTextBytes: NaN })).toThrow();
+    expect(() => calculateBillingAmountCents({ ...base, inputTokens: 100, avatarCredits: Infinity })).toThrow();
+  });
+
+  it('正常な有限数値は引き続き通る(回帰防止)', () => {
+    expect(() => calculateBillingAmountCents({ ...base, inputTokens: 100 })).not.toThrow();
+  });
+});

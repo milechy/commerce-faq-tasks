@@ -39,6 +39,25 @@ describe('fx', () => {
     it('数値でない値も既定へ倒す', () => {
       expect(loadFx('abc').USD_JPY_RATE).toBe(150);
     });
+
+    it('★負の値は既定へ倒す★(env のタイプミスで容易に混入し、原価が負円になる)', () => {
+      expect(loadFx('-100').USD_JPY_RATE).toBe(150);
+      expect(loadFx('-0.01').USD_JPY_RATE).toBe(150);
+    });
+
+    it('Infinity / -Infinity も既定へ倒す', () => {
+      expect(loadFx('Infinity').USD_JPY_RATE).toBe(150);
+      expect(loadFx('-Infinity').USD_JPY_RATE).toBe(150);
+    });
+
+    it('極端に小さい正の値(0.0001)はそのまま通す(0 とは別物)', () => {
+      expect(loadFx('0.0001').USD_JPY_RATE).toBe(0.0001);
+    });
+
+    it('先頭・末尾に空白を含む文字列は Number() の変換規則どおり通す', () => {
+      // Number(' 160 ') === 160 (JS の仕様)。env の書式ゆれで落ちないことを確認。
+      expect(loadFx(' 160 ').USD_JPY_RATE).toBe(160);
+    });
   });
 
   describe('usdToJpy', () => {

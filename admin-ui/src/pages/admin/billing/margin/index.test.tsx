@@ -227,3 +227,50 @@ describe("MarginDashboardPage", () => {
     expect(await screen.findByText(/利用のあったテナントはありません/)).toBeTruthy();
   });
 });
+
+describe('MarginDashboardPage — イレギュラー操作・XSS耐性', () => {
+  it('★tenant_name に <script> が混ざっても実行可能なDOMとして解釈されない★', async () => {
+    mockAuthFetch.mockResolvedValue(jsonResponse(200, body([{
+      ...ROW, tenant_name: '<script>window.__xss_margin = true</script>Evil Corp',
+    }])));
+    const { container } = renderPage();
+    await waitFor(() => expect(container.querySelector('table')).toBeTruthy());
+
+    expect(container.querySelector('script')).toBeNull();
+    expect((window as unknown as { __xss_margin?: boolean }).__xss_margin).toBeUndefined();
+    expect(container.textContent).toContain('<script>');
+  });
+
+  it('テナントが1000件でもクラッシュせず描画する(大規模データの耐性)', async () => {
+    const many = Array.from({ length: 1000 }, (_, i) => ({ ...ROW, tenant_id: `t${i}`, tenant_name: `T${i}` }));
+    mockAuthFetch.mockResolvedValue(jsonResponse(200, body(many)));
+    const { container } = renderPage();
+    await waitFor(() => expect(container.querySelectorAll('tbody tr').length).toBe(1000));
+  });
+
+  it('period に未来月を指定しても(月セレクタの選択肢外の値が来ても)クラッシュしない', async () => {
+    mockAuthFetch.mockResolvedValue(jsonResponse(200, body([ROW], { period_yyyymm: '209912' })));
+    const { container } = renderPage();
+    await screen.findByText('Acme');
+    expect(container.textContent).not.toContain('undefined');
+  });
+
+  it('同じ月を素早く連続選択しても(月セレクタの多重fire)最終状態が壊れない', async () => {
+    renderPage();
+    await screen.findByText('Acme');
+    const select = screen.getByRole('combobox') as HTMLSelectElement;
+    const target = select.options[1]?.value ?? select.value;
+    fireEvent.change(select, { target: { value: target } });
+    fireEvent.change(select, { target: { value: target } });
+    fireEvent.change(select, { target: { value: target } });
+    await waitFor(() => expect(select.value).toBe(target));
+  });
+
+  it('CSVボタンはデータが0件のとき無効化される(空データでのエクスポート試行を防ぐ)', async () => {
+    mockAuthFetch.mockResolvedValue(jsonResponse(200, body([])));
+    renderPage();
+    await screen.findByText(/利用のあったテナントはありません/);
+    const btn = screen.getByText('CSVで書き出す') as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+  });
+});

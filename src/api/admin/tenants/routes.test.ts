@@ -2171,3 +2171,97 @@ describe("GET /v1/admin/my-tenant/upsell-suggestion", () => {
     expect(res.status).toBe(403);
   });
 });
+
+describe("GET /v1/admin/my-tenant/upsell-suggestion — 境界値・異常系", () => {
+  function dbWithPlan(plan: string | null) {
+    return { query: jest.fn().mockResolvedValue({ rowCount: 1, rows: [{ plan }] }) };
+  }
+
+  beforeEach(() => {
+    mockComputeExpectedBilling.mockReset();
+    mockBuildTenantUpsellFigures.mockReset().mockResolvedValue({
+      __audience: "tenant", signal: "text_overage",
+      current_plan: "standard", recommended_plan: "growth",
+      current_base_monthly_jpy: 9800, recommended_base_monthly_jpy: 29800,
+      text_included_now: 1000, text_included_after: 3000,
+      avatar_included_minutes_now: 30, avatar_included_minutes_after: 150,
+      text_overage: 500, avatar_overage_minutes: 0,
+      as_of: "2026-09-04T00:00:00.000Z",
+    });
+  });
+
+  it("★plan が null(未設定テナント)でも例外を投げず starter 扱いで処理する★", async () => {
+    mockComputeExpectedBilling.mockResolvedValue({ textUnits: 10, avatarMinutes: 0 });
+    const res = await request(makeApp(dbWithPlan(null), "client_admin"))
+      .get("/v1/admin/my-tenant/upsell-suggestion")
+      .set("Authorization", "Bearer dummy");
+    expect(res.status).toBe(200);
+  });
+
+  it("plan が未知の文字列(DB不整合)でも 500 にならない", async () => {
+    mockComputeExpectedBilling.mockResolvedValue({ textUnits: 100000, avatarMinutes: 0 });
+    const res = await request(makeApp(dbWithPlan("nonexistent-plan-xyz"), "client_admin"))
+      .get("/v1/admin/my-tenant/upsell-suggestion")
+      .set("Authorization", "Bearer dummy");
+    expect(res.status).toBe(200);
+  });
+
+  it("computeExpectedBilling が例外を投げたら 500 で落ち着く(クラッシュしない)", async () => {
+    mockComputeExpectedBilling.mockRejectedValue(new Error("stripe timeout"));
+    const res = await request(makeApp(dbWithPlan("standard"), "client_admin"))
+      .get("/v1/admin/my-tenant/upsell-suggestion")
+      .set("Authorization", "Bearer dummy");
+    expect(res.status).toBe(500);
+  });
+
+  it("buildTenantUpsellFigures が例外を投げたら 500 で落ち着く", async () => {
+    mockComputeExpectedBilling.mockResolvedValue({ textUnits: 1500, avatarMinutes: 0 });
+    mockBuildTenantUpsellFigures.mockRejectedValue(new Error("stripe down"));
+    const res = await request(makeApp(dbWithPlan("standard"), "client_admin"))
+      .get("/v1/admin/my-tenant/upsell-suggestion")
+      .set("Authorization", "Bearer dummy");
+    expect(res.status).toBe(500);
+  });
+
+  it("★textUnits が極端に大きい値(1億)でもクラッシュせず超過判定できる★", async () => {
+    mockComputeExpectedBilling.mockResolvedValue({ textUnits: 100_000_000, avatarMinutes: 0 });
+    const res = await request(makeApp(dbWithPlan("standard"), "client_admin"))
+      .get("/v1/admin/my-tenant/upsell-suggestion")
+      .set("Authorization", "Bearer dummy");
+    expect(res.status).toBe(200);
+    expect(res.body.available).toBe(true);
+  });
+
+  it("enterprise プランで既に最上位のとき、超過があっても nextPlanCandidate が無く available:false", async () => {
+    mockComputeExpectedBilling.mockResolvedValue({ textUnits: 999999, avatarMinutes: 0 });
+    const res = await request(makeApp(dbWithPlan("enterprise"), "client_admin"))
+      .get("/v1/admin/my-tenant/upsell-suggestion")
+      .set("Authorization", "Bearer dummy");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ available: false });
+    expect(mockBuildTenantUpsellFigures).not.toHaveBeenCalled();
+  });
+
+  it("avatarMinutes が負の値(データ不整合)でも例外を投げない", async () => {
+    mockComputeExpectedBilling.mockResolvedValue({ textUnits: 10, avatarMinutes: -5 });
+    const res = await request(makeApp(dbWithPlan("standard"), "client_admin"))
+      .get("/v1/admin/my-tenant/upsell-suggestion")
+      .set("Authorization", "Bearer dummy");
+    expect(res.status).toBe(200);
+  });
+
+  it("tenant_id が JWT に無ければ 403(テナントIDが見つかりません)", async () => {
+    const res = await request(makeApp(dbWithPlan("standard"), "client_admin", ""))
+      .get("/v1/admin/my-tenant/upsell-suggestion")
+      .set("Authorization", "Bearer dummy");
+    expect(res.status).toBe(403);
+  });
+
+  it("★DB接続自体が例外を投げても 500 で落ち着く★", async () => {
+    const db = { query: jest.fn().mockRejectedValue(new Error("connection refused")) };
+    const res = await request(makeApp(db, "client_admin"))
+      .get("/v1/admin/my-tenant/upsell-suggestion")
+      .set("Authorization", "Bearer dummy");
+    expect(res.status).toBe(500);
+  });
+});

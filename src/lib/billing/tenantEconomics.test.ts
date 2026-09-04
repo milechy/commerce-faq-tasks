@@ -203,3 +203,80 @@ describe('fetchTenantEconomics', () => {
     expect(db.query.mock.calls.length).toBe(callsAfterFirst);
   });
 });
+
+describe('fetchTenantEconomics — 境界値(MAX_TENANTS)', () => {
+  beforeEach(() => _clearEconomicsCache());
+
+  function mockDb(costRows: unknown[], tenantRows: unknown[]) {
+    return {
+      query: jest.fn(async (sql: string) => {
+        if (sql.includes('FROM usage_logs')) return { rows: costRows };
+        return { rows: tenantRows };
+      }),
+    };
+  }
+  const snapshotOf = (): BillingSnapshotFn =>
+    async () => ({ plan: 'standard', textUnits: 100, avatarMinutes: 0, revenueEstimateJpy: 10_000 });
+  const costRow = (id: string) => ({
+    tenant_id: id, total_requests: '10', cost_base_billable: '1000',
+    cost_base_nonbillable: '0', recorded_rows: '10', all_rows: '10',
+  });
+
+  it('★ちょうど上限件数(50件)なら truncated=false★(境界値のオフバイワン)', async () => {
+    const rows = Array.from({ length: MAX_TENANTS_PER_ECONOMICS_REQUEST }, (_, i) => costRow(`t${i}`));
+    const db = mockDb(rows, rows.map((r) => ({ id: r.tenant_id, name: r.tenant_id })));
+    const res = await fetchTenantEconomics(db, '202609', snapshotOf());
+    expect(res.truncated).toBe(false);
+    expect(res.tenants).toHaveLength(MAX_TENANTS_PER_ECONOMICS_REQUEST);
+  });
+
+  it('★上限+1件なら truncated=true で上限件数までしか返さない★', async () => {
+    const rows = Array.from({ length: MAX_TENANTS_PER_ECONOMICS_REQUEST + 1 }, (_, i) => costRow(`t${i}`));
+    const db = mockDb(rows, rows.map((r) => ({ id: r.tenant_id, name: r.tenant_id })));
+    const res = await fetchTenantEconomics(db, '202609', snapshotOf());
+    expect(res.truncated).toBe(true);
+    expect(res.tenants).toHaveLength(MAX_TENANTS_PER_ECONOMICS_REQUEST);
+  });
+
+  it('★複数テナントの売上取得が同時に失敗しても、成功分は正しく返る★', async () => {
+    const rows = [costRow('ok1'), costRow('fail'), costRow('ok2')];
+    const db = mockDb(rows, rows.map((r) => ({ id: r.tenant_id, name: r.tenant_id })));
+    const snapshot: BillingSnapshotFn = async (_db, tenantId) => {
+      if (tenantId === 'fail') throw new Error('stripe timeout');
+      return { plan: 'standard', textUnits: 100, avatarMinutes: 0, revenueEstimateJpy: 5000 };
+    };
+    const res = await fetchTenantEconomics(db, '202609', snapshot);
+    expect(res.tenants).toHaveLength(3);
+    const failRow = res.tenants.find((t) => t.tenant_id === 'fail')!;
+    expect(failRow.revenue_estimate_jpy).toBeNull();
+    const okRows = res.tenants.filter((t) => t.tenant_id !== 'fail');
+    expect(okRows.every((t) => t.revenue_estimate_jpy === 5000)).toBe(true);
+  });
+
+  it('テナント名が DB に存在しない(names マップに欠落)場合でも tenant_id で表示できる', async () => {
+    const rows = [costRow('ghost')];
+    const db = mockDb(rows, []); // tenants テーブルに該当行なし
+    const res = await fetchTenantEconomics(db, '202609', snapshotOf());
+    expect(res.tenants[0]!.tenant_name).toBeNull();
+    expect(res.tenants[0]!.tenant_id).toBe('ghost');
+  });
+});
+
+describe('periodToJstRangeIso — さらなる境界値', () => {
+  it('period が6桁ちょうどでない(5桁)場合は例外', () => {
+    expect(() => periodToJstRangeIso('20260')).toThrow();
+  });
+
+  it('period が7桁(多すぎる)場合は例外', () => {
+    expect(() => periodToJstRangeIso('2026091')).toThrow();
+  });
+
+  it('遠い未来の年(9999年)でも例外を投げず計算する(意味検証はしない)', () => {
+    expect(() => periodToJstRangeIso('999909')).not.toThrow();
+  });
+
+  it('先頭ゼロの月(01月)を正しく扱う', () => {
+    const r = periodToJstRangeIso('202601');
+    expect(r.from).toBe('2025-12-31T15:00:00.000Z');
+  });
+});
