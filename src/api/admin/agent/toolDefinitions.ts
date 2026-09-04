@@ -854,6 +854,22 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
   {
     type: 'function',
     function: {
+      name: 'get_widget_placement',
+      description:
+        '現在のウィジェット設置位置（position / offsetX / offsetY）と既定値を提示する読み取り専用ツール。' +
+        '何も変更しない。ユーザーが「ウィジェットが他のボタンと重なる」「アイコンの位置を確認したい」' +
+        '「今どこに出てる？」等、設置位置について尋ねてきたときにまず使い、現在値を見せてから' +
+        '相談に応じること。変更は set_widget_theme で行う（このツールは変更しない）。',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'get_embed_code',
       description: 'ウィジェット埋め込みコードのひな形を取得する（APIキーは発行時のみ表示のため、key_prefix のみ表示。set_widget_theme で primaryColor を設定済みなら data-accent-color 属性、position / offsetX / offsetY を設定済みなら data-position / data-offset-x / data-offset-y 属性も含める）',
       parameters: {
