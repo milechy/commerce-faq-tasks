@@ -29,7 +29,10 @@ import { countFreeAdAdminConsults, reserveAdminConsultSlotIfWithinLimit, release
 import { initUsageTracker, trackUsage } from "./usageTracker";
 import { calculateBaseCostCents, calculateBillingAmountCents } from "./costCalculator";
 import { MARGIN_MULTIPLIER } from "./costCalculator";
-import { fetchTenantEconomics, _clearEconomicsCache, type BillingSnapshotFn } from "./tenantEconomics";
+import {
+  fetchTenantEconomics, fetchTenantEconomicsDetail, _clearEconomicsCache,
+  type BillingSnapshotFn, type InvoiceFetcherFn, type PeriodInvoice,
+} from "./tenantEconomics";
 import { buildSuperAdminUpsellFigures } from "./billingApi";
 
 const DB_URL = process.env.BILLING_SQL_TEST_DATABASE_URL;
@@ -1845,5 +1848,133 @@ d("buildSuperAdminUpsellFigures（実 Postgres・プラン不一致の再現）"
       db, "t1", "text_overage", "starter", "growth", "202609",
     );
     expect(figures.text_overage).toBe(0);
+  });
+});
+
+/**
+ * fetchTenantEconomicsDetail のドリルダウン突合(推計 vs Stripe実請求)を実 Postgres で検証する。
+ *
+ * P1b(レビュー指摘): この突合ロジックはこれまでテスト0件で本番投入されていた。
+ * Stripe への実アクセスは行わず、InvoiceFetcherFn をスタブに差し替えて
+ * pickInvoiceForPeriod・finalized判定・currency_mismatch・variance計算だけを検証する
+ * (Stripe SDK 自体の疎通は他のテストの対象外)。
+ */
+d("fetchTenantEconomicsDetail の実請求突合（実 Postgres・スタブ Invoice）", () => {
+  let db: Pool;
+
+  const REVENUE_JPY = 22_300;
+  const stubSnapshot: BillingSnapshotFn = async () => ({
+    plan: "growth", textUnits: 0, avatarMinutes: 0, revenueEstimateJpy: REVENUE_JPY,
+  });
+
+  beforeAll(() => {
+    db = new Pool({ connectionString: DB_URL, options: "-c timezone=UTC" });
+  });
+
+  afterAll(async () => {
+    await db.end();
+  });
+
+  beforeEach(async () => {
+    await db.query("TRUNCATE usage_logs CASCADE");
+    await db.query("TRUNCATE tenants CASCADE");
+    await db.query(`INSERT INTO tenants (id, name, plan) VALUES ('t1','t1','growth')`);
+  });
+
+  const PERIOD = "202609";
+  const FROM_MS = Date.parse("2026-08-31T15:00:00.000Z");
+  const TO_MS = Date.parse("2026-09-30T15:00:00.000Z");
+
+  function invoice(overrides: Partial<PeriodInvoice> = {}): PeriodInvoice {
+    return {
+      id: "in_1", status: "paid", amount_due: 23_000, amount_paid: 23_000, currency: "jpy",
+      period_start: Math.floor(FROM_MS / 1000) + 3600, // 期間内に収まる典型的な請求書
+      period_end: Math.floor(TO_MS / 1000) - 3600,
+      hosted_invoice_url: "https://stripe.example/in_1",
+      ...overrides,
+    };
+  }
+
+  it("getInvoices が null(Stripe未設定/未契約) → 突合不可の既定値のまま、variance も null", async () => {
+    const getInvoices: InvoiceFetcherFn = async () => null;
+    const detail = await fetchTenantEconomicsDetail(db, "t1", PERIOD, stubSnapshot, getInvoices);
+    expect(detail?.invoiced.reason).toBe("no_subscription_or_stripe_unavailable");
+    expect(detail?.invoiced.amount_jpy).toBeNull();
+    expect(detail?.invoiced.finalized).toBe(false);
+    expect(detail?.variance_jpy).toBeNull();
+  });
+
+  it("getInvoices引数そのものが null(reconcile未指定)でも突合不可の既定値のまま落ちない", async () => {
+    const detail = await fetchTenantEconomicsDetail(db, "t1", PERIOD, stubSnapshot, null);
+    expect(detail?.invoiced.reason).toBe("no_subscription_or_stripe_unavailable");
+    expect(detail?.invoiced.amount_jpy).toBeNull();
+    expect(detail?.variance_jpy).toBeNull();
+  });
+
+  it("★該当月に重なる請求書が無い → 「請求書なし」であって「¥0」ではない★", async () => {
+    const getInvoices: InvoiceFetcherFn = async () => [];
+    const detail = await fetchTenantEconomicsDetail(db, "t1", PERIOD, stubSnapshot, getInvoices);
+    expect(detail?.invoiced.reason).toBe("no_invoice");
+    expect(detail?.invoiced.amount_jpy).toBeNull();
+    expect(detail?.variance_jpy).toBeNull();
+  });
+
+  it("通貨がJPYでない請求書は突合しない(誤った差分を出すより不明を返す)", async () => {
+    const getInvoices: InvoiceFetcherFn = async () => [invoice({ currency: "usd" })];
+    const detail = await fetchTenantEconomicsDetail(db, "t1", PERIOD, stubSnapshot, getInvoices);
+    expect(detail?.invoiced.reason).toBe("currency_mismatch");
+    expect(detail?.invoiced.amount_jpy).toBeNull();
+    expect(detail?.invoiced.finalized).toBe(false);
+    // status/invoice_id は「見つかったが比較できない」ことを示すために残す
+    expect(detail?.invoiced.status).toBe("paid");
+    expect(detail?.invoiced.invoice_id).toBe("in_1");
+    expect(detail?.variance_jpy).toBeNull();
+  });
+
+  it("★未確定(status!=='paid')の請求書は差分(variance_jpy)を出さない(翌日消える乖離を追わない)★", async () => {
+    const getInvoices: InvoiceFetcherFn = async () => [invoice({ status: "open", amount_due: 99_999 })];
+    const detail = await fetchTenantEconomicsDetail(db, "t1", PERIOD, stubSnapshot, getInvoices);
+    expect(detail?.invoiced.finalized).toBe(false);
+    expect(detail?.invoiced.reason).toBe("not_finalized");
+    // 金額自体は見せる(確定前バッジと一緒にフロントで出す)。差分だけを止める。
+    expect(detail?.invoiced.amount_jpy).toBe(99_999);
+    expect(detail?.variance_jpy).toBeNull();
+  });
+
+  it("確定済み(paid)・JPY建てなら実請求額と差分(実請求-推計)を返す", async () => {
+    const getInvoices: InvoiceFetcherFn = async () => [invoice({ amount_due: 23_000 })];
+    const detail = await fetchTenantEconomicsDetail(db, "t1", PERIOD, stubSnapshot, getInvoices);
+    expect(detail?.invoiced.finalized).toBe(true);
+    expect(detail?.invoiced.reason).toBeNull();
+    expect(detail?.invoiced.amount_jpy).toBe(23_000);
+    expect(detail?.variance_jpy).toBe(23_000 - REVENUE_JPY);
+  });
+
+  it("実請求が推計より少なければ差分は負の値になる(黒字/赤字を取り違えない)", async () => {
+    const getInvoices: InvoiceFetcherFn = async () => [invoice({ amount_due: 10_000 })];
+    const detail = await fetchTenantEconomicsDetail(db, "t1", PERIOD, stubSnapshot, getInvoices);
+    expect(detail?.variance_jpy).toBe(10_000 - REVENUE_JPY);
+    expect(detail!.variance_jpy!).toBeLessThan(0);
+  });
+
+  it("★複数の請求書が重なるとき、期間との重なりが最大のものを選ぶ★", async () => {
+    // ①は期間の一部だけ重なる(境界付近の旧請求書)。②は期間全体を覆う(本命)。
+    const getInvoices: InvoiceFetcherFn = async () => [
+      invoice({
+        id: "in_old", amount_due: 1,
+        period_start: Math.floor(FROM_MS / 1000) - 86400 * 25,
+        period_end: Math.floor(FROM_MS / 1000) + 3600, // 期間開始直後だけ少し重なる
+      }),
+      invoice({ id: "in_correct", amount_due: 23_000 }), // 期間内にすっぽり収まる
+    ];
+    const detail = await fetchTenantEconomicsDetail(db, "t1", PERIOD, stubSnapshot, getInvoices);
+    expect(detail?.invoiced.invoice_id).toBe("in_correct");
+    expect(detail?.invoiced.amount_jpy).toBe(23_000);
+  });
+
+  it("存在しないテナントは null(突合以前にテナント自体が無い)", async () => {
+    const getInvoices: InvoiceFetcherFn = async () => [invoice()];
+    const detail = await fetchTenantEconomicsDetail(db, "ghost", PERIOD, stubSnapshot, getInvoices);
+    expect(detail).toBeNull();
   });
 });

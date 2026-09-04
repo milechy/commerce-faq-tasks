@@ -38,7 +38,11 @@ function nullableString(v: unknown, field: string): string | null {
 
 const ESTIMATION_METHODS: readonly EstimationMethod[] = ["recorded", "derived", "mixed"];
 
-function parseRow(input: unknown, i: number): TenantMarginRow {
+/**
+ * ★export している理由★ economicsDetail.schema.ts(ドリルダウン)のレスポンスも
+ * 同じ形の1行(row)を含む。検証ロジックを2箇所に書き写さないよう、ここから再利用する。
+ */
+export function parseRow(input: unknown, i: number): TenantMarginRow {
   if (typeof input !== "object" || input === null) {
     throw new Error(`economics: tenants[${i}] がオブジェクトではありません`);
   }
