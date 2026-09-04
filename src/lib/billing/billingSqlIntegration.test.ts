@@ -1406,6 +1406,140 @@ d("countFreeAdAdminConsults（実 Postgres に対する管理AI月次上限の�
       ).resolves.toBeUndefined();
     });
   });
+
+  // GID 1218162837824797 レビュー是正(2026-09-04, P1): pg_advisory_lock に
+  // lock_timeout が無く、同一テナントへの同時アクセスが集中すると無期限に
+  // 待ち続けうる問題を、明示的なトランザクション(BEGIN → SET LOCAL
+  // lock_timeout → pg_advisory_xact_lock → COMMIT/ROLLBACK)に切り替えて対処した。
+  // ここでは「本当にタイムアウトが効くか」を実Postgresで検証する
+  // (モックのjest.fn()では「呼ばれたか」しか確認できず、Postgres自体が
+  // lock_timeout GUC をadvisory lockの待機に適用することまでは検証できない)。
+  describe("reserveAdminConsultSlotIfWithinLimit の lock_timeout(実Postgres)", () => {
+    it("同一テナントのロックを他セッションが保持し続けていると、約3秒でタイムアウトしてfail-open側に倒れる(ハングしない)", async () => {
+      const now = new Date("2026-03-05T02:00:00Z");
+
+      // 別クライアントで advisory lock を先に取り、意図的にCOMMIT/ROLLBACKせず保持し続ける
+      // (実装と同じキー: `admin_agent_consult:${tenantId}` を hashtext() に通す)。
+      const holder = new Pool({ connectionString: DB_URL, options: "-c timezone=UTC" });
+      const holderClient = await holder.connect();
+      await holderClient.query("BEGIN");
+      await holderClient.query(
+        "SELECT pg_advisory_xact_lock(hashtext($1))",
+        ["admin_agent_consult:t1"]
+      );
+
+      try {
+        const startedAt = Date.now();
+        await expect(
+          reserveAdminConsultSlotIfWithinLimit(db, "t1", "sess-lock-wait", now)
+        ).rejects.toThrow();
+        const elapsedMs = Date.now() - startedAt;
+
+        // 3秒ちょうどではなくても、ハング(無期限待ち)していないことを確認する。
+        // 10秒以内に例外で返ってくればlock_timeoutが機能している。
+        expect(elapsedMs).toBeGreaterThanOrEqual(2000);
+        expect(elapsedMs).toBeLessThan(10000);
+      } finally {
+        await holderClient.query("ROLLBACK");
+        holderClient.release();
+        await holder.end();
+      }
+    }, 15000);
+
+    it("ロックが競合しなければ、通常どおり即座に完了する(タイムアウト設定が通常系を遅くしない)", async () => {
+      const now = new Date("2026-03-05T02:00:00Z");
+      const startedAt = Date.now();
+      const result = await reserveAdminConsultSlotIfWithinLimit(db, "t1", "sess-no-contention", now);
+      const elapsedMs = Date.now() - startedAt;
+
+      expect(result.blocked).toBe(false);
+      expect(elapsedMs).toBeLessThan(1000);
+    });
+  });
+
+  // GID 1218162837824797 レビュー是正(2026-09-04, P2): countFreeAdAdminConsults は
+  // computeExpectedBilling(admin_units CTE)と同じ判定を意図的に別実装している
+  // (countFreeAdAdminConsults自身のコメント参照)。この重複は「請求上の
+  // adminConsults」と「free_ad上限が数える件数」が乖離しうるリスクを持つため、
+  // 同一フィクスチャに対して両者を実Postgresで突き合わせる。
+  // ★このテストが無かった場合の実害★ 例えば admin_units 側だけ
+  // billable=false の除外条件を変更しても、countFreeAdAdminConsults 側は
+  // 追随しないため型チェックもテストも通ったまま、請求と無料枠判定が食い違う。
+  describe("countFreeAdAdminConsults と computeExpectedBilling(admin_units)の一致", () => {
+    it("同一フィクスチャで adminConsults と count が一致する(基本パターン。session_idは常に有る前提)", async () => {
+      const now = new Date("2026-03-05T02:00:00Z");
+      await db.query(`
+        INSERT INTO usage_logs (tenant_id, request_id, session_id, feature_used, billable, created_at) VALUES
+          ('t1','c1','s1','admin_agent', true, '2026-03-05T01:00:00Z'),
+          ('t1','c2','s1','admin_agent', true, '2026-03-05T05:00:00Z'),
+          ('t1','c3','s2','admin_agent', true, '2026-03-06T01:00:00Z'),
+          ('t1','c4','s3','admin_agent', false, '2026-03-08T01:00:00Z');
+      `);
+
+      const billing = await computeExpectedBilling(db, "t1", "2026-03-01", "2026-04-01", "free_ad");
+      const gate = await countFreeAdAdminConsults(db, "t1", "none", now);
+
+      // (s1,03-05)=1 + (s2,03-06)=1。c4はbillable=falseなので両方とも数えない。
+      expect(billing.adminConsults).toBe(2);
+      expect(gate.count).toBe(billing.adminConsults);
+    });
+
+    // ★このテストが本題★ 同一フィクスチャに対して両者が同じ答えを返す、という
+    // 前のテストの裏返しとして、意図的に「一致しない」1ケースを明示的に固定する。
+    // session_id が NULL の admin_agent 行は、chatSchema(z.string().min(1))が
+    // sessionId を必須にしているため現在のアプリコードからは作れないが、
+    // migration適用前・配線漏れ等の"legacy行"としてDBに残りうる。
+    //   - computeExpectedBilling(admin_units)は row_units フォールバックで
+    //     1行=1単位として拾う(「黙って請求から消さない」既存方針)。
+    //   - countFreeAdAdminConsults は session_id IS NOT NULL を要求するため、
+    //     このlegacy行を一切数えない。
+    // 方向としては fail-open 側(free_adの上限判定が"数え漏れる"側)なので、
+    // 店主を誤って止める事故には繋がらない。だが「両者は常に一致する」という
+    // 誤解のまま実装を触ると、この行だけ静かに挙動が割れることに気づけないため、
+    // 既知の乖離としてここに明示する。
+    it("★既知の乖離★ session_idがNULLのlegacy行は、billingには乗るがfree_ad上限には数えられない", async () => {
+      const now = new Date("2026-03-05T02:00:00Z");
+      await db.query(`
+        INSERT INTO usage_logs (tenant_id, request_id, session_id, feature_used, billable, created_at)
+        VALUES ('t1','c-legacy',NULL,'admin_agent', true, '2026-03-05T01:00:00Z');
+      `);
+
+      const billing = await computeExpectedBilling(db, "t1", "2026-03-01", "2026-04-01", "free_ad");
+      const gate = await countFreeAdAdminConsults(db, "t1", "none", now);
+
+      expect(billing.adminConsults).toBe(1); // row_unitsフォールバックで数える
+      expect(gate.count).toBe(0); // session_id IS NOT NULL の条件で除外される
+    });
+
+    it("JST暦日の境界をまたぐケースでも両者が一致する(UTC同日・JST別日)", async () => {
+      const now = new Date("2026-03-05T02:00:00Z");
+      // 2026-03-02T16:00:00Z = JST 2026-03-03 01:00(admin_units・countFreeAdAdminConsultsの
+      // 双方が同じ「JST暦日」判定を行っているかを、境界値で突き合わせる)。
+      await db.query(`
+        INSERT INTO usage_logs (tenant_id, request_id, session_id, feature_used, billable, created_at) VALUES
+          ('t1','b1','s-boundary','admin_agent', true, '2026-03-02T14:00:00Z'),
+          ('t1','b2','s-boundary','admin_agent', true, '2026-03-02T16:00:00Z');
+      `);
+
+      const billing = await computeExpectedBilling(db, "t1", "2026-03-01", "2026-04-01", "free_ad");
+      const gate = await countFreeAdAdminConsults(db, "t1", "none", now);
+
+      expect(billing.adminConsults).toBe(2); // JST 03-02とJST 03-03で別の相談
+      expect(gate.count).toBe(billing.adminConsults);
+    });
+
+    it("予約行(billable=true・原価0)を含めても両者は一致する(reserveAdminConsultSlotIfWithinLimitとの整合)", async () => {
+      const now = new Date("2026-03-05T02:00:00Z");
+      const reserved = await reserveAdminConsultSlotIfWithinLimit(db, "t1", "s-reserved", now);
+      expect(reserved.blocked).toBe(false);
+
+      const billing = await computeExpectedBilling(db, "t1", "2026-03-01", "2026-04-01", "free_ad");
+      const gate = await countFreeAdAdminConsults(db, "t1", "none", now);
+
+      expect(billing.adminConsults).toBe(1);
+      expect(gate.count).toBe(billing.adminConsults);
+    });
+  });
 });
 
 // stripeWebhook.ts の _handleCheckoutSessionCompleted が発行するINSERT文の実DB回帰。
