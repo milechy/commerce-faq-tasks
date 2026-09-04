@@ -149,6 +149,8 @@ export const NON_WRITE_TOOLS: readonly string[] = [
   'get_category_personas',
   'suggest_category_persona',
   'get_embed_code',
+  // GID 1218167820775294 (L3-1a): 現在の設置位置を提示するだけで何も書き込まない。
+  'get_widget_placement',
   'get_tuning_rules',
   'get_weekly_briefing',
   'get_knowledge_gaps',

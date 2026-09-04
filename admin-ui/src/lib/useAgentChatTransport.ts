@@ -315,6 +315,21 @@ export type PlanChangedAgentActionCard = {
   billingSyncNeedsAttention: boolean;
 };
 
+// GID 1218167820775294 (L3-1a): get_widget_placement の現在値提示カード。読み取り専用
+// (このカードにボタンは無い。編集導線はL3-1bで別途追加する)。フィールド形状は
+// サーバ側 WidgetPlacementCardPayload(actionExecutor.ts)と一致させること。position の
+// 値域は src/api/admin/agent/widgetPlacement.ts の WIDGET_POSITIONS と同じ
+// (admin-ui は別ビルドで src/ から import できないためここでも複製する)。
+export type WidgetPlacementAgentActionCard = {
+  kind: "widget_placement";
+  position: "bottom-right" | "bottom-left";
+  offsetX: number;
+  offsetY: number;
+  defaultPosition: "bottom-right" | "bottom-left";
+  defaultOffsetX: number;
+  defaultOffsetY: number;
+};
+
 export type AgentActionCard =
   | LegacyLinkAgentActionCard
   | AvatarPresetAgentActionCard
@@ -332,7 +347,8 @@ export type AgentActionCard =
   | AbTestResultsAgentActionCard
   | KnowledgeAttributionAgentActionCard
   | BillingSummaryAgentActionCard
-  | PlanChangedAgentActionCard;
+  | PlanChangedAgentActionCard
+  | WidgetPlacementAgentActionCard;
 
 export type AgentAction = { tool: string; result: string; card?: AgentActionCard };
 

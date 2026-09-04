@@ -59,7 +59,15 @@ import { getRuleEffect } from '../analytics/ruleEffect';
 import { computeAbExperimentResults, fetchAbExperimentsOverview } from '../../conversion/abResultsQuery';
 import { fetchUnreadNotificationsByType } from '../../../lib/notifications';
 import { isOnboardingIndustry, ONBOARDING_INDUSTRY_LABELS, INDUSTRY_FAQ_TEMPLATES } from './industryFaqTemplates';
-import { buildPlacementAttributes, validateWidgetPlacement } from './widgetPlacement';
+import {
+  buildPlacementAttributes,
+  validateWidgetPlacement,
+  isValidWidgetPosition,
+  parseWidgetOffset,
+  DEFAULT_WIDGET_POSITION,
+  DEFAULT_WIDGET_OFFSET,
+  type WidgetPosition,
+} from './widgetPlacement';
 
 // チャットでの一括インポートで一度に生成・コミットできるFAQ数の上限。
 // POST /v1/admin/knowledge/text/commit・/scrape/commit の zod スキーマ(max 20)と揃える。
@@ -757,6 +765,21 @@ export type PlanChangedCardPayload = {
   billingSyncNeedsAttention: boolean;
 };
 
+// GID 1218167820775294 (L3-1a): get_widget_placement が返す、現在の設置位置カード。
+// 読み取り専用(このカードにボタンは無い) — 編集導線はL3-1bで別途追加する。
+// current/defaultの両方を持たせるのは、店主が「今どれだけ既定からずれているか」を
+// 見て戻すかどうか判断できるようにするため(widgetPlacement.tsのDEFAULT_WIDGET_POSITION/
+// DEFAULT_WIDGET_OFFSETをそのまま持たせ、ここで値を再計算しない)。
+export type WidgetPlacementCardPayload = {
+  kind: 'widget_placement';
+  position: WidgetPosition;
+  offsetX: number;
+  offsetY: number;
+  defaultPosition: WidgetPosition;
+  defaultOffsetX: number;
+  defaultOffsetY: number;
+};
+
 export type ActionCardPayload =
   | LegacyLinkCardPayload
   | AvatarPresetCardPayload
@@ -774,7 +797,8 @@ export type ActionCardPayload =
   | AbTestResultsCardPayload
   | KnowledgeAttributionCardPayload
   | BillingSummaryCardPayload
-  | PlanChangedCardPayload;
+  | PlanChangedCardPayload
+  | WidgetPlacementCardPayload;
 
 // ツール結果は既定では素の文字列で、構造化データを添えるツールだけが
 // { text, card } 形を返す。card は text の置き換えではなく追加である
@@ -2515,6 +2539,43 @@ export async function executeToolCall(
       } catch (err) {
         logger.warn('[actionExecutor] save_category_persona failed', err);
         return truncate('カテゴリ別ペルソナの保存に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // GID 1218167820775294 (L3-1a): 現在の設置位置を提示する読み取り専用ツール。
+    // set_widget_theme とは異なり何も書き込まない(suggest_avatar_presetと同じ
+    // 「提案/提示は読み取り専用」の原則)。テナントがサイト側の既存ボタンとの重なりを
+    // 相談してきたとき、生のpxを打たせる前にまず現在値を見せるためのもの。
+    case 'get_widget_placement': {
+      try {
+        const res = await db.query('SELECT widget_theme FROM tenants WHERE id = $1', [tenantId]);
+        const widgetTheme = (res.rows[0] as { widget_theme: Record<string, unknown> | null } | undefined)?.widget_theme;
+
+        const rawPosition = widgetTheme?.['position'];
+        const position: WidgetPosition = isValidWidgetPosition(rawPosition) ? rawPosition : DEFAULT_WIDGET_POSITION;
+        const offsetX = parseWidgetOffset(widgetTheme?.['offsetX']) ?? DEFAULT_WIDGET_OFFSET;
+        const offsetY = parseWidgetOffset(widgetTheme?.['offsetY']) ?? DEFAULT_WIDGET_OFFSET;
+
+        return {
+          text: truncate(
+            `現在の設置位置: ${position}（既定: ${DEFAULT_WIDGET_POSITION}）、` +
+            `offsetX: ${offsetX}px（既定: ${DEFAULT_WIDGET_OFFSET}px）、` +
+            `offsetY: ${offsetY}px（既定: ${DEFAULT_WIDGET_OFFSET}px）`,
+          ),
+          card: {
+            kind: 'widget_placement',
+            position,
+            offsetX,
+            offsetY,
+            defaultPosition: DEFAULT_WIDGET_POSITION,
+            defaultOffsetX: DEFAULT_WIDGET_OFFSET,
+            defaultOffsetY: DEFAULT_WIDGET_OFFSET,
+          },
+        };
+      } catch (err) {
+        logger.warn('[actionExecutor] get_widget_placement failed', err);
+        return truncate('設置位置の取得に失敗しました');
       }
     }
 

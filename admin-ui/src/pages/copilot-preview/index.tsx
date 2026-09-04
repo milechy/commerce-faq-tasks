@@ -30,7 +30,7 @@ import {
   AGENT_CHAT_HISTORY_MAX_ENTRIES,
   useAgentChatTransport,
 } from "../../lib/useAgentChatTransport";
-import type { AnsweredFrom, WeeklySummaryAgentActionCard, RuleEffectAgentActionCard, AnalyticsTrendAgentActionCard, AbTestResultsAgentActionCard, KnowledgeAttributionAgentActionCard, BillingSummaryAgentActionCard, FaqImportPreviewAgentActionCard, PlanChangedAgentActionCard } from "../../lib/useAgentChatTransport";
+import type { AnsweredFrom, WeeklySummaryAgentActionCard, RuleEffectAgentActionCard, AnalyticsTrendAgentActionCard, AbTestResultsAgentActionCard, KnowledgeAttributionAgentActionCard, BillingSummaryAgentActionCard, FaqImportPreviewAgentActionCard, PlanChangedAgentActionCard, WidgetPlacementAgentActionCard } from "../../lib/useAgentChatTransport";
 // アバター画像候補のプロンプト組み立ては旧UIウィザードと同じ関数を使う(再実装しない)。
 // チャットは選択肢を集めないため、固定の標準的な選択で呼ぶ。
 import { buildAvatarPrompt, type AvatarPromptInput } from "../../lib/buildAvatarPrompt";
@@ -274,7 +274,11 @@ type Card =
   | ({ kind: "billingSummary" } & Omit<BillingSummaryAgentActionCard, "kind">)
   // CP-3(GID 1218086647623729): change_my_plan の実行後カード。フィールド形状は
   // PlanChangedAgentActionCard(useAgentChatTransport.ts)と同一に保つ(weeklySummaryと同じ作法)。
-  | ({ kind: "planChanged" } & Omit<PlanChangedAgentActionCard, "kind">);
+  | ({ kind: "planChanged" } & Omit<PlanChangedAgentActionCard, "kind">)
+  // GID 1218167820775294 (L3-1a): get_widget_placement の現在値提示カード(読み取り専用)。
+  // フィールド形状は WidgetPlacementAgentActionCard(useAgentChatTransport.ts)と同一に保つ
+  // (weeklySummaryと同じ作法)。
+  | ({ kind: "widgetPlacement" } & Omit<WidgetPlacementAgentActionCard, "kind">);
 
 // 優先度3段階(lib/tuningPriority.ts)の店主向け表示ラベル。rule / rulesList カードで共有する。
 const TIER_LABEL: Record<"low" | "normal" | "high", string> = { low: "低", normal: "普通", high: "高" };
@@ -317,6 +321,7 @@ const REAL_TOOL_LABEL: Record<string, string> = {
   suggest_category_persona: "カテゴリ別ペルソナの下書き提案",
   save_category_persona: "カテゴリ別ペルソナの保存",
   get_embed_code: "埋め込みコードの取得",
+  get_widget_placement: "ウィジェット設置位置の取得",
   set_widget_theme: "ウィジェットテーマの変更",
   get_tuning_rules: "指示ルール一覧の取得",
   update_tuning_rule: "指示ルールの更新",
@@ -1058,6 +1063,14 @@ export default function CopilotPreviewPage() {
           id: nextId(),
           role: "ai",
           card: { kind: "planChanged", previousPlan, previousPlanLabel, plan, planLabel, billingSyncNeedsAttention },
+        };
+      }
+      if (a.card?.kind === "widget_placement") {
+        const { position, offsetX, offsetY, defaultPosition, defaultOffsetX, defaultOffsetY } = a.card;
+        return {
+          id: nextId(),
+          role: "ai",
+          card: { kind: "widgetPlacement", position, offsetX, offsetY, defaultPosition, defaultOffsetX, defaultOffsetY },
         };
       }
       // D6: 優先度を含め、正規表現では拾えなかった内容(複数行の対応方針)もそのまま運ぶ。
@@ -3092,6 +3105,8 @@ function CardView({
       return <BillingSummaryCard card={card} />;
     case "planChanged":
       return <PlanChangedCard card={card} />;
+    case "widgetPlacement":
+      return <WidgetPlacementCard card={card} />;
     case "knowledgeGapsList":
       return (
         <CardShell hd={<><span>📚</span>知識ギャップ一覧（{card.totalCount}件）</>}>
@@ -3747,6 +3762,65 @@ function PlanChangedCard({ card }: { card: Extract<Card, { kind: "planChanged" }
           注意: 請求構成の更新に問題が発生しました。運営（R2Cサポート）までご連絡ください
         </div>
       )}
+    </CardShell>
+  );
+}
+
+// GID 1218167820775294 (L3-1a): get_widget_placement の現在値提示カード。読み取り専用
+// — ボタンは無い(編集導線はL3-1bで別途追加する)。テナントが「ウィジェットが他のボタンと
+// 重なる」と相談してきたとき、生のpxを打たせる前にまず現在値と既定値を見せるためのもの。
+const WIDGET_POSITION_LABEL: Record<"bottom-right" | "bottom-left", string> = {
+  "bottom-right": "右下",
+  "bottom-left": "左下",
+};
+// src/api/admin/agent/widgetPlacement.ts の WIDGET_OFFSET_MAX と同じ値(admin-ui は
+// 別ビルドで src/ から import できないため複製する)。ダイアグラムの縮尺のみに使う。
+const WIDGET_OFFSET_VISUAL_MAX = 320;
+
+function WidgetPlacementCard({ card }: { card: Extract<Card, { kind: "widgetPlacement" }> }) {
+  const { position, offsetX, offsetY, defaultPosition, defaultOffsetX, defaultOffsetY } = card;
+  const isDefault = position === defaultPosition && offsetX === defaultOffsetX && offsetY === defaultOffsetY;
+
+  // 簡易ダイアグラム: 枠=画面、点=ウィジェットアイコンのおおよその位置。
+  // 正確な縮尺表示が目的ではなく、既定からどちら向きにどれだけずれているかが
+  // 見た目で伝わればよいため、余白(px, 0〜320)を小さな枠の中で強調して動かす。
+  const BOX_W = 96;
+  const BOX_H = 64;
+  const MAX_INSET = 30;
+  const toInset = (px: number) => 8 + Math.min(MAX_INSET, (px / WIDGET_OFFSET_VISUAL_MAX) * MAX_INSET);
+  const insetX = toInset(offsetX);
+  const insetY = toInset(offsetY);
+  const dotStyle: React.CSSProperties =
+    position === "bottom-left"
+      ? { position: "absolute", bottom: insetY, left: insetX, width: 10, height: 10, borderRadius: "50%", background: AGENT, boxShadow: "0 0 0 3px rgba(124,58,237,0.25)" }
+      : { position: "absolute", bottom: insetY, right: insetX, width: 10, height: 10, borderRadius: "50%", background: AGENT, boxShadow: "0 0 0 3px rgba(124,58,237,0.25)" };
+
+  return (
+    <CardShell hd={<><span>📍</span>ウィジェットの設置位置</>} tone={isDefault ? "agent" : "brand"}>
+      <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
+        <div style={{ position: "relative", width: BOX_W, height: BOX_H, borderRadius: 8, border: "1px solid var(--border)", background: "var(--muted, rgba(120,120,140,0.08))", flexShrink: 0 }}>
+          <div style={dotStyle} />
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <Field
+            k="寄せる角"
+            v={`${WIDGET_POSITION_LABEL[position]}${position !== defaultPosition ? `（既定: ${WIDGET_POSITION_LABEL[defaultPosition]}）` : ""}`}
+          />
+          <Field
+            k="横方向の余白 (offsetX)"
+            v={`${offsetX}px${offsetX !== defaultOffsetX ? `（既定: ${defaultOffsetX}px）` : ""}`}
+          />
+          <Field
+            k="縦方向の余白 (offsetY)"
+            v={`${offsetY}px${offsetY !== defaultOffsetY ? `（既定: ${defaultOffsetY}px）` : ""}`}
+          />
+        </div>
+      </div>
+      <div style={{ fontSize: 12.5, color: "var(--muted-foreground)" }}>
+        {isDefault
+          ? "既定の設置位置のままです。"
+          : "既定から変更されています。サイト側の他の要素と重なる場合はご相談ください。"}
+      </div>
     </CardShell>
   );
 }

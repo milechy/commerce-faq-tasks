@@ -17,9 +17,12 @@ export type WidgetPosition = (typeof WIDGET_POSITIONS)[number];
 export const WIDGET_OFFSET_MIN = 0;
 export const WIDGET_OFFSET_MAX = 320;
 
-/** 既定値。埋め込みコードには出力しない（widget.js 側の既定と同じため） */
-const DEFAULT_POSITION: WidgetPosition = 'bottom-right';
-const DEFAULT_OFFSET = 24;
+/**
+ * 既定値。埋め込みコードには出力しない（widget.js 側の既定と同じため）。
+ * get_widget_placement が「現在値 vs 既定値」を提示するためにも参照する。
+ */
+export const DEFAULT_WIDGET_POSITION: WidgetPosition = 'bottom-right';
+export const DEFAULT_WIDGET_OFFSET = 24;
 
 export function isValidWidgetPosition(value: unknown): value is WidgetPosition {
   return typeof value === 'string' && (WIDGET_POSITIONS as readonly string[]).includes(value);
@@ -65,7 +68,7 @@ export function buildPlacementAttributes(theme: Record<string, unknown> | null |
   const attrs: string[] = [];
 
   const position = theme['position'];
-  if (isValidWidgetPosition(position) && position !== DEFAULT_POSITION) {
+  if (isValidWidgetPosition(position) && position !== DEFAULT_WIDGET_POSITION) {
     attrs.push(`data-position="${position}"`);
   }
   const pairs: Array<[string, string]> = [
@@ -74,7 +77,7 @@ export function buildPlacementAttributes(theme: Record<string, unknown> | null |
   ];
   for (const [key, attr] of pairs) {
     const offset = parseWidgetOffset(theme[key]);
-    if (offset !== null && offset !== DEFAULT_OFFSET) {
+    if (offset !== null && offset !== DEFAULT_WIDGET_OFFSET) {
       attrs.push(`${attr}="${offset}"`);
     }
   }
