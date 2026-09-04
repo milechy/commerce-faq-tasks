@@ -3973,6 +3973,13 @@ function WidgetPlacementCard({ card, onSendReal }: { card: Extract<Card, { kind:
     setOffsetX(defaultOffsetX);
     setOffsetY(defaultOffsetY);
   };
+  // GID 1218167748481513: よくある「サイト側の既存ボタンと重なる」ケースの固定解。
+  // テナントaccept社の実インシデント(2026-09-04)で解消した値=96に、offsetYだけを
+  // 常に固定でジャンプさせる(現在値からの加算ではない)。position/offsetXは変えない。
+  // スライダーと同じくローカル状態のみを動かし、保存は既存の「適用」ボタンに委ねる。
+  const handleFixOverlap = () => {
+    setOffsetY(96);
+  };
 
   return (
     <CardShell hd={<><span>📍</span>ウィジェットの設置位置</>} tone={isDefault ? "agent" : "brand"}>
@@ -4076,6 +4083,12 @@ function WidgetPlacementCard({ card, onSendReal }: { card: Extract<Card, { kind:
             style={{ fontSize: 14.5, fontWeight: 700, padding: "10px 18px", borderRadius: 12, minHeight: 44, border: "1px solid var(--border)", background: "transparent", color: "var(--foreground)", cursor: "pointer" }}
           >
             元に戻す
+          </button>
+          <button
+            onClick={handleFixOverlap}
+            style={{ fontSize: 14.5, fontWeight: 700, padding: "10px 18px", borderRadius: 12, minHeight: 44, border: "1px solid var(--border)", background: "transparent", color: "var(--foreground)", cursor: "pointer" }}
+          >
+            重なりを直す
           </button>
         </div>
       )}
