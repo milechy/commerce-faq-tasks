@@ -17,7 +17,7 @@
 // 届かないのかを利用者が切り分けられない（→ 禁止21）。
 
 import { safeFetch, SsrfBlockedError } from "../../lib/net/ssrfGuard";
-import { WP_CHALLENGE_PREFIX } from "./wpProvisionToken";
+import { WP_CHALLENGE_PREFIX, hashWpSecret } from "./wpProvisionToken";
 
 /** プラグインが自サイトに立てる検証用ルート。プラグイン側と対で変更すること。 */
 export const WP_VERIFY_PATH = "/wp-json/r2c/v1/verify";
@@ -79,14 +79,22 @@ export function parseWpVerifyChallenge(body: string): string | null {
 }
 
 /**
- * origin のサイトへ検証ルートを取りに行き、期待するチャレンジと一致するか確かめる。
+ * origin のサイトへ検証ルートを取りに行き、期待するチャレンジのハッシュと一致するか確かめる。
+ *
+ * ★平文チャレンジを引数に取らない。
+ *   wp_provisionings は challenge_hash(SHA-256)のみを保持し、平文は発行時に一度
+ *   返すだけで保存しない(tenant_api_keys.key_hash と同じ扱い、要件書 D6)。
+ *   この関数は「サイトが返した値をハッシュ化してから DB のハッシュと比較する」形で
+ *   照合するため、呼び出し側は平文チャレンジをどこにも保持する必要がない。
+ *   平文同士を比較する設計だと、照合のたびに平文をどこかに置く羽目になり、
+ *   D6 の「ローカル暗号化しない代わりに平文を持たない」という前提が崩れる。
  *
  * origin は normalizeWpSiteUrl() を通した値を渡すこと。ここでは URL の妥当性を
  * 再判定せず、宛先の安全性は safeFetch(assertUrlAllowed) に委ねる。
  */
 export async function verifyWpSiteChallenge(
   origin: string,
-  expectedChallenge: string,
+  expectedChallengeHash: string,
   deps: WpSiteVerifierDeps = {}
 ): Promise<WpVerifyResult> {
   const fetchImpl = deps.fetchImpl ?? safeFetch;
@@ -121,7 +129,9 @@ export async function verifyWpSiteChallenge(
 
   const actual = parseWpVerifyChallenge(body);
   if (actual === null) return { ok: false, reason: "invalid_body" };
-  if (actual !== expectedChallenge) return { ok: false, reason: "challenge_mismatch" };
+  if (hashWpSecret(actual) !== expectedChallengeHash) {
+    return { ok: false, reason: "challenge_mismatch" };
+  }
 
   return { ok: true };
 }

@@ -7,6 +7,7 @@
 //   X-1          検証ルートが応答しない
 
 import { SsrfBlockedError } from "../../lib/net/ssrfGuard";
+import { hashWpSecret } from "./wpProvisionToken";
 import {
   WP_VERIFY_PATH,
   WP_VERIFY_MAX_BYTES,
@@ -15,6 +16,7 @@ import {
 } from "./wpSiteVerifier";
 
 const CHALLENGE = "wpc_" + "a".repeat(64);
+const CHALLENGE_HASH = hashWpSecret(CHALLENGE);
 
 /** 最小の Response 風オブジェクト（safeFetch の戻りとして使う分だけ）。 */
 function fakeResponse(opts: { ok?: boolean; status?: number; body?: string; textThrows?: boolean }) {
@@ -74,7 +76,7 @@ describe("verifyWpSiteChallenge", () => {
       fakeResponse({ body: JSON.stringify({ challenge: CHALLENGE }) })
     );
     await expect(
-      verifyWpSiteChallenge("https://example.com", CHALLENGE, { fetchImpl })
+      verifyWpSiteChallenge("https://example.com", CHALLENGE_HASH, { fetchImpl })
     ).resolves.toEqual({ ok: true });
   });
 
@@ -82,7 +84,7 @@ describe("verifyWpSiteChallenge", () => {
     const fetchImpl = jest.fn().mockResolvedValue(
       fakeResponse({ body: JSON.stringify({ challenge: CHALLENGE }) })
     );
-    await verifyWpSiteChallenge("https://example.com", CHALLENGE, { fetchImpl });
+    await verifyWpSiteChallenge("https://example.com", CHALLENGE_HASH, { fetchImpl });
     expect(fetchImpl.mock.calls[0][0]).toBe(`https://example.com${WP_VERIFY_PATH}`);
     // タイムアウトとサイズ上限を必ず渡す（既定の10秒/5MiBのままにしない）
     const opts = fetchImpl.mock.calls[0][1];
@@ -91,10 +93,23 @@ describe("verifyWpSiteChallenge", () => {
   });
 
   // ★別サイトのチャレンジを置かれても通らないこと。これが C-1 の本体。
-  it("チャレンジが違えば challenge_mismatch", async () => {
+  it("チャレンジが違えば challenge_mismatch(ハッシュ照合)", async () => {
     const fetchImpl = jest.fn().mockResolvedValue(
       fakeResponse({ body: JSON.stringify({ challenge: "wpc_" + "b".repeat(64) }) })
     );
+    await expect(
+      verifyWpSiteChallenge("https://example.com", CHALLENGE_HASH, { fetchImpl })
+    ).resolves.toEqual({ ok: false, reason: "challenge_mismatch" });
+  });
+
+  // 平文を持ち回らない設計そのものの固定: 同じ平文からは同じハッシュが
+  // 得られ、DBが保持するハッシュとの比較だけで一致判定が成立する。
+  it("サイトの返す平文をハッシュ化してから比較する(平文同士の比較ではない)", async () => {
+    const fetchImpl = jest.fn().mockResolvedValue(
+      fakeResponse({ body: JSON.stringify({ challenge: CHALLENGE }) })
+    );
+    // 第2引数はハッシュそのもの。平文 CHALLENGE を渡すと絶対に一致しない
+    // (ハッシュ長は64桁hexで平文の "wpc_"+64桁hex とは形が異なる)。
     await expect(
       verifyWpSiteChallenge("https://example.com", CHALLENGE, { fetchImpl })
     ).resolves.toEqual({ ok: false, reason: "challenge_mismatch" });
@@ -110,7 +125,7 @@ describe("verifyWpSiteChallenge", () => {
   ])("%s(%i) は http_error とステータスを返す", async (_label, status) => {
     const fetchImpl = jest.fn().mockResolvedValue(fakeResponse({ ok: false, status }));
     await expect(
-      verifyWpSiteChallenge("https://example.com", CHALLENGE, { fetchImpl })
+      verifyWpSiteChallenge("https://example.com", CHALLENGE_HASH, { fetchImpl })
     ).resolves.toEqual({ ok: false, reason: "http_error", httpStatus: status });
   });
 
@@ -119,21 +134,21 @@ describe("verifyWpSiteChallenge", () => {
   it("SSRF ガードに拒否されたら blocked", async () => {
     const fetchImpl = jest.fn().mockRejectedValue(new SsrfBlockedError("private ip"));
     await expect(
-      verifyWpSiteChallenge("https://example.com", CHALLENGE, { fetchImpl })
+      verifyWpSiteChallenge("https://example.com", CHALLENGE_HASH, { fetchImpl })
     ).resolves.toEqual({ ok: false, reason: "blocked" });
   });
 
   it("到達不能・タイムアウトは unreachable", async () => {
     const fetchImpl = jest.fn().mockRejectedValue(new Error("ETIMEDOUT"));
     await expect(
-      verifyWpSiteChallenge("https://example.com", CHALLENGE, { fetchImpl })
+      verifyWpSiteChallenge("https://example.com", CHALLENGE_HASH, { fetchImpl })
     ).resolves.toEqual({ ok: false, reason: "unreachable" });
   });
 
   it("本文の読み取りに失敗しても throw せず unreachable", async () => {
     const fetchImpl = jest.fn().mockResolvedValue(fakeResponse({ textThrows: true }));
     await expect(
-      verifyWpSiteChallenge("https://example.com", CHALLENGE, { fetchImpl })
+      verifyWpSiteChallenge("https://example.com", CHALLENGE_HASH, { fetchImpl })
     ).resolves.toEqual({ ok: false, reason: "unreachable" });
   });
 
@@ -144,7 +159,7 @@ describe("verifyWpSiteChallenge", () => {
   ])("%s は invalid_body", async (_label, body) => {
     const fetchImpl = jest.fn().mockResolvedValue(fakeResponse({ body }));
     await expect(
-      verifyWpSiteChallenge("https://example.com", CHALLENGE, { fetchImpl })
+      verifyWpSiteChallenge("https://example.com", CHALLENGE_HASH, { fetchImpl })
     ).resolves.toEqual({ ok: false, reason: "invalid_body" });
   });
 
@@ -157,7 +172,7 @@ describe("verifyWpSiteChallenge", () => {
     ];
     for (const fetchImpl of cases) {
       await expect(
-        verifyWpSiteChallenge("https://example.com", CHALLENGE, { fetchImpl })
+        verifyWpSiteChallenge("https://example.com", CHALLENGE_HASH, { fetchImpl })
       ).resolves.toHaveProperty("ok", false);
     }
   });
