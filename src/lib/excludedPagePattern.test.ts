@@ -57,4 +57,42 @@ describe("matchesPathnameGlob", () => {
     expect(matchesPathnameGlob("/cart(", "/cart(")).toBe(true);
     expect(matchesPathnameGlob("/cart", "/cart(")).toBe(false);
   });
+
+  it("[ ] を含むパターンもエスケープされリテラル文字として扱われる(文字クラスとして解釈されない)", () => {
+    // "[" "]" は他のメタ文字と同じくエスケープ対象。不均衡な"["を含む文字列でも
+    // エスケープ後は "\[" という有効なリテラルになるため RegExp としては壊れない。
+    expect(matchesPathnameGlob("/foo[bar", "/foo[bar")).toBe(true);
+    expect(matchesPathnameGlob("/foobar", "/foo[bar")).toBe(false);
+  });
+
+  it("RegExpコンストラクタが例外を投げても、try/catchで吸収しfalseを返す(呼び出し元に例外を漏らさない)", () => {
+    // 現行のエスケープ設計では "*" 以外の正規表現メタ文字を事前に全てエスケープするため、
+    // 通常の文字列だけで new RegExp を実際に throw させることはできない(不均衡な "[" "(" 等の
+    // 全パターンを試したが、いずれもエスケープされて安全なリテラルになる)。
+    // それでも「万一 RegExp 生成が失敗した場合に例外を外へ漏らさない」という
+    // try/catch 自体の効果は、RegExp コンストラクタを一時的にスタブして直接検証できる。
+    const spy = jest.spyOn(global, "RegExp").mockImplementation(() => {
+      throw new SyntaxError("forced for test");
+    });
+    try {
+      expect(matchesPathnameGlob("/cart", "/cart")).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("trailing slashの有無は区別される(/blog と /blog/ は別のパスとして扱われる)", () => {
+    // 完全一致パターンは末尾スラッシュを無視しない。サイトがURLを末尾スラッシュ付きに
+    // 正規化しているのに、パターンをスラッシュ無しで登録すると効かない、という
+    // 実運用上の落とし穴があるため挙動を明示的に固定する。
+    expect(matchesPathnameGlob("/blog", "/blog")).toBe(true);
+    expect(matchesPathnameGlob("/blog/", "/blog")).toBe(false);
+    expect(matchesPathnameGlob("/blog", "/blog/")).toBe(false);
+    expect(matchesPathnameGlob("/blog/", "/blog/")).toBe(true);
+  });
+
+  it("単一の* は/を跨いだ2階層以上には一致しない(**との違いを明示)", () => {
+    expect(matchesPathnameGlob("/blog/2026/post", "/blog/*")).toBe(false);
+    expect(matchesPathnameGlob("/blog/2026/09/post", "/blog/**")).toBe(true);
+  });
 });
