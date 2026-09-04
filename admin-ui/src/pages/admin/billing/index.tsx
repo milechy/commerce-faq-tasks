@@ -30,6 +30,7 @@ import { DailyUsageTable } from "./DailyUsageTable";
 import { BillingMainContent } from "./BillingMainContent";
 import { AdminBillingModals } from "./AdminBillingModals";
 import { PlanSection } from "./PlanSection";
+import { TenantUpsellNotice } from "./TenantUpsellNotice";
 import { QuotaSection } from "./QuotaSection";
 
 // ─── メインページ ─────────────────────────────────────────
@@ -788,6 +789,13 @@ export default function BillingPage() {
           );
         })()}
       </section>
+
+      {/* プランのご提案(D8-2, MG-8)。★super_admin には出さない★
+          運営は /admin/billing/margin(super_admin専用)で粗利付きの営業提案を見る。
+          根拠(QuotaSection、この下) → 提案(ここ) → 行動(PlanSection、この下)の
+          順に並べたいが、コンポーネントの登場順は既存どおり PlanSection が先の
+          ままなので、提案は PlanSection の直前に置いて先に目に入るようにする。 */}
+      {!isSuperAdmin && <TenantUpsellNotice />}
 
       {/* プラン変更（テナント自身の操作。super_admin は /admin/tenants/:id 側で行う） */}
       <PlanSection
