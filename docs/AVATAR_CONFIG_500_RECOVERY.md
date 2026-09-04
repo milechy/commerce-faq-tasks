@@ -7,6 +7,10 @@
 **最初の目印**: **複数のテナントで同じ人物**が出ていたら、テナント設定の問題ではない。
 下記のフォールバック経路がほぼ確定する。
 
+> **注意**: 症状は「別人の顔が出る」だけとは限らない。**顔（見た目）は合っているのに
+> 声やリップシンクだけがおかしい**場合も、原因は同じ設定取得の失敗であり得る
+> （2026-09-04 の実例、テナント `accept`）。「顔は本人だから対象外」と早合点しないこと。
+
 ---
 
 ## 1. 何が起きているか
@@ -24,6 +28,12 @@ GET /api/internal/avatar-config が 500
 `image_url` は `agent_id` より優先される（`avatar-agent/agent.py:693`）。
 公式18体には全員 `image_url` が入っているので、**設定さえ読めていれば必ずその写真の顔になる**。
 つまり顔が違う時点で、設定は agent に届いていない。
+
+設定取得に**完全に失敗した**場合（`config_fetch_ok=False`）は、上記のフォールバックにすら
+進めず、agent が ERROR ログを出して**起動そのものを拒否する**
+（`アバターを起動しません: 設定を解決できませんでした`）。この場合でも**管理画面は
+成功表示を出す**ため、UI だけを見て「起動できた」と判断してはいけない。
+`pm2 logs` で `effective config` の行を必ず確認すること。
 
 ---
 
@@ -49,7 +59,8 @@ pm2 logs rajiuce-avatar --lines 300 --nostream \
 |---|---|---|
 | `[avatar-config] API returned 500` | **DBクエリが落ちている**（本手順の対象） | 手順3へ |
 | `[avatar-config] API returned 403` | ループバック判定 / `X-Internal-Request` で弾かれている | API と agent が同一ホストか、`RAJIUCE_API_URL` を確認 |
-| `[avatar-config] fetch failed ...` | API に到達できていない | `RAJIUCE_API_URL` とポート(既定 3100)を確認 |
+| `[avatar-config] fetch failed: INTERNAL_API_HMAC_SECRET not set ...` | VPS の `.env` に HMAC 署名用シークレットが無く、内部API呼び出しに署名できない（2026-09-04 実例、テナント `accept`） | `.env` に `INTERNAL_API_HMAC_SECRET` を追加 → `pm2 restart rajiuce-avatar` → ログで `config_fetch_ok=True` を再確認 |
+| `[avatar-config] fetch failed ...`（上記以外） | API に到達できていない | `RAJIUCE_API_URL` とポート(既定 3100)を確認 |
 | 警告が何も出ずフォールバック | API は 200 だが該当行が 0 件 | 当該テナントに `is_active = true` のアバターが無い。管理画面 `/admin/avatar` で有効化する |
 | `extracted tenant_id=None` | room 名からのテナント抽出失敗 | 別問題（room 名の形式 `rajiuce-{tenantId}-{16hex}` を確認） |
 
