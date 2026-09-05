@@ -4318,15 +4318,20 @@ function ResourceCard({
   const [rightsConfirmed, setRightsConfirmed] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (file) void onUploadPdf(msgId, file, rightsConfirmed);
-  };
-
   const uploading = card.uploadStatus?.status === "uploading";
   const publishing = card.publishStatus?.status === "publishing";
   const canUpload = rightsConfirmed && !uploading;
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    // 可視ボタンのdisabledはcanUploadで既にガードしているが、隠しinputへ直接
+    // changeイベントが送られた場合(高速な連続操作・テストツール等)にボタンの
+    // disabledをバイパスして多重アップロードが始まらないよう、ハンドラ自身でも
+    // 同じ条件を再検証する(Storageアップロード・Geminiモデレーションの重複課金防止)。
+    if (!file || !canUpload) return;
+    void onUploadPdf(msgId, file, rightsConfirmed);
+  };
 
   return (
     <CardShell

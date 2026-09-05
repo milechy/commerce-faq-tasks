@@ -262,12 +262,21 @@ export function registerResourceRoutes(app: Express, db: any): void {
           let moderationStatus: "pending" | "approved" | "rejected" = "pending";
           let moderationReason: string | null = "テキスト抽出に失敗したため自動モデレーション未実施です";
           if (extractedText !== null) {
-            const moderation = await checkResourceTextForInfringement(extractedText, {
-              tenantId,
-              requestId: (req as any).requestId ?? `resource-${resourceId}-${Date.now()}`,
-            });
-            moderationStatus = moderation.blocked ? "rejected" : "approved";
-            moderationReason = moderation.blocked ? moderation.reason ?? null : null;
+            try {
+              const moderation = await checkResourceTextForInfringement(extractedText, {
+                tenantId,
+                requestId: (req as any).requestId ?? `resource-${resourceId}-${Date.now()}`,
+              });
+              moderationStatus = moderation.blocked ? "rejected" : "approved";
+              moderationReason = moderation.blocked ? moderation.reason ?? null : null;
+            } catch (err) {
+              // checkResourceTextForInfringement は内部でfail-open(APIエラーはwarnログの
+              // みでblocked:falseを返す)する設計だが、その内部契約が万一破れて例外が
+              // 漏れた場合の多層防御。ここで握りつぶさずアップロード全体を500にすると、
+              // 「モデレーション障害でアップロードを止めない」という設計意図に反する。
+              logger.warn("[PUT /v1/admin/resources] moderation check threw — treating as pending (fail-open)", err);
+              moderationReason = "自動モデレーションの実行に失敗したため未検査です";
+            }
           }
 
           const saved = await upsertResource(db, {
