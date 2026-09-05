@@ -7127,4 +7127,56 @@ describe("CopilotPreviewPage — 資料オファーカード(get_resource/PDFの
     expect(await screen.findByText("公開中")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "公開する" })).toBeNull();
   });
+
+  it("アップロード中はボタンが「アップロードしています…」表示になり無効化される", async () => {
+    MockXHR.instances = [];
+    vi.stubGlobal("XMLHttpRequest", MockXHR as unknown as typeof XMLHttpRequest);
+    try {
+      await renderCard(NOT_EXISTS_CARD);
+      await screen.findByText("資料はまだ登録されていません");
+
+      fireEvent.click(rightsCheckbox());
+      const fileInput = document.querySelector('input[type="file"][accept="application/pdf"]') as HTMLInputElement;
+      fireEvent.change(fileInput, { target: { files: [makeFile("1件目.pdf", "application/pdf")] } });
+
+      await waitFor(() => expect(MockXHR.instances.length).toBe(1));
+      expect(await screen.findByText("アップロードしています…")).toBeTruthy();
+      expect(uploadButton().disabled).toBe(true);
+
+      // disabledなボタンをクリックしても新規送信は起きない(既存の「チェック無しで…」テストと同じ確認方法)
+      fireEvent.click(uploadButton());
+      expect(MockXHR.instances.length).toBe(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  // handleFileChange(admin-ui/src/pages/copilot-preview/index.tsx の ResourceCard)は
+  // canUpload/uploadingの状態を確認せず、ファイルが選ばれたら無条件で onUploadPdf を呼ぶ。
+  // 二重送信を防いでいるのは「アップロード中はボタンをdisabledにする」UI層のみで、
+  // 隠しinput自体やonUploadResourcePdf側には多重呼び出しに対するガードが無い
+  // (tests/widget/buildResourceCard.test.tsの「既知の制約」と同様、現状の挙動を固定する)。
+  it("【現状の挙動】アップロード中でも隠しinputへ直接changeイベントを送ると、ボタンのdisabledをバイパスして2件目の送信が始まる(排他制御なし)", async () => {
+    MockXHR.instances = [];
+    vi.stubGlobal("XMLHttpRequest", MockXHR as unknown as typeof XMLHttpRequest);
+    try {
+      await renderCard(NOT_EXISTS_CARD);
+      await screen.findByText("資料はまだ登録されていません");
+
+      fireEvent.click(rightsCheckbox());
+      const fileInput = document.querySelector('input[type="file"][accept="application/pdf"]') as HTMLInputElement;
+      fireEvent.change(fileInput, { target: { files: [makeFile("1件目.pdf", "application/pdf")] } });
+
+      await waitFor(() => expect(MockXHR.instances.length).toBe(1));
+      expect(await screen.findByText("アップロードしています…")).toBeTruthy();
+
+      // 1件目はまだ fireLoad していない(アップロード中)状態のまま、隠しinputへ直接2件目を流す
+      fireEvent.change(fileInput, { target: { files: [makeFile("2件目.pdf", "application/pdf")] } });
+
+      await waitFor(() => expect(MockXHR.instances.length).toBe(2));
+      expect(MockXHR.instances[1]!.open).toHaveBeenCalledWith("PUT", "http://localhost:3100/v1/admin/resources");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
