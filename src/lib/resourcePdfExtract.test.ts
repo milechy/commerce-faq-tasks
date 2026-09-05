@@ -48,3 +48,19 @@ describe("extractResourcePdfText — 異常系（黙って握りつぶさない�
     expect(thrown).toBeInstanceOf(ResourcePdfExtractError);
   });
 });
+
+describe("extractResourcePdfText — 空の抽出結果（画像のみ/スキャンPDF等、黙って握りつぶさない）", () => {
+  it("pdf-parse が例外を投げず空文字を返した場合も ResourcePdfExtractError を投げる", async () => {
+    mockPdfParse.mockResolvedValue({ text: "", numpages: 5 });
+    await expect(extractResourcePdfText(Buffer.from("scanned-pdf"))).rejects.toThrow(
+      ResourcePdfExtractError
+    );
+  });
+
+  it("空白のみのテキストも「抽出できた」扱いにしない", async () => {
+    mockPdfParse.mockResolvedValue({ text: "   \n\t  ", numpages: 5 });
+    await expect(extractResourcePdfText(Buffer.from("scanned-pdf"))).rejects.toThrow(
+      ResourcePdfExtractError
+    );
+  });
+});

@@ -51,8 +51,9 @@ import {
   deleteResource,
   setPublished,
   getResourcePublicUrl,
+  uploadResourcePdfToStorage,
 } from "./resourcesRepository";
-import { extractResourcePdfText } from "../../../lib/resourcePdfExtract";
+import { extractResourcePdfText, ResourcePdfExtractError } from "../../../lib/resourcePdfExtract";
 import { checkResourceTextForInfringement } from "../../../lib/resourceContentGuard";
 
 const mockGetResource = getResource as jest.Mock;
@@ -60,6 +61,7 @@ const mockUpsertResource = upsertResource as jest.Mock;
 const mockDeleteResource = deleteResource as jest.Mock;
 const mockSetPublished = setPublished as jest.Mock;
 const mockGetResourcePublicUrl = getResourcePublicUrl as jest.Mock;
+const mockUploadResourcePdfToStorage = uploadResourcePdfToStorage as jest.Mock;
 const mockExtractResourcePdfText = extractResourcePdfText as jest.Mock;
 const mockCheckResourceTextForInfringement = checkResourceTextForInfringement as jest.Mock;
 
@@ -103,6 +105,9 @@ const RESOURCE_ROW = {
 beforeEach(() => {
   jest.clearAllMocks();
   mockGetResourcePublicUrl.mockReturnValue(null);
+  // 個々のテストで上書きしない限り、Storageアップロードは成功する前提にする
+  // （P1修正: アップロード失敗時の挙動は専用のdescribeブロックで検証する）。
+  mockUploadResourcePdfToStorage.mockResolvedValue("tenant-a/res-1.pdf");
 });
 
 // ---------------------------------------------------------------------------
@@ -280,6 +285,65 @@ describe("PUT /v1/admin/resources — external_url の SSRF ガード", () => {
     expect(mockUpsertResource).toHaveBeenCalledWith(
       {},
       expect.objectContaining({ moderationStatus: "approved", fileType: "pdf" })
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3.5 Storageアップロード失敗時の挙動(P1修正の回帰テスト)
+//   uploadResourcePdfToStorage が null を返した場合、資料は保存されず 500 を返す
+//   （以前は download_url が null のまま 201 で保存されていた）。
+// ---------------------------------------------------------------------------
+
+describe("PUT /v1/admin/resources — Storageアップロード失敗時", () => {
+  it("uploadResourcePdfToStorage が null を返す場合は500で、資料は保存されない", async () => {
+    mockGetResource.mockResolvedValue(null);
+    mockExtractResourcePdfText.mockResolvedValue("資料の本文テキスト");
+    mockUploadResourcePdfToStorage.mockResolvedValue(null);
+
+    const res = await request(makeApp())
+      .put("/v1/admin/resources")
+      .field("title", "テスト資料")
+      .field("rights_confirmed", "true")
+      .attach("file", Buffer.from("%PDF-1.4 dummy"), {
+        filename: "doc.pdf",
+        contentType: "application/pdf",
+      });
+
+    expect(res.status).toBe(500);
+    expect(mockCheckResourceTextForInfringement).not.toHaveBeenCalled();
+    expect(mockUpsertResource).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3.6 テキスト抽出失敗時(画像のみのPDF等)の挙動(P1修正の回帰テスト)
+//   抽出失敗(空文字含む)はモデレーションを実行せず pending のまま保存する。
+//   Gemini に空同然のテキストを渡して approved 判定させない。
+// ---------------------------------------------------------------------------
+
+describe("PUT /v1/admin/resources — PDFテキスト抽出失敗時", () => {
+  it("抽出が失敗した場合はモデレーションを実行せず pending で保存する", async () => {
+    mockGetResource.mockResolvedValue(null);
+    mockExtractResourcePdfText.mockRejectedValue(
+      new ResourcePdfExtractError("資料PDFからテキストを抽出できませんでした（画像のみのPDFの可能性があります）")
+    );
+    mockUpsertResource.mockResolvedValue({ ...RESOURCE_ROW, moderation_status: "pending" });
+
+    const res = await request(makeApp())
+      .put("/v1/admin/resources")
+      .field("title", "テスト資料")
+      .field("rights_confirmed", "true")
+      .attach("file", Buffer.from("%PDF-1.4 dummy"), {
+        filename: "doc.pdf",
+        contentType: "application/pdf",
+      });
+
+    expect(res.status).toBe(201);
+    expect(mockCheckResourceTextForInfringement).not.toHaveBeenCalled();
+    expect(mockUpsertResource).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({ moderationStatus: "pending" })
     );
   });
 });

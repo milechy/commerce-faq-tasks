@@ -235,6 +235,10 @@ export function registerResourceRoutes(app: Express, db: any): void {
           }
 
           const storagePath = await uploadResourcePdfToStorage(file.buffer, tenantId, resourceId);
+          if (!storagePath) {
+            logger.warn("[PUT /v1/admin/resources] storage upload returned null", { tenantId, resourceId });
+            return res.status(500).json({ error: "資料の保存に失敗しました" });
+          }
 
           let moderationStatus: "pending" | "approved" | "rejected" = "pending";
           let moderationReason: string | null = "テキスト抽出に失敗したため自動モデレーション未実施です";
