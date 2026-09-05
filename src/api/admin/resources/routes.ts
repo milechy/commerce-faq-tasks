@@ -64,18 +64,37 @@ function resolveTenantId(req: Request): string | null {
 // 使えないため、資料URL専用の簡易チェックをここに置く。
 // ---------------------------------------------------------------------------
 
-function isPrivateOrLocalHostname(hostname: string): boolean {
-  // URL#hostname returns IPv6 hosts in bracketed form (e.g. "[::1]"), which
-  // must be stripped before comparing against the bare "::1" literal below —
-  // otherwise an IPv6-loopback external_url silently bypasses this guard.
-  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
-  if (host === "localhost" || host === "0.0.0.0" || host === "::1") return true;
+function isPrivateOrIpv4LocalHost(host: string): boolean {
+  if (host === "localhost" || host === "0.0.0.0") return true;
   if (host.startsWith("127.")) return true;
   if (host.startsWith("169.254.")) return true;
   if (host.startsWith("10.")) return true;
   if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) return true;
   if (host.startsWith("192.168.")) return true;
   return false;
+}
+
+function isPrivateOrLocalHostname(hostname: string): boolean {
+  // URL#hostname returns IPv6 hosts in bracketed form (e.g. "[::1]"), which
+  // must be stripped before comparing against the bare "::1" literal below —
+  // otherwise an IPv6-loopback external_url silently bypasses this guard.
+  // A trailing dot (DNS root label, e.g. "localhost.") is also stripped —
+  // browsers/Node treat "localhost." as equivalent to "localhost", but a naive
+  // exact-match check would not, letting it slip past the guard.
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.+$/, "");
+  if (host === "::1") return true;
+  // IPv4-mapped IPv6 (e.g. "::ffff:127.0.0.1") is always normalized by Node's
+  // URL parser to the compressed hex-group form "::ffff:7f00:1" — decode the
+  // embedded IPv4 address and re-run the same private-range checks against it,
+  // otherwise a mapped private/loopback address bypasses every check above.
+  const mapped = host.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (mapped) {
+    const hi = parseInt(mapped[1], 16);
+    const lo = parseInt(mapped[2], 16);
+    const ipv4 = `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+    return isPrivateOrIpv4LocalHost(ipv4);
+  }
+  return isPrivateOrIpv4LocalHost(host);
 }
 
 // 資料オファーのCopilot UIツール(actionExecutor.ts の upload_resource)が外部URLの
@@ -243,12 +262,21 @@ export function registerResourceRoutes(app: Express, db: any): void {
           let moderationStatus: "pending" | "approved" | "rejected" = "pending";
           let moderationReason: string | null = "テキスト抽出に失敗したため自動モデレーション未実施です";
           if (extractedText !== null) {
-            const moderation = await checkResourceTextForInfringement(extractedText, {
-              tenantId,
-              requestId: (req as any).requestId ?? `resource-${resourceId}-${Date.now()}`,
-            });
-            moderationStatus = moderation.blocked ? "rejected" : "approved";
-            moderationReason = moderation.blocked ? moderation.reason ?? null : null;
+            try {
+              const moderation = await checkResourceTextForInfringement(extractedText, {
+                tenantId,
+                requestId: (req as any).requestId ?? `resource-${resourceId}-${Date.now()}`,
+              });
+              moderationStatus = moderation.blocked ? "rejected" : "approved";
+              moderationReason = moderation.blocked ? moderation.reason ?? null : null;
+            } catch (err) {
+              // checkResourceTextForInfringement は内部でfail-open(APIエラーはwarnログの
+              // みでblocked:falseを返す)する設計だが、その内部契約が万一破れて例外が
+              // 漏れた場合の多層防御。ここで握りつぶさずアップロード全体を500にすると、
+              // 「モデレーション障害でアップロードを止めない」という設計意図に反する。
+              logger.warn("[PUT /v1/admin/resources] moderation check threw — treating as pending (fail-open)", err);
+              moderationReason = "自動モデレーションの実行に失敗したため未検査です";
+            }
           }
 
           const saved = await upsertResource(db, {
@@ -337,7 +365,21 @@ export function registerResourceRoutes(app: Express, db: any): void {
         });
       }
       const saved = await setPublished(db, tenantId, true);
-      return res.json(toPublicShape(saved!));
+      if (!saved) {
+        // 事前チェックとこの更新の間に別リクエストがmoderation_statusを'rejected'へ
+        // 変えた場合、setPublished内部のWHERE条件が0行にマッチしnullを返す(TOCTOU対策)。
+        // 事前チェック時点の existing は使わず、現在の状態を取り直して正しいエラーを返す。
+        const current = await getResource(db, tenantId);
+        if (!current) {
+          return res.status(404).json({ error: "資料が見つかりません" });
+        }
+        return res.status(400).json({
+          error: "moderation_rejected",
+          message: "この資料はモデレーションで問題が検出されたため公開できません。",
+          moderation_reason: current.moderation_reason,
+        });
+      }
+      return res.json(toPublicShape(saved));
     } catch (err) {
       logger.warn("[POST /v1/admin/resources/publish]", err);
       return res.status(500).json({ error: "資料の公開に失敗しました" });

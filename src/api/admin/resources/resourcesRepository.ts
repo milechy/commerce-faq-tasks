@@ -110,12 +110,18 @@ export async function deleteResource(db: Db, tenantId: string): Promise<boolean>
 }
 
 /**
- * 公開状態を切り替える。moderation_status が 'rejected' のときは呼び出し前に
- * routes.ts 側でブロックする（このリポジトリ関数自体は状態遷移の可否を判定しない）。
+ * 公開状態を切り替える。公開(true)への遷移は、この1文のUPDATE自体が
+ * moderation_status != 'rejected' をWHERE条件として持つことでアトミックに保証する
+ * (routes.ts側の事前チェックだけに頼らない)。事前チェックと本更新の間に別リクエストの
+ * 再アップロードでmoderation_statusが'rejected'に変わっていた場合、このUPDATEは
+ * 0行にマッチしnullを返す(却下済み資料が公開されるTOCTOUを閉じる)。
+ * 非公開化(false)はmoderation_statusに関わらず常に許可する。
  */
 export async function setPublished(db: Db, tenantId: string, isPublished: boolean): Promise<TenantResourceRow | null> {
   const result = await db.query(
-    `UPDATE tenant_resources SET is_published = $2 WHERE tenant_id = $1 RETURNING ${ROW_COLUMNS}`,
+    `UPDATE tenant_resources SET is_published = $2
+     WHERE tenant_id = $1 AND ($2 = false OR moderation_status != 'rejected')
+     RETURNING ${ROW_COLUMNS}`,
     [tenantId, isPublished]
   );
   return (result.rows[0] as TenantResourceRow | undefined) ?? null;

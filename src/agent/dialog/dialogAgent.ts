@@ -349,7 +349,10 @@ export async function runDialogTurn(
     if (!resourceSessionMeta?.resourceOfferShown) {
       try {
         const resource = await getResource(pool, effectiveTenantId);
-        if (resource && resource.is_published) {
+        // is_published だけでなく moderation_status も再確認する(多層防御)。
+        // publish エンドポイントは読み取り→書き込みの間に競合があり得るため、
+        // is_published のみを信用すると却下済み資料が顧客に案内されうる。
+        if (resource && resource.is_published && resource.moderation_status !== "rejected") {
           const url =
             resource.external_url ??
             (resource.storage_path ? getResourcePublicUrl(resource.storage_path) : null);

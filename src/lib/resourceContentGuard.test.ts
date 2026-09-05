@@ -76,4 +76,26 @@ describe("checkResourceTextForInfringement — 異常系（フェイルオープ
     const result = await checkResourceTextForInfringement("本文", CONTEXT);
     expect(result).toEqual({ blocked: false });
   });
+
+  // 全文モデレーション(Gemini呼び出しの課金・レイテンシ増)とのトレードオフとして、
+  // プロンプトに渡す本文は先頭8000字(MAX_MODERATION_TEXT_CHARS)で切り詰める設計を
+  // 意図的に採用している。8000字を超えた位置にしか問題箇所が無い文書は現在の設計では
+  // 検出できない ―― これは「直すべきバグ」ではなく、既知の制約として明示的に固定する。
+  it("既知の制約: 8000字を超えた位置の問題は現在の設計では検出できない(ドキュメント化)", async () => {
+    const cleanPrefix = "これは問題のない前置き文章です。".repeat(501); // 8000字超のクリーンな前置き
+    expect(cleanPrefix.length).toBeGreaterThan(8000);
+    const textWithInfringementAfterWindow = cleanPrefix + "ここから先は書籍からの盗用です";
+
+    // 8000字で切り詰められた後の本文(全てクリーン)しかGeminiに渡らないため、常に非ブロック
+    mockCallGeminiJudge.mockResolvedValue(
+      JSON.stringify({ copyright_infringement: false, inappropriate_content: false, reason: "" })
+    );
+    const result = await checkResourceTextForInfringement(textWithInfringementAfterWindow, CONTEXT);
+    expect(result).toEqual({ blocked: false });
+
+    // 実際にGeminiへ渡ったプロンプトに「盗用」の一文が含まれていないことを確認する
+    // (=ウィンドウの外側にあり、そもそも判定対象になっていないことの証跡)
+    const promptArg = mockCallGeminiJudge.mock.calls[0]![0] as string;
+    expect(promptArg).not.toContain("ここから先は書籍からの盗用です");
+  });
 });
