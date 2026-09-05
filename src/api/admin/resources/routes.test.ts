@@ -609,23 +609,22 @@ describe("PUT /v1/admin/resources — モデレーションで拒否された場
     );
   });
 
-  // 実挙動の確認(このテストが書かれた時点でのタスク指示との差分):
-  // resourceContentGuard.ts 自体はGemini呼び出し失敗時に内部でtry/catchしフェイルオープン
-  // (blocked: false を返す)するが、それはあくまで「関数の中身」の話であって、
-  // このテストのように checkResourceTextForInfringement をjest.mockでモジュールごと
-  // 差し替えて「例外を投げる」設定にした場合、その内部catchは存在しない(モック関数が
-  // 素通しでrejectする)。routes.ts側には、この呼び出しの周りに個別のtry/catchが無く、
-  // PUTハンドラ全体を包む1つのtry/catch(303-306行)にそのまま伝播するため、
-  // 実際には500(「資料の保存に失敗しました」)になり、upsertResourceは呼ばれない。
-  // 「フェイルオープンでもアップロードは201で成功する」という前提は
-  // resourceContentGuard.ts単体では正しいが、routes.tsを経由した結合レベルでは
-  // 成立しない(モデレーション呼び出し自体が例外を投げる状況は現実には起きない設計
-  // ―― 関数内部が常にcatchして{blocked:false}を返すため ―― だが、この関数境界を
-  // 越えてrouter側だけを見た場合の実挙動としてここに固定する)。
-  it("モデレーション呼び出し自体が例外を投げた場合の実挙動: routes.ts側に個別のcatchが無いため500になる(upsertResourceは呼ばれない)", async () => {
+  // このテストの作成時点で一度、routes.ts側にこの呼び出しを囲むtry/catchが無く
+  // 500になる実挙動を発見した(checkResourceTextForInfringementはresourceContentGuard.ts
+  // 内部でfail-openするが、それは関数境界の内側だけの保証であり、routes.ts側が
+  // その契約を信用しきっていた)。「モデレーション障害でアップロードを止めない」という
+  // 設計意図に反するため、routes.ts側にも個別のtry/catchを追加し、多層防御にした
+  // (fix commit: モデレーション呼び出しに多層防御のtry/catchを追加する)。
+  // 以降はPDFテキスト抽出失敗時と同じ「pending扱いで保存は続行する」経路を通る。
+  it("モデレーション呼び出し自体が例外を投げても、routes.ts側の多層防御によりpending扱いでアップロード自体は成功する(fail-open)", async () => {
     mockGetResource.mockResolvedValue(null);
     mockExtractResourcePdfText.mockResolvedValue("資料の本文テキスト");
     mockCheckResourceTextForInfringement.mockRejectedValue(new Error("Gemini API error: 500"));
+    mockUpsertResource.mockResolvedValue({
+      ...RESOURCE_ROW,
+      moderation_status: "pending",
+      moderation_reason: "自動モデレーションの実行に失敗したため未検査です",
+    });
 
     const res = await request(makeApp())
       .put("/v1/admin/resources")
@@ -633,8 +632,14 @@ describe("PUT /v1/admin/resources — モデレーションで拒否された場
       .field("rights_confirmed", "true")
       .attach("file", Buffer.from("%PDF-1.4 dummy"), { filename: "doc.pdf", contentType: "application/pdf" });
 
-    expect(res.status).toBe(500);
-    expect(mockUpsertResource).not.toHaveBeenCalled();
+    expect(res.status).toBe(201);
+    expect(mockUpsertResource).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        moderationStatus: "pending",
+        moderationReason: "自動モデレーションの実行に失敗したため未検査です",
+      })
+    );
   });
 });
 
