@@ -199,6 +199,236 @@ describe("runDialogTurn — Phase73 productCard", () => {
   });
 });
 
+describe("runDialogTurn — 資料オファー機能 resourceCard", () => {
+  const mockGetSalesSessionMeta = getSalesSessionMeta as jest.MockedFunction<typeof getSalesSessionMeta>;
+  const mockUpdateSalesSessionMeta = updateSalesSessionMeta as jest.MockedFunction<typeof updateSalesSessionMeta>;
+
+  beforeEach(() => {
+    mockGetSalesSessionMeta.mockReturnValue(undefined);
+  });
+
+  it("セールスintent未検出(閲覧中と推定)・公開済み資料ありならresourceCardが設定される(confidenceは本番実値のmedium)", async () => {
+    // multiStepPlanner.ts は confidence を 'medium' に固定しており(確認済み)、
+    // 主信号はあくまで「セールスintentが1つも検出されていないこと」。
+    mockPlanner.mockResolvedValue({ ...basePlan, confidence: "medium" });
+    mockDetectIntents.mockReturnValue({
+      proposeIntent: undefined,
+      recommendIntent: undefined,
+      closeIntent: undefined,
+    });
+    mockPool.query
+      .mockResolvedValueOnce({ rows: [{ enabled: null }] }) // isSalesStageContinuityEnabled
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: "res-1",
+            tenant_id: "test-tenant",
+            title: "導入事例集",
+            description: null,
+            storage_path: null,
+            external_url: "https://example.com/whitepaper.pdf",
+            file_type: "pdf",
+            moderation_status: "approved",
+            moderation_reason: null,
+            rights_confirmed: true,
+            is_published: true,
+            created_at: "2026-01-01T00:00:00.000Z",
+            updated_at: "2026-01-01T00:00:00.000Z",
+          },
+        ],
+      });
+
+    const result = await runDialogTurn({
+      sessionId: "test-session-r1",
+      tenantId: "test-tenant",
+      message: "ちょっと見てるだけです",
+    });
+
+    expect(result.resourceCard).toEqual({
+      title: "導入事例集",
+      url: "https://example.com/whitepaper.pdf",
+    });
+    expect(mockUpdateSalesSessionMeta).toHaveBeenCalledWith(
+      expect.objectContaining({ tenantId: "test-tenant", sessionId: "test-session-r1" }),
+      expect.objectContaining({ resourceOfferShown: true }),
+    );
+  });
+
+  it("セールスintent未検出でも資料が無ければresourceCardは設定されない", async () => {
+    mockPlanner.mockResolvedValue({ ...basePlan, confidence: "medium" });
+    mockDetectIntents.mockReturnValue({
+      proposeIntent: undefined,
+      recommendIntent: undefined,
+      closeIntent: undefined,
+    });
+    mockPool.query
+      .mockResolvedValueOnce({ rows: [{ enabled: null }] })
+      .mockResolvedValueOnce({ rows: [] }); // tenant_resources 未登録
+
+    const result = await runDialogTurn({
+      sessionId: "test-session-r2",
+      tenantId: "test-tenant",
+      message: "ちょっと見てるだけです",
+    });
+
+    expect(result.resourceCard).toBeUndefined();
+  });
+
+  it("資料はあるが is_published=false のときは resourceCard を設定しない(下書き/モデレーション未通過をLLMのシグナルだけで公開しない)", async () => {
+    mockPlanner.mockResolvedValue({ ...basePlan, confidence: "medium" });
+    mockDetectIntents.mockReturnValue({
+      proposeIntent: undefined,
+      recommendIntent: undefined,
+      closeIntent: undefined,
+    });
+    mockPool.query
+      .mockResolvedValueOnce({ rows: [{ enabled: null }] })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: "res-1",
+            tenant_id: "test-tenant",
+            title: "下書き資料",
+            description: null,
+            storage_path: null,
+            external_url: "https://example.com/draft.pdf",
+            file_type: "pdf",
+            moderation_status: "pending",
+            moderation_reason: null,
+            rights_confirmed: true,
+            is_published: false,
+            created_at: "2026-01-01T00:00:00.000Z",
+            updated_at: "2026-01-01T00:00:00.000Z",
+          },
+        ],
+      });
+
+    const result = await runDialogTurn({
+      sessionId: "test-session-r3",
+      tenantId: "test-tenant",
+      message: "ちょっと見てるだけです",
+    });
+
+    expect(result.resourceCard).toBeUndefined();
+  });
+
+  it("セールスintentが検出済み(confidenceも本番実値のmedium)なら資料オファーより成約導線を優先し問い合わせしない", async () => {
+    mockPlanner.mockResolvedValue({ ...basePlan, confidence: "medium" });
+    mockDetectIntents.mockReturnValue({
+      proposeIntent: "trial_lesson_offer",
+      recommendIntent: undefined,
+      closeIntent: undefined,
+    });
+    mockPool.query.mockResolvedValueOnce({ rows: [{ enabled: null }] });
+
+    const result = await runDialogTurn({
+      sessionId: "test-session-r5",
+      tenantId: "test-tenant",
+      message: "料金を教えて",
+    });
+
+    expect(result.resourceCard).toBeUndefined();
+    expect(mockPool.query).toHaveBeenCalledTimes(1);
+  });
+
+  it("セールスintentが検出済みでも confidence==='low' なら副次的なOR条件として資料の有無を問い合わせる" +
+    "(現状のrule-based multiStepPlannerはconfidenceを'medium'固定で返すためこの分岐には到達しないが、" +
+    "将来confidence算出が実質化されても壊れないことを固定する。この分岐が実際に効くようになったからといって" +
+    "LLM JSON経路(useLlmPlanner)を有効化する理由にはならない)", async () => {
+    mockPlanner.mockResolvedValue({ ...basePlan, confidence: "low" });
+    mockDetectIntents.mockReturnValue({
+      proposeIntent: "trial_lesson_offer",
+      recommendIntent: undefined,
+      closeIntent: undefined,
+    });
+    mockPool.query
+      .mockResolvedValueOnce({ rows: [{ enabled: null }] })
+      .mockResolvedValueOnce({ rows: [] }); // tenant_resources 未登録(問い合わせ自体が発生したことだけを確認する)
+
+    const result = await runDialogTurn({
+      sessionId: "test-session-r5b",
+      tenantId: "test-tenant",
+      message: "料金を教えて",
+    });
+
+    expect(result.resourceCard).toBeUndefined(); // 資料自体が無いのでカードは出ない
+    expect(mockPool.query).toHaveBeenCalledTimes(2); // だが問い合わせ自体は発生した(信号が立った証拠)
+  });
+
+  it("1会話につき1回まで: salesContextStoreにresourceOfferShown=trueが記録済みなら資料の有無を再度問い合わせない", async () => {
+    mockPlanner.mockResolvedValue({ ...basePlan, confidence: "medium" });
+    mockDetectIntents.mockReturnValue({
+      proposeIntent: undefined,
+      recommendIntent: undefined,
+      closeIntent: undefined,
+    });
+    mockGetSalesSessionMeta.mockReturnValue({
+      currentStage: "clarify",
+      resourceOfferShown: true,
+      lastUpdatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    mockPool.query.mockResolvedValueOnce({ rows: [{ enabled: null }] });
+
+    const result = await runDialogTurn({
+      sessionId: "test-session-r6",
+      tenantId: "test-tenant",
+      message: "他にもありますか",
+    });
+
+    expect(result.resourceCard).toBeUndefined();
+    expect(mockPool.query).toHaveBeenCalledTimes(1);
+    expect(mockUpdateSalesSessionMeta).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ resourceOfferShown: true }),
+    );
+  });
+
+  it("資料の存在確認(DB問い合わせ)が例外を投げてもresourceCardなしで正常応答する", async () => {
+    mockPlanner.mockResolvedValue({ ...basePlan, confidence: "medium" });
+    mockDetectIntents.mockReturnValue({
+      proposeIntent: undefined,
+      recommendIntent: undefined,
+      closeIntent: undefined,
+    });
+    mockPool.query
+      .mockResolvedValueOnce({ rows: [{ enabled: null }] })
+      .mockRejectedValueOnce(new Error('relation "tenant_resources" does not exist'));
+
+    const result = await runDialogTurn({
+      sessionId: "test-session-r7",
+      tenantId: "test-tenant",
+      message: "ちょっと見てるだけです",
+    });
+
+    // エラーは握りつぶされ resourceCard なしで正常応答する(answer自体は他要因で決まるため未検証)
+    expect(result.resourceCard).toBeUndefined();
+    expect(result.answer).not.toBeNull();
+  });
+
+  it("LLMの自由文(回答テキスト)にどんな文言があってもresourceCardの判定には使わない(構造化フィールドのみで決まる)", async () => {
+    mockPlanner.mockResolvedValue({ ...basePlan, confidence: "medium" });
+    mockDetectIntents.mockReturnValue({
+      proposeIntent: undefined,
+      recommendIntent: undefined,
+      closeIntent: undefined,
+    });
+    mockOrchestrator.mockResolvedValue({
+      ...baseOrchestrated,
+      answer: "資料をご案内しました。詳しくはこちらをご覧ください。",
+    });
+    mockPool.query.mockResolvedValueOnce({ rows: [{ enabled: null }] }).mockResolvedValueOnce({ rows: [] });
+
+    const result = await runDialogTurn({
+      sessionId: "test-session-r8",
+      tenantId: "test-tenant",
+      message: "ちょっと見てるだけです",
+    });
+
+    // 回答テキストに「案内しました」等の文言があっても、DBに資料が無ければ設定されない
+    expect(result.resourceCard).toBeUndefined();
+  });
+});
+
 describe("runDialogTurn — LemonSliceペルソナスワップ ragCategory", () => {
   it("orchestrator の category が meta.ragCategory にそのまま転送される", async () => {
     mockOrchestrator.mockResolvedValue({ ...baseOrchestrated, category: "fashion" });

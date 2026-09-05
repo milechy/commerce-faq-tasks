@@ -330,6 +330,22 @@ export type WidgetPlacementAgentActionCard = {
   defaultOffsetY: number;
 };
 
+// get_resource/upload_resource が返す、資料(1テナント1件固定)の状態カード。
+// フィールド形状はサーバ側 ResourceCardPayload(actionExecutor.ts)と一致させること。
+export type ResourceAgentActionCard = {
+  kind: "resource";
+  exists: boolean;
+  id: string | null;
+  title: string | null;
+  description: string | null;
+  fileType: "pdf" | "external_url" | null;
+  moderationStatus: "pending" | "approved" | "rejected" | null;
+  moderationReason: string | null;
+  rightsConfirmed: boolean;
+  isPublished: boolean;
+  downloadUrl: string | null;
+};
+
 export type AgentActionCard =
   | LegacyLinkAgentActionCard
   | AvatarPresetAgentActionCard
@@ -348,7 +364,8 @@ export type AgentActionCard =
   | KnowledgeAttributionAgentActionCard
   | BillingSummaryAgentActionCard
   | PlanChangedAgentActionCard
-  | WidgetPlacementAgentActionCard;
+  | WidgetPlacementAgentActionCard
+  | ResourceAgentActionCard;
 
 export type AgentAction = { tool: string; result: string; card?: AgentActionCard };
 

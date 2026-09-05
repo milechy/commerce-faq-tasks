@@ -47,6 +47,11 @@ export interface ChatMessage {
     image_url: string;
     cta_url: string;
   };
+  /** 資料オファー機能: 低関心/閲覧中と判定された会話に一度だけ提示する資料カード */
+  resourceCard?: {
+    title: string;
+    url: string;
+  };
   /**
    * S6(共有学習プールの参加モデル・fail-open是正): 開示バナーのバックストップ。
    * /api/widget/features の取得が失敗した場合でも、会話が成立する限り

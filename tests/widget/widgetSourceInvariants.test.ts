@@ -322,8 +322,22 @@ describe('public/widget.js バッジ描画条件 — 抽出ロジックとの契
     });
 
     it('広告帯リンクにも rel="nofollow sponsored noopener" が付与されている（link scheme対策）', () => {
-      const matches = [...WIDGET_SRC.matchAll(/rel:\s*['"]([^'"]+)['"]/g)];
-      expect(matches.length).toBeGreaterThanOrEqual(2);
+      // CLAUDE.md禁止40のnofollow sponsored要件は「widgetが多数のテナントサイトに配布する
+      // R2C自身の宣伝リンク(広告帯/バッジ)」に限定される(コード中のコメント通り: 同一URLが
+      // 全テナントサイトに横展開されることがGoogleのlink schemeに触れるため)。
+      // 資料オファー機能(buildResourceCard)のリンクはテナントごとに異なる外部URL(テナント自身の
+      // 資料)であり、同一URLの横展開ではないため対象外 — その rel:'noopener' はこの検査の
+      // スコープ外として、ここでは広告帯/バッジのブロックだけを切り出して検査する
+      // (ブロック全体を対象にしないと、無関係な箇所に rel: を追加しただけで
+      // このテストの意図と無関係に失敗/見逃しが起きる)。
+      const startIdx = WIDGET_SRC.indexOf('R2C自身の広告帯 / 「Powered by R2C」バッジ');
+      const endIdx = WIDGET_SRC.indexOf('shadow.appendChild(panel);');
+      expect(startIdx).toBeGreaterThan(-1);
+      expect(endIdx).toBeGreaterThan(startIdx);
+      const adBadgeBlock = WIDGET_SRC.slice(startIdx, endIdx);
+
+      const matches = [...adBadgeBlock.matchAll(/rel:\s*['"]([^'"]+)['"]/g)];
+      expect(matches.length).toBe(2); // 広告帯リンク + バッジリンクの2件のみ
       matches.forEach((m) => {
         expect(m[1]).toContain('nofollow');
         expect(m[1]).toContain('sponsored');
@@ -375,7 +389,14 @@ describe('public/widget.js バッジ描画条件 — 抽出ロジックとの契
       expect(idx).toBeGreaterThan(-1);
       // 本体: bubble.textContent = msg.content; がこの呼び出しより前に存在すること
       // (= bubble のテキストは先に確定済みで、buildFeedbackRow の結果はそこに混ぜ込まれていない)
-      const before = WIDGET_SRC.slice(Math.max(0, idx - 1400), idx);
+      // 窓幅1800: 資料オファー機能(禁止40と同じ考えのresourceCardブロック)が
+      // actions描画とfeedbackRowの間に追加され、実測距離が1400→1439文字に伸びたため
+      // 拡大した(2026-09-05)。この窓は「同一レンダリング処理内での前後関係」を近似する
+      // ための実装上の閾値であり、不変条件そのものではない。安全な理由:
+      // 両アンカー文字列(`bubble.textContent = msg.content;` / `inner.appendChild(buildFeedbackRow(`)
+      // はファイル内に1箇所ずつしか出現しないため、窓を広げても別のレンダリング経路の
+      // 記述を誤って拾うことはない。
+      const before = WIDGET_SRC.slice(Math.max(0, idx - 1800), idx);
       expect(before).toMatch(/bubble\.textContent = msg\.content;/);
       // 混入禁止: buildFeedbackRow の戻り値が bubble 自体に append/挿入されていないこと
       expect(WIDGET_SRC).not.toMatch(/bubble\.appendChild\(buildFeedbackRow\(/);
@@ -407,6 +428,26 @@ describe('public/widget.js バッジ描画条件 — 抽出ロジックとの契
       expect(block).not.toMatch(/setEscalateBtnState/);
       expect(block).toMatch(/feedback-hint/);
     });
+  });
+});
+
+// 資料オファー機能(buildResourceCard)。上の「広告帯リンク」テストの対象からは除外した
+// (テナント固有の外部URLであり、R2C自身の宣伝リンクが多数のテナントサイトへ同一URLを
+// 配布するlink schemeケースには当たらないため)が、この新しい外部リンク自体の安全性と
+// 構造分離は別途ここで固定する。
+describe('public/widget.js — 資料オファー(buildResourceCard)', () => {
+  it('資料リンクは target=_blank と組み合わせて noopener を持つ(タブナビング対策)', () => {
+    const idx = WIDGET_SRC.indexOf('function buildResourceCard(');
+    expect(idx).toBeGreaterThan(-1);
+    const block = WIDGET_SRC.slice(idx, idx + 600);
+    expect(block).toMatch(/target:\s*'_blank'/);
+    expect(block).toMatch(/rel:\s*['"][^'"]*noopener[^'"]*['"]/);
+  });
+
+  it('AI回答テキスト(bubble)とは別要素として追加される(禁止40と同じ構造分離)', () => {
+    expect(WIDGET_SRC).toMatch(/inner\.appendChild\(buildResourceCard\(/);
+    expect(WIDGET_SRC).not.toMatch(/bubble\.appendChild\(buildResourceCard\(/);
+    expect(WIDGET_SRC).not.toMatch(/bubble\.textContent\s*[+]?=\s*buildResourceCard\(/);
   });
 });
 

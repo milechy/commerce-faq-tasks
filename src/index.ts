@@ -53,6 +53,7 @@ import { registerChatHistoryRoutes } from "./api/admin/chat-history/routes";
 import { registerTuningRoutes } from "./api/admin/tuning/routes";
 import { registerTestResponseRoutes } from "./api/admin/tuning/testResponseRoutes";
 import { registerAvatarConfigRoutes } from "./api/admin/avatar/routes";
+import { registerResourceRoutes } from "./api/admin/resources/routes";
 import { registerBillingAdminRoutes } from "./lib/billing/billingApi";
 import { createStripeWebhookHandler } from "./lib/billing/stripeWebhook";
 import { initUsageTracker, trackUsage } from "./lib/billing/usageTracker";
@@ -733,6 +734,9 @@ if (db) registerInternalGa4SyncRoutes(app, db);
 
 // Phase41: Avatar Customization Studio — Admin CRUD API
 if (db) registerAvatarConfigRoutes(app, db);
+
+// 資料オファー機能: テナント向け資料（PDF/外部URL）管理API
+if (db) registerResourceRoutes(app, db);
 
 // Phase41: Avatar Customization Studio — 画像生成・声マッチング・プロンプト生成API
 if (db) registerAvatarGenerationRoutes(app, db);

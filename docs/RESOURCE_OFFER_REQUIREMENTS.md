@@ -36,9 +36,10 @@
 
 ### 2.2 顧客向けチャットの「LLM判断」の既存パターン
 
-- `ProposeIntent` / `RecommendIntent` / `CloseIntent`（`src/agent/orchestrator/sales/*.ts`）は、LLMへの構造化出力プロンプトで得た `intent` フィールドをTypeScript型として消費する設計。
+- `ProposeIntent` / `RecommendIntent` / `CloseIntent`（`src/agent/orchestrator/sales/*.ts`）という型は存在するが、**実装時の検証で判明した訂正**: これらを実際に決定しているのは `src/agent/orchestrator/sales/salesIntentDetector.ts` の正規表現/YAML（`config/salesIntentRules.yaml`）によるルールベース判定であり、LLMが構造化JSONを出力してこれらを決めているわけではない（旧記述は誤り）。
 - 顧客向けチャット側には Groq/Gemini の native `tool_calls`（function calling）機構は存在しない（`tool_calls` / `tools:` のgrep該当ゼロ）。admin-uiのエージェントツール体系（`toolDefinitions.ts` 等）とは完全に別系統。
-  **→ 「LLMが資料提示を判断する」は、既存の構造化JSON出力パターンに `resourceOffer` 相当のフィールドを追加する形で実装する。native tool-calling基盤を新規導入しない（`CLAUDE.md` 禁止2/6の「共有済みの層を複製しない」に整合）。**
+- LLMが構造化JSONを出力し `dialogAgent.ts` がそれを消費する経路は、リポジトリ全体で唯一 `src/agent/flow/llmMultiStepPlannerRuntime.ts`（`useLlmPlanner: true` 時のみ）。しかし `public/widget.js` はこのオプションを一度も有効化しておらず、**本番の顧客トラフィックではこの経路は常に不使用（dark path）**。ここに `resourceOffer` を実装すると、型チェック・単体テストは通るが本番では永久に発火しない「配線されたが未消費」のコード（`productCard`と同型の欠陥、→ 禁止67）になる。
+  **→ 実装した内容: `resourceOffer`はLLMの構造化出力フィールドではなく、本番で毎ターン実行されるルールベースの信号から導出する（`src/agent/dialog/dialogAgent.ts`の`isLowIntentBrowsing()`）。主信号は「`detectSalesIntents()`がpropose/recommend/closeのいずれのintentも検出しなかったこと」、副次的なOR条件として`multiStepPlan.confidence === "low"`を残すが、本番のルールベースプランナー（`src/agent/flow/multiStepPlanner.ts`）は`confidence`を常に`'medium'`固定で返すため、現状この副次条件は実質的に無効（将来confidence算出が実質化されたときのための前方互換の保険としてのみ残す）。**
 
 ### 2.3 アバター画像モデレーションの前例（PR #1223, `5c2e752a`）
 
@@ -95,7 +96,7 @@
 | 自動モデレーション判定 | `src/lib/imageContentGuard.ts` と同型のGemini 2.5 Flash JSON判定関数を新設（fail-open） |
 | Copilot UIツール | `get_resource` / `upload_resource` / `delete_resource`（`toolDefinitions.ts` + `actionExecutor.ts` の `switch` + `REAL_TOOL_LABEL` の3点セット、`confirmPolicy.ts` でアップロード/削除を分類） |
 | カード同期（管理画面） | 3層（`actionExecutor.ts` の `*CardPayload`、`useAgentChatTransport.ts` の `AgentActionCard`、`copilot-preview/index.tsx` のCard union） |
-| 顧客向け提示判断 | `src/agent/orchestrator/sales/` 配下、既存 `ProposeIntent` 等と同型の構造化出力に `resourceOffer` フィールドを追加 |
+| 顧客向け提示判断 | `src/agent/dialog/dialogAgent.ts` の `isLowIntentBrowsing()`（実装済み。§2.2参照。LLM構造化出力ではなく `detectSalesIntents()` ベース） |
 | widgetレンダリング | `public/widget.js` の既存Shadow DOM構築部に資料カード表示を追加（`innerHTML` 禁止、`textContent`/`createElement` のみ） |
 | 計測 | 既存 `behavioral_events` に `event_type: 'resource_offered' | 'resource_clicked'` を追加 |
 | 通知 | `src/lib/notifications.ts` の `createNotification` |
@@ -127,7 +128,7 @@
 | `public/widget.js` の既存Shadow DOM構築関数群 | 資料カード描画を追加。第2のwidget実装・iframeを作らない |
 | `src/lib/notifications.ts` の `createNotification` | 呼ぶだけ。新しい通知チャネルを作らない |
 | 既存の `behavioral_events` INSERT経路 | `event_type`に`resource_offered`/`resource_clicked`を追加するだけ。第2のイベント送信経路・第2の訪問者IDを作らない |
-| `src/agent/orchestrator/sales/` 配下の既存プロンプトビルダー | `resourceOffer`フィールドを追加。新しいsales stageやオーケストレータを作らない |
+| `src/agent/dialog/dialogAgent.ts` | `isLowIntentBrowsing()`を追加（§2.2参照）。新しいsales stageやオーケストレータ、LLM tool-calling基盤を作らない |
 
 ### 5.2 守るべき設計原則・命名規則・既存パターン
 

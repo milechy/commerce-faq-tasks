@@ -71,6 +71,11 @@ const MUTATION_PATTERNS: RegExp[] = [
   // billingApi.ts)側に持たせているため、生SQLではなくこれらの呼び出しが目印になる。
   /\bchangeTenantPlan\(/,
   /\bcreateCheckoutSessionForTenant\(/,
+  // upload_resource/delete_resource は自前でSQLを書かず resourcesRepository.ts の
+  // upsert/delete ヘルパを呼ぶ(src/api/admin/CLAUDE.md「自前でSQLを書かない」)ため、
+  // 生SQLではなくこれらの呼び出しが目印になる。
+  /\bupsertResource\(/,
+  /\bdeleteResource\(/,
 ];
 
 /** executeToolCall の switch を case ごとに切り、書き込みを行っているツール名を返す。 */

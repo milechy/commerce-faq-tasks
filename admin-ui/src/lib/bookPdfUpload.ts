@@ -39,6 +39,22 @@ export function defaultBookTitle(fileName: string): string {
   return fileName.replace(/\.pdf$/i, "").trim() || fileName;
 }
 
+// 資料オファー(docs/RESOURCE_OFFER_REQUIREMENTS.md)のPDF検証。書籍PDF(ZIP可・10MB)とは
+// 上限・受付形式が異なる(資料は単体PDFのみ・20MB、src/api/admin/resources/routes.ts の
+// MAX_RESOURCE_PDF_SIZE と揃える)ため、isPdfFile を再利用しつつ別関数にする
+// (第2の添付経路ではなく、既存ファイルへの追加関数)。
+export const MAX_RESOURCE_PDF_SIZE = 20 * 1024 * 1024; // 20MB
+
+export type ResourceFileRejection = "type" | "size";
+
+export type ResourceFileValidation = { kind: "pdf" } | { kind: "rejected"; reason: ResourceFileRejection };
+
+/** ブラウザ側の受付判定。サーバー側の上限(multer 20MB)とは別で、ここは体感を良くするための事前弾き */
+export function validateResourceFile(file: File): ResourceFileValidation {
+  if (!isPdfFile(file)) return { kind: "rejected", reason: "type" };
+  return file.size > MAX_RESOURCE_PDF_SIZE ? { kind: "rejected", reason: "size" } : { kind: "pdf" };
+}
+
 export type UploadErrorKind = "auth" | "too_large" | "generic";
 
 /** HTTPステータスを面に依存しないエラー種別へ落とす。文言の組み立ては呼び出し側の責務 */
@@ -54,12 +70,18 @@ export interface UploadResult {
   networkError?: boolean;
 }
 
-/** FormDataをXHRで送信し、進捗(0-100)をonProgressへ通知する(fetchでは送信進捗が取れない) */
+/**
+ * FormDataをXHRで送信し、進捗(0-100)をonProgressへ通知する(fetchでは送信進捗が取れない)。
+ * method は既定 "POST"(書籍PDF取り込みの既存契約)。資料オファーの PUT /v1/admin/resources
+ * のように別メソッドを使うエンドポイントもこの関数をそのまま再利用する(第2のXHRアップロード
+ * 実装を作らない)。
+ */
 export function uploadBookPdfWithProgress(
   url: string,
   form: FormData,
   token: string | null,
   onProgress: (pct: number) => void,
+  method: "POST" | "PUT" = "POST",
 ): Promise<UploadResult> {
   return new Promise((resolve) => {
     const xhr = new XMLHttpRequest();
@@ -80,7 +102,7 @@ export function uploadBookPdfWithProgress(
     xhr.addEventListener("error", () => {
       resolve({ status: 0, body: null, networkError: true });
     });
-    xhr.open("POST", url);
+    xhr.open(method, url);
     if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
     xhr.send(form);
   });

@@ -1992,4 +1992,71 @@ export const ADMIN_AGENT_TOOLS: GroqTool[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'get_resource',
+      description:
+        '会話で提示できる資料(PDFまたは外部URL)の登録状況を取得する読み取り専用ツール。' +
+        '資料は1テナント1件まで。PDFファイルはこのツールでは扱えない(チャット欄の📎から直接アップロードする)。',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'upload_resource',
+      description:
+        '外部URLの資料を登録する(1テナント1件固定。既に登録済みの場合は上書きする)。' +
+        'PDFファイルの登録はこのツールでは扱えない(チャット欄の📎から直接アップロードするため)。' +
+        '第三者の著作権等を侵害しないことをユーザーに確認し、明確な同意を得た場合のみ' +
+        'rights_confirmed=true にすること。内容(タイトル・URL)をユーザーに提示し、' +
+        '同意を得たターンでのみ confirmed=true で呼び出すこと。',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: {
+            type: 'string',
+            description: '資料のタイトル(200字以内)',
+          },
+          external_url: {
+            type: 'string',
+            description: '資料の外部URL(http/httpsのみ。社内・ローカルアドレスは登録できない)',
+          },
+          rights_confirmed: {
+            type: 'boolean',
+            description: '第三者の著作権等を侵害しないことをユーザーが確認した場合のみ true',
+          },
+          confirmed: {
+            type: 'boolean',
+            description: '登録確認フラグ(true でのみ実行)',
+          },
+        },
+        required: ['title', 'external_url', 'rights_confirmed', 'confirmed'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'delete_resource',
+      description:
+        '登録済みの資料を削除する。取り消せない操作のため、必ず先に削除対象をユーザーに提示し、' +
+        '明確な同意を得たターンでのみ confirmed=true で呼び出すこと。',
+      parameters: {
+        type: 'object',
+        properties: {
+          confirmed: {
+            type: 'boolean',
+            description: '削除確認フラグ(true でのみ実行)',
+          },
+        },
+        required: ['confirmed'],
+      },
+    },
+  },
 ];
