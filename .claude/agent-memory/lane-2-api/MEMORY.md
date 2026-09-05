@@ -6,7 +6,7 @@
 
 ## API設計パターン
 
-(まだ記録なし。API設計の判断や繰り返しパターンを発見したらここに追記する)
+- [Shopify settings routes暫定認証とsurface設計](project_shopify_settings_routes_stopgap_auth.md) — タスク03(OAuth)で置き換える認証関数の契約とwidget_themeフラットキー設計の理由
 
 ## Gate失敗パターン
 
