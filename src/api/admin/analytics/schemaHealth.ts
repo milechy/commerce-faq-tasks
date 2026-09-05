@@ -80,6 +80,8 @@ export const REQUIRED_COLUMNS: Record<string, readonly string[]> = {
   stripe_usage_reports: ["billed_quantity", "dimension", "idempotency_key", "period_yyyymm", "tenant_id", "total_cost_cents", "total_requests"],
   stripe_webhook_events: ["claimed_at", "event_id", "event_type"],
   tenant_api_keys: ["expires_at", "is_active", "key_hash", "key_prefix", "tenant_id"],
+  // 資料オファー機能。migration: src/api/admin/resources/migration_tenant_resources.sql
+  tenant_resources: ["description", "external_url", "file_type", "id", "is_published", "moderation_reason", "moderation_status", "rights_confirmed", "storage_path", "tenant_id", "title"],
   tenant_settings_history: ["changed_by", "field_name", "new_value", "old_value", "tenant_id"],
   // tenant_contact_email は migration_phase_a.sql で追加。
   // 未適用のまま配備すると POST /v1/admin/my-tenant/billing/checkout-session の
