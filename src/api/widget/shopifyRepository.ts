@@ -5,11 +5,20 @@
 // 置かない(wpProvisionRepository.ts と同じ切り分け方針)。
 //
 // 対象カラム(shopify_shop_domain / shopify_access_token_encrypted /
-// shopify_scope / shopify_installed_at / inflow_source /
-// deletion_requested_at / deletion_approved_at / deletion_approved_by)は
-// 別PRで追加中(本タスク時点ではDBに未適用)。TypeScript はコンパイル時に
+// shopify_scope / shopify_installed_at / deletion_requested_at /
+// deletion_approved_at / deletion_approved_by)は別PR(Asana 1218199856712585,
+// PR #1228)で追加中(本タスク時点ではDBに未適用)。TypeScript はコンパイル時に
 // DBスキーマを検証しないため、マージ順序を待たずに実装してよい
 // (Asana GID 1218199958279099 の指示どおり)。
+//
+// ★流入元列は tenants.provisioning_source に一本化(2026-09-05訂正)★
+// 当初のタスク仕様は新規列 tenants.inflow_source を要求していたが、
+// テナント流入元を識別する列は既に src/migrations/phase79_tenants_provisioning_source.sql
+// の provisioning_source(CHECK 'manual'/'wordpress_plugin', wpProvisionRoutes.ts の
+// INSERT・actionExecutor.ts・routes.ts で参照)として実運用されていた。
+// PR #1228 が CLAUDE.md 禁止6(同じ関心事を2列に複製したまま片方だけ直さない)に
+// 従い、新規列を作らず既存 provisioning_source の CHECK 制約に 'shopify_app' を
+// 追加する形に変更したため、本ファイルもそれに追随する。
 //
 // db は引数で受け取る。内部で getPool() を呼ぶと、テストのモック Pool と
 // 食い違う(CLAUDE.md: tenantHasFeature が踏んだのと同じ穴)。
@@ -23,8 +32,8 @@ import type { Pool } from "pg";
 /** 既存の analytics 層(schemaHealth.ts / summaryQueries.ts)と同じ最小インターフェース。 */
 type Db = Pick<Pool, "query">;
 
-/** WordPress 版 provisioning_source と併存する、テナント全体の流入元マーカー。 */
-export type InflowSource = "manual" | "wordpress_plugin" | "shopify_app";
+/** tenants.provisioning_source の値域(PR #1228 で 'shopify_app' を CHECK 制約に追加)。 */
+export type ProvisioningSource = "manual" | "wordpress_plugin" | "shopify_app";
 
 export interface ShopifyTenantRow {
   id: string;
@@ -32,7 +41,7 @@ export interface ShopifyTenantRow {
   /** アクセストークンの暗号文そのものは一般 SELECT に含めない(WP版の秘密値除外方針を踏襲)。 */
   shopify_scope: string | null;
   shopify_installed_at: Date | null;
-  inflow_source: string | null;
+  provisioning_source: string | null;
   deletion_requested_at: Date | null;
   deletion_approved_at: Date | null;
   deletion_approved_by: string | null;
@@ -46,7 +55,7 @@ export interface PendingDeletionRow {
 
 const ROW_COLUMNS = `
   id, shopify_shop_domain, shopify_scope, shopify_installed_at,
-  inflow_source, deletion_requested_at, deletion_approved_at, deletion_approved_by
+  provisioning_source, deletion_requested_at, deletion_approved_at, deletion_approved_by
 `;
 
 /**
@@ -88,13 +97,13 @@ export async function linkTenantToShop(
   return (result.rowCount ?? 0) > 0;
 }
 
-/** inflow_source を設定する。戻り値は実際に更新できたか。 */
-export async function markInflowSource(
+/** provisioning_source を設定する。戻り値は実際に更新できたか。 */
+export async function markProvisioningSource(
   db: Db,
   tenantId: string,
-  source: InflowSource
+  source: ProvisioningSource
 ): Promise<boolean> {
-  const result = await db.query(`UPDATE tenants SET inflow_source = $2 WHERE id = $1`, [
+  const result = await db.query(`UPDATE tenants SET provisioning_source = $2 WHERE id = $1`, [
     tenantId,
     source,
   ]);

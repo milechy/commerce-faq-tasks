@@ -12,6 +12,10 @@
 
 (まだ記録なし。Gate失敗のroot causeを発見したらここに追記する)
 
+## プロジェクト固有の罠
+
+- [Shopify inflow_source vs provisioning_source (2026-09-05)](trap_shopify_inflow_source_vs_provisioning_source.md) — inflow_source列は作られず、PR #1228でprovisioning_sourceに一本化解消済み。以後は必ずprovisioning_sourceを使う
+
 ## 参照ドキュメント
 
 - `docs/24H_LOOP_LEARNING_INTEGRATION.md` — メモリ4層設計

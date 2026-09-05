@@ -12,7 +12,7 @@
 import {
   findTenantByShopDomain,
   linkTenantToShop,
-  markInflowSource,
+  markProvisioningSource,
   markDeletionRequested,
   approveDeletion,
   clearDeletionPending,
@@ -40,7 +40,7 @@ describe("findTenantByShopDomain", () => {
       shopify_shop_domain: "example.myshopify.com",
       shopify_scope: "read_products",
       shopify_installed_at: new Date("2026-09-01T00:00:00Z"),
-      inflow_source: "shopify_app",
+      provisioning_source: "shopify_app",
       deletion_requested_at: null,
       deletion_approved_at: null,
       deletion_approved_by: null,
@@ -98,18 +98,18 @@ describe("linkTenantToShop", () => {
   });
 });
 
-describe("markInflowSource", () => {
-  it("inflow_source を設定する", async () => {
+describe("markProvisioningSource", () => {
+  it("provisioning_source を設定する", async () => {
     const { db, query } = makeDb({ rowCount: 1 });
-    const result = await markInflowSource(db, "tenant-a", "shopify_app");
+    const result = await markProvisioningSource(db, "tenant-a", "shopify_app");
     expect(result).toBe(true);
-    expect(sqlOf(query)).toContain("SET inflow_source = $2");
+    expect(sqlOf(query)).toContain("SET provisioning_source = $2");
     expect(query.mock.calls[0][1]).toEqual(["tenant-a", "shopify_app"]);
   });
 
   it("対象テナントが存在しなければ false を返す", async () => {
     const { db } = makeDb({ rowCount: 0 });
-    await expect(markInflowSource(db, "missing", "manual")).resolves.toBe(false);
+    await expect(markProvisioningSource(db, "missing", "manual")).resolves.toBe(false);
   });
 });
 
