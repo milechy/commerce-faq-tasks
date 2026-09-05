@@ -210,6 +210,66 @@ describe("PUT /v1/admin/resources — rights_confirmed のサーバ側再検証"
 });
 
 // ---------------------------------------------------------------------------
+// 2.5 title/description の文字数境界(upsertBodySchema: title max200 / description max2000)
+// ---------------------------------------------------------------------------
+
+describe("PUT /v1/admin/resources — title/description の文字数境界", () => {
+  it("titleがちょうど200文字なら受理される(境界値の片側)", async () => {
+    mockGetResource.mockResolvedValue(null);
+    mockUpsertResource.mockResolvedValue({ ...RESOURCE_ROW, file_type: "external_url", storage_path: null });
+
+    const res = await request(makeApp())
+      .put("/v1/admin/resources")
+      .field("title", "あ".repeat(200))
+      .field("external_url", "https://example.com/whitepaper.pdf")
+      .field("rights_confirmed", "true");
+
+    expect(res.status).toBe(201);
+    expect(mockUpsertResource).toHaveBeenCalled();
+  });
+
+  it("titleが201文字だと400(invalid_request)で拒否され、保存されない(境界値のもう片側)", async () => {
+    const res = await request(makeApp())
+      .put("/v1/admin/resources")
+      .field("title", "あ".repeat(201))
+      .field("external_url", "https://example.com/whitepaper.pdf")
+      .field("rights_confirmed", "true");
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_request");
+    expect(mockUpsertResource).not.toHaveBeenCalled();
+  });
+
+  it("descriptionがちょうど2000文字なら受理される(境界値の片側)", async () => {
+    mockGetResource.mockResolvedValue(null);
+    mockUpsertResource.mockResolvedValue({ ...RESOURCE_ROW, file_type: "external_url", storage_path: null });
+
+    const res = await request(makeApp())
+      .put("/v1/admin/resources")
+      .field("title", "テスト資料")
+      .field("description", "い".repeat(2000))
+      .field("external_url", "https://example.com/whitepaper.pdf")
+      .field("rights_confirmed", "true");
+
+    expect(res.status).toBe(201);
+    expect(mockUpsertResource).toHaveBeenCalled();
+  });
+
+  it("descriptionが2001文字だと400(invalid_request)で拒否され、保存されない(境界値のもう片側)", async () => {
+    const res = await request(makeApp())
+      .put("/v1/admin/resources")
+      .field("title", "テスト資料")
+      .field("description", "い".repeat(2001))
+      .field("external_url", "https://example.com/whitepaper.pdf")
+      .field("rights_confirmed", "true");
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_request");
+    expect(mockUpsertResource).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 3. SSRF ガード(external_url)
 // ---------------------------------------------------------------------------
 
@@ -386,6 +446,195 @@ describe("PUT /v1/admin/resources — PDFテキスト抽出失敗時", () => {
       {},
       expect.objectContaining({ moderationStatus: "pending" })
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3.7 PDFファイルサイズ上限(multer limits.fileSize = MAX_RESOURCE_PDF_SIZE = 20MB)
+//   実バイト数のBufferを送ることで、コードパスの存在ではなく実際の閾値そのものを検証する。
+//
+//   実挙動確認済みの差分(タスク指示との相違): multer(busboy)の`limits.fileSize`は
+//   「この値ちょうどまでは許可」ではなく「この値未満のみ許可」という排他的な境界で動作する。
+//   実際に20MBちょうどのBufferを送ると413(LIMIT_FILE_SIZE)で拒否され、受理される実際の
+//   最大値は20MB - 1バイトだった(スタンドアロンのsupertest検証で確認: 20MB→413,
+//   20MB+1→413, 20MB-1→200)。エラーメッセージ「上限: 20MB」はユーザー向けの概数表示
+//   としては妥当だが、実装の受理境界そのものは20MB未満である点を回帰として固定する。
+// ---------------------------------------------------------------------------
+
+describe("PUT /v1/admin/resources — PDFファイルサイズ上限(実バイト境界)", () => {
+  const MAX_RESOURCE_PDF_SIZE = 20 * 1024 * 1024;
+
+  it("20MBちょうど未満(MAX-1バイト)のPDFは受理される(実際に受理される上限)", async () => {
+    mockGetResource.mockResolvedValue(null);
+    mockExtractResourcePdfText.mockResolvedValue("資料の本文テキスト");
+    mockCheckResourceTextForInfringement.mockResolvedValue({ blocked: false });
+    mockUpsertResource.mockResolvedValue({ ...RESOURCE_ROW, moderation_status: "approved" });
+
+    const justUnderMaxBuffer = Buffer.alloc(MAX_RESOURCE_PDF_SIZE - 1, "A");
+
+    const res = await request(makeApp())
+      .put("/v1/admin/resources")
+      .field("title", "テスト資料")
+      .field("rights_confirmed", "true")
+      .attach("file", justUnderMaxBuffer, { filename: "doc.pdf", contentType: "application/pdf" });
+
+    expect(res.status).toBe(201);
+    expect(mockUpsertResource).toHaveBeenCalled();
+  }, 30000);
+
+  it("20MBちょうどのPDFは413で拒否される(multer/busboyのfileSize制限は排他的境界のため、20MBちょうどは受理されない)", async () => {
+    const exactlyMaxBuffer = Buffer.alloc(MAX_RESOURCE_PDF_SIZE, "A");
+
+    const res = await request(makeApp())
+      .put("/v1/admin/resources")
+      .field("title", "テスト資料")
+      .field("rights_confirmed", "true")
+      .attach("file", exactlyMaxBuffer, { filename: "doc.pdf", contentType: "application/pdf" });
+
+    expect(res.status).toBe(413);
+    expect(res.body.error).toBe("ファイルサイズが大きすぎます（上限: 20MB）");
+    expect(mockUpsertResource).not.toHaveBeenCalled();
+  }, 30000);
+
+  it("20MBを1バイトでも超えるPDFは413で拒否され、保存されない", async () => {
+    const overMaxBuffer = Buffer.alloc(MAX_RESOURCE_PDF_SIZE + 1, "A");
+
+    const res = await request(makeApp())
+      .put("/v1/admin/resources")
+      .field("title", "テスト資料")
+      .field("rights_confirmed", "true")
+      .attach("file", overMaxBuffer, { filename: "doc.pdf", contentType: "application/pdf" });
+
+    expect(res.status).toBe(413);
+    expect(res.body.error).toBe("ファイルサイズが大きすぎます（上限: 20MB）");
+    expect(mockUpsertResource).not.toHaveBeenCalled();
+  }, 30000);
+});
+
+// ---------------------------------------------------------------------------
+// 3.8 MIMEタイプチェック(multer fileFilter): application/pdf以外はサーバ側で拒否
+// ---------------------------------------------------------------------------
+
+describe("PUT /v1/admin/resources — MIMEタイプチェック(fileFilter)", () => {
+  it("application/pdf以外(image/png)のファイルは400で拒否され、保存されない", async () => {
+    const res = await request(makeApp())
+      .put("/v1/admin/resources")
+      .field("title", "テスト資料")
+      .field("rights_confirmed", "true")
+      .attach("file", Buffer.from("fake png bytes"), { filename: "evil.png", contentType: "image/png" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("PDFファイルのみアップロードできます");
+    expect(mockUpsertResource).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3.9 既存資料への再アップロード(置き換え)フロー
+//   これまでの成功系テストは全て getResource→null(新規作成)のみを経由しており、
+//   「既存資料がある→そのidを再利用して更新する」分岐は一度も実行されていなかった。
+// ---------------------------------------------------------------------------
+
+describe("PUT /v1/admin/resources — 既存資料への再アップロード(置き換え)", () => {
+  it("既存資料がある場合はその id を再利用して更新し、is_published は false にリセットされる(resourcesRepository.upsertResourceは常にis_published=falseでUPSERTする実装のため、公開済みの資料を再アップロードしても未公開に戻る)", async () => {
+    const existing = {
+      ...RESOURCE_ROW,
+      id: "res-existing-1",
+      file_type: "external_url",
+      storage_path: null,
+      external_url: "https://example.com/old-whitepaper.pdf",
+      is_published: true,
+      moderation_status: "approved",
+    };
+    mockGetResource.mockResolvedValue(existing);
+    mockUpsertResource.mockResolvedValue({
+      ...existing,
+      external_url: "https://example.com/new-whitepaper.pdf",
+      is_published: false,
+    });
+
+    const res = await request(makeApp())
+      .put("/v1/admin/resources")
+      .field("title", "新しい資料タイトル")
+      .field("external_url", "https://example.com/new-whitepaper.pdf")
+      .field("rights_confirmed", "true");
+
+    expect(res.status).toBe(201);
+    // 新規UUIDではなく既存資料のidがそのまま渡っている(Storageパス固定・1テナント1件の要)
+    expect(mockUpsertResource).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({
+        id: "res-existing-1",
+        externalUrl: "https://example.com/new-whitepaper.pdf",
+      })
+    );
+    expect(res.body.external_url).toBe("https://example.com/new-whitepaper.pdf");
+    expect(res.body.is_published).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3.10 モデレーションで拒否された場合(routes.ts経由の統合テスト。従来は
+//   resourceContentGuard.test.ts でこの関数単体のみ検証しており、
+//   routes.ts が拒否結果を正しくupsertResourceへ渡すかは未検証だった)
+// ---------------------------------------------------------------------------
+
+describe("PUT /v1/admin/resources — モデレーションで拒否された場合", () => {
+  it("抽出テキストがモデレーションで拒否されると、アップロード自体は201で成功しmoderation_status=rejectedで保存される(公開は/publishで別途ブロックされる)", async () => {
+    mockGetResource.mockResolvedValue(null);
+    mockExtractResourcePdfText.mockResolvedValue("盗用された本文テキスト");
+    mockCheckResourceTextForInfringement.mockResolvedValue({
+      blocked: true,
+      reason: "著作権侵害の疑いがあります",
+    });
+    mockUpsertResource.mockResolvedValue({
+      ...RESOURCE_ROW,
+      moderation_status: "rejected",
+      moderation_reason: "著作権侵害の疑いがあります",
+    });
+
+    const res = await request(makeApp())
+      .put("/v1/admin/resources")
+      .field("title", "テスト資料")
+      .field("rights_confirmed", "true")
+      .attach("file", Buffer.from("%PDF-1.4 dummy"), { filename: "doc.pdf", contentType: "application/pdf" });
+
+    expect(res.status).toBe(201);
+    expect(mockUpsertResource).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({
+        moderationStatus: "rejected",
+        moderationReason: "著作権侵害の疑いがあります",
+      })
+    );
+  });
+
+  // 実挙動の確認(このテストが書かれた時点でのタスク指示との差分):
+  // resourceContentGuard.ts 自体はGemini呼び出し失敗時に内部でtry/catchしフェイルオープン
+  // (blocked: false を返す)するが、それはあくまで「関数の中身」の話であって、
+  // このテストのように checkResourceTextForInfringement をjest.mockでモジュールごと
+  // 差し替えて「例外を投げる」設定にした場合、その内部catchは存在しない(モック関数が
+  // 素通しでrejectする)。routes.ts側には、この呼び出しの周りに個別のtry/catchが無く、
+  // PUTハンドラ全体を包む1つのtry/catch(303-306行)にそのまま伝播するため、
+  // 実際には500(「資料の保存に失敗しました」)になり、upsertResourceは呼ばれない。
+  // 「フェイルオープンでもアップロードは201で成功する」という前提は
+  // resourceContentGuard.ts単体では正しいが、routes.tsを経由した結合レベルでは
+  // 成立しない(モデレーション呼び出し自体が例外を投げる状況は現実には起きない設計
+  // ―― 関数内部が常にcatchして{blocked:false}を返すため ―― だが、この関数境界を
+  // 越えてrouter側だけを見た場合の実挙動としてここに固定する)。
+  it("モデレーション呼び出し自体が例外を投げた場合の実挙動: routes.ts側に個別のcatchが無いため500になる(upsertResourceは呼ばれない)", async () => {
+    mockGetResource.mockResolvedValue(null);
+    mockExtractResourcePdfText.mockResolvedValue("資料の本文テキスト");
+    mockCheckResourceTextForInfringement.mockRejectedValue(new Error("Gemini API error: 500"));
+
+    const res = await request(makeApp())
+      .put("/v1/admin/resources")
+      .field("title", "テスト資料")
+      .field("rights_confirmed", "true")
+      .attach("file", Buffer.from("%PDF-1.4 dummy"), { filename: "doc.pdf", contentType: "application/pdf" });
+
+    expect(res.status).toBe(500);
+    expect(mockUpsertResource).not.toHaveBeenCalled();
   });
 });
 

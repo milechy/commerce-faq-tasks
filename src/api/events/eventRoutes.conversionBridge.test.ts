@@ -477,4 +477,39 @@ describe('POST /api/events — resource_offered / resource_clicked を受理す�
       });
     expect(res.status).toBe(202);
   });
+
+  // tenantIdはreq.tenantId(認証済みAPIキー由来)からのみ取得し、bodyには存在しない
+  // フィールドのため、他テナントのchat_session_idを送っても越境できないはず ―― だが
+  // これまで実際に検証するテストが無かった。resolveChatSessionUuidのSQLは
+  // `WHERE tenant_id = $1 AND session_id = $2` で常にリクエスト元のtenantIdを$1に
+  // 束縛するため、テナントB所有のセッションIDを送っても(本物のDBでは)$1がテナントAである
+  // 限り一致せず空配列が返る ―― その「一致しない」挙動をモックし、resolveクエリの
+  // 実パラメータと、通知に漏れるsessionIdが常にテナントA視点に閉じていることを固定する。
+  it('攻撃者(テナントA)が他テナント(テナントB)所有のchat_session_idを指定しても、自テナントのtenantIdでしか照合されず越境できない', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rowCount: 1 }) // behavioral_events(tenant-aとして記録)
+      .mockResolvedValueOnce({ rows: [] }); // resolveChatSessionUuid: tenant_id='tenant-a' AND session_id='conv-owned-by-tenant-b' は本物のDBでは不一致
+    const app = makeApp('tenant-a');
+    const res = await request(app)
+      .post('/api/events')
+      .send({
+        visitor_id: 'v1',
+        session_id: 'r2c-sid-abc',
+        chat_session_id: 'conv-owned-by-tenant-b',
+        events: [{ event_type: 'resource_clicked', event_data: {} }],
+      });
+
+    expect(res.status).toBe(202);
+    // resolveChatSessionUuidに渡されたtenant_idパラメータは常に認証済みのtenant-a
+    // (bodyやevent_dataからテナントを取ることは無い)
+    const resolveCall = mockQuery.mock.calls[1];
+    expect(resolveCall[1]).toEqual(['tenant-a', 'conv-owned-by-tenant-b']);
+    // テナントBのセッションとは一致しないため、通知にテナントBのセッション情報は一切漏れない
+    expect(mockCreateNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        recipientTenantId: 'tenant-a',
+        metadata: { tenantId: 'tenant-a', sessionId: undefined },
+      }),
+    );
+  });
 });
