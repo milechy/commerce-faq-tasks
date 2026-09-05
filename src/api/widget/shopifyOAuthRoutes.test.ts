@@ -191,6 +191,23 @@ describe("GET /v1/public/shopify/install", () => {
     expect(verified).toEqual({ ok: true, shop: SHOP });
   });
 
+  it("SHOPIFY_SCOPES未設定なら scope パラメータを送らない(Dev Dashboardにスコープなしで登録済みのため、既定値の read_products は要求しない)", async () => {
+    delete process.env.SHOPIFY_SCOPES;
+    const app = makeApp(makeDb());
+    const res = await request(app).get("/v1/public/shopify/install").query({ shop: SHOP });
+    const location = new URL(res.headers.location);
+    expect(location.searchParams.has("scope")).toBe(false);
+  });
+
+  it("SHOPIFY_SCOPESを設定すればそれがそのままscopeパラメータになる", async () => {
+    process.env.SHOPIFY_SCOPES = "read_products,read_orders";
+    const app = makeApp(makeDb());
+    const res = await request(app).get("/v1/public/shopify/install").query({ shop: SHOP });
+    const location = new URL(res.headers.location);
+    expect(location.searchParams.get("scope")).toBe("read_products,read_orders");
+    delete process.env.SHOPIFY_SCOPES;
+  });
+
   it("shopの大文字は小文字化されて扱われる", async () => {
     const app = makeApp(makeDb());
     const res = await request(app)
