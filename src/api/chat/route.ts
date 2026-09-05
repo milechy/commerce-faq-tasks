@@ -662,6 +662,8 @@ export function createChatHandler(logger: Logger) {
         ragCategory: result.meta?.ragCategory,
         // Phase73: recommend ステージで productCard が設定されていれば転送
         ...(result.productCard ? { productCard: result.productCard } : {}),
+        // 資料オファー機能: dialogAgent が resourceCard を設定していれば転送
+        ...(result.resourceCard ? { resourceCard: result.resourceCard } : {}),
         data_shared_externally: dataSharedExternally,
         // 是正4-2(GID 1218086286324510): 保存できた場合のみ含める(追加フィールド、
         // 既存レスポンス形は変更しない)。

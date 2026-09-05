@@ -16,8 +16,15 @@ import {
   bridgeConversionEvents,
   resolveChatSessionUuid,
   autoRecordOutcome,
+  bridgeResourceClickToNotification,
 } from './eventRoutes';
 import { AUTO_OUTCOME_RECORDED_BY } from '../admin/chat-history/chatHistoryRepository';
+
+// 資料オファー機能: bridgeResourceClickToNotification が使う createNotification をモック
+const mockCreateNotification = jest.fn();
+jest.mock('../../lib/notifications', () => ({
+  createNotification: (...args: unknown[]) => mockCreateNotification(...args),
+}));
 
 // ---------------------------------------------------------------------------
 // DB モック
@@ -65,6 +72,7 @@ beforeEach(() => {
   mockGetConversionTypes.mockReset().mockResolvedValue(['購入完了', '予約完了', '問い合わせ送信', '離脱', '不明']);
   mockGetSessionOutcome.mockReset().mockResolvedValue(null);
   mockRecordOutcome.mockReset().mockResolvedValue({ outcome: '購入完了', recordedAt: '2026-08-23T00:00:00.000Z', recordedBy: AUTO_OUTCOME_RECORDED_BY });
+  mockCreateNotification.mockReset().mockResolvedValue(undefined);
 });
 
 // ---------------------------------------------------------------------------
@@ -351,6 +359,121 @@ describe('POST /api/events — CV bridge 込みでも202を維持', () => {
         session_id: 'r2c-sid-abc',
         chat_session_id: 'conv-1',
         events: [{ event_type: 'chat_conversion', event_data: { conversion_type: 'purchase', conversion_value: 100000 } }],
+      });
+    expect(res.status).toBe(202);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 資料オファー機能: resource_offered / resource_clicked
+// ---------------------------------------------------------------------------
+
+describe('bridgeResourceClickToNotification', () => {
+  beforeEach(() => mockQuery.mockClear());
+
+  it('resource_clicked が無ければDB/通知どちらも呼ばない', async () => {
+    await bridgeResourceClickToNotification(mockDb, 'tenant-1', { chatSessionId: 'conv-1' }, [
+      { event_type: 'resource_offered', event_data: {} },
+    ]);
+    expect(mockQuery).not.toHaveBeenCalled();
+    expect(mockCreateNotification).not.toHaveBeenCalled();
+  });
+
+  it('resource_clicked があればセッション解決後にclient_admin宛の通知を作成する', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: 'session-uuid-1' }] }); // resolveChatSessionUuid
+    await bridgeResourceClickToNotification(mockDb, 'tenant-1', { chatSessionId: 'conv-1' }, [
+      { event_type: 'resource_clicked', event_data: {} },
+    ]);
+    expect(mockCreateNotification).toHaveBeenCalledTimes(1);
+    expect(mockCreateNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        recipientRole: 'client_admin',
+        recipientTenantId: 'tenant-1',
+        type: 'resource_clicked',
+        metadata: { tenantId: 'tenant-1', sessionId: 'session-uuid-1' },
+      }),
+    );
+  });
+
+  it('セッションが解決できなくても通知は作成する(sessionIdはundefined)', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    await bridgeResourceClickToNotification(mockDb, 'tenant-1', { chatSessionId: 'conv-unknown' }, [
+      { event_type: 'resource_clicked', event_data: {} },
+    ]);
+    expect(mockCreateNotification).toHaveBeenCalledWith(
+      expect.objectContaining({ metadata: { tenantId: 'tenant-1', sessionId: undefined } }),
+    );
+  });
+
+  it('session解決が例外を投げてもスローせずbest-effortで通知を作成する', async () => {
+    mockQuery.mockRejectedValueOnce(new Error('DB connection lost'));
+    await expect(
+      bridgeResourceClickToNotification(mockDb, 'tenant-1', { chatSessionId: 'conv-1' }, [
+        { event_type: 'resource_clicked', event_data: {} },
+      ]),
+    ).resolves.toBeUndefined();
+    expect(mockCreateNotification).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ msg: '[events→resource notification bridge] session resolve failed' }),
+    );
+  });
+
+  it('1バッチに複数のresource_clickedがあっても通知は1回のみ(ノイズ防止)', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: 'session-uuid-1' }] });
+    await bridgeResourceClickToNotification(mockDb, 'tenant-1', { chatSessionId: 'conv-1' }, [
+      { event_type: 'resource_clicked', event_data: {} },
+      { event_type: 'resource_clicked', event_data: {} },
+    ]);
+    expect(mockCreateNotification).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('POST /api/events — resource_offered / resource_clicked を受理する', () => {
+  beforeEach(() => mockQuery.mockClear());
+
+  it('resource_offered はVALID_EVENT_TYPESに含まれ202を返す', async () => {
+    mockQuery.mockResolvedValueOnce({ rowCount: 1 }); // behavioral_events
+    const app = makeApp();
+    const res = await request(app)
+      .post('/api/events')
+      .send({
+        visitor_id: 'v1',
+        session_id: 'r2c-sid-abc',
+        events: [{ event_type: 'resource_offered', event_data: {} }],
+      });
+    expect(res.status).toBe(202);
+  });
+
+  it('resource_clicked はVALID_EVENT_TYPESに含まれ、通知作成込みで202を返す', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rowCount: 1 }) // behavioral_events
+      .mockResolvedValueOnce({ rows: [{ id: 'session-uuid-1' }] }); // resolveChatSessionUuid
+    const app = makeApp();
+    const res = await request(app)
+      .post('/api/events')
+      .send({
+        visitor_id: 'v1',
+        session_id: 'r2c-sid-abc',
+        chat_session_id: 'conv-1',
+        events: [{ event_type: 'resource_clicked', event_data: {} }],
+      });
+    expect(res.status).toBe(202);
+    expect(mockCreateNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it('通知作成(createNotification)が失敗しても202を維持する', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [{ id: 'session-uuid-1' }] });
+    mockCreateNotification.mockRejectedValueOnce(new Error('notify fail'));
+    const app = makeApp();
+    const res = await request(app)
+      .post('/api/events')
+      .send({
+        visitor_id: 'v1',
+        session_id: 'r2c-sid-abc',
+        chat_session_id: 'conv-1',
+        events: [{ event_type: 'resource_clicked', event_data: {} }],
       });
     expect(res.status).toBe(202);
   });

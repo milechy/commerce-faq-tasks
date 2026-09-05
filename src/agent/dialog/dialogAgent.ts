@@ -16,8 +16,17 @@ import {
   updateSalesSessionMeta,
   type SalesSessionKey,
 } from "./salesContextStore";
-import type { DialogMessage, DialogTurnInput, DialogTurnResult, ProductCard } from "./types";
+import type {
+  DetectedSalesIntents,
+  DialogMessage,
+  DialogTurnInput,
+  DialogTurnResult,
+  MultiStepQueryPlan,
+  ProductCard,
+  ResourceCard,
+} from "./types";
 import { pool } from "../../lib/db";
+import { getResource, getResourcePublicUrl } from "../../api/admin/resources/resourcesRepository";
 
 // GID 1216970103691946 (PR-11): SalesFlow の段階(clarify→propose→recommend→close)を
 // 次ターンへ引き継ぐかどうかのテナント単位フラグ。CLAUDE.md 禁止35(会話の振る舞いを
@@ -36,6 +45,36 @@ async function isSalesStageContinuityEnabled(tenantId: string): Promise<boolean>
   } catch {
     return false; // fail-closed: 従来挙動(clarify固定)を維持する
   }
+}
+
+/**
+ * 資料オファー機能: 低関心/閲覧中の会話かどうかを構造化フィールドのみで判定する。
+ * LLMの自由文を文字列一致で見ない(CLAUDE.md 絶対にやってはいけないこと3)。
+ *
+ * 主信号: セールスintentが1つも検出されていないこと(detectSalesIntents。
+ * config/salesIntentRules.yaml のパターンマッチ、これも構造化フィールド)。
+ *
+ * plan.confidence を主信号にしない理由: 本番既定経路(useLlmPlanner=false、
+ * rule-based multiStepPlanner.ts)は confidence を 'medium' に固定しており、
+ * 'low'/'high' を一切返さない(multiStepPlanner.ts 参照。確認済み)。
+ * 'low'/'high' を返せるのは LLM JSON プランナー(llmMultiStepPlannerRuntime.ts)
+ * のみだが、widget.js が useLlmPlanner を送らないため本番既定経路では実行され
+ * ない(Phase73のproductCardと同型の「配線されているが本番では絶対に発火しない」罠)。
+ * そのため confidence === "low" は現状常にfalseの副次的(OR)条件としてのみ残す
+ * ── multiStepPlanner.ts の confidence 算出が将来実質化されたときに壊れない
+ * ようにするための forward-compatible な保険であり、今これを「直す」ために
+ * LLM JSON経路(useLlmPlanner)を有効化しないこと。それは別の意思決定を要する
+ * (groqClient.ts / 本番の追加LLM呼び出しコストに影響するため)。
+ */
+function isLowIntentBrowsing(
+  plan: MultiStepQueryPlan,
+  intents: DetectedSalesIntents
+): boolean {
+  const hasSalesIntent =
+    Boolean(intents.proposeIntent) ||
+    Boolean(intents.recommendIntent) ||
+    Boolean(intents.closeIntent);
+  return !hasSalesIntent || plan.confidence === "low";
 }
 
 // ユーザー入力 + 会話履歴からざっくりトークン数を見積もる。
@@ -299,6 +338,32 @@ export async function runDialogTurn(
       }
     } catch {
       // non-fatal: DB 未適用環境（migration 未実行）でも動作を継続する
+    }
+  }
+
+  // 資料オファー機能: 低関心/閲覧中の会話に、公開済みの資料を1会話1回だけ案内する。
+  if (isLowIntentBrowsing(multiStepPlan, detectedIntents) && pool) {
+    // sales_stage_continuity フラグ(stageContinuityEnabled)とは無関係の用途で
+    // 同じセッションストアを再利用する(汎用のtenant+session単位メタとして)。
+    const resourceSessionMeta = getSalesSessionMeta(salesSessionKey);
+    if (!resourceSessionMeta?.resourceOfferShown) {
+      try {
+        const resource = await getResource(pool, effectiveTenantId);
+        if (resource && resource.is_published) {
+          const url =
+            resource.external_url ??
+            (resource.storage_path ? getResourcePublicUrl(resource.storage_path) : null);
+          if (url) {
+            const card: ResourceCard = { title: resource.title, url };
+            result.resourceCard = card;
+            // 実際に提示できた場合のみ「使用済み」にする(資料が無い/未公開の場合は
+            // 次ターン以降も低関心が続けば再度チェックできるようにする)。
+            updateSalesSessionMeta(salesSessionKey, { resourceOfferShown: true });
+          }
+        }
+      } catch {
+        // non-fatal: DB 未適用環境（migration 未実行）でも動作を継続する
+      }
     }
   }
 

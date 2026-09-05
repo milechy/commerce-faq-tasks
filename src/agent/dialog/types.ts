@@ -149,6 +149,12 @@ export interface ProductCard {
   cta_url: string;
 }
 
+/** 資料オファー機能: 低関心/閲覧中と判定された会話に一度だけ提示する資料カード */
+export interface ResourceCard {
+  title: string;
+  url: string;
+}
+
 export interface DialogTurnResult {
   sessionId: string;
   answer: string | null;
@@ -162,6 +168,8 @@ export interface DialogTurnResult {
   meta?: DialogTurnMeta;
   /** Phase73: SalesFlow recommend ステージ時に設定される商品カード情報 */
   productCard?: ProductCard;
+  /** 資料オファー機能: 低関心/閲覧中と判定された会話に一度だけ提示する資料カード */
+  resourceCard?: ResourceCard;
   /** GID 1216978855735482 (PR-13): system_prompt_variants から選ばれたvariant */
   promptVariantId?: string | null;
   promptVariantName?: string | null;
