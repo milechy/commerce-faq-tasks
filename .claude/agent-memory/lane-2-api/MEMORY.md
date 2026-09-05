@@ -6,7 +6,7 @@
 
 ## API設計パターン
 
-(まだ記録なし。API設計の判断や繰り返しパターンを発見したらここに追記する)
+- [未認証OAuthのstate(CSRF)を新規テーブル無しで実装するパターン (2026-09-05)](pattern_stateless_oauth_csrf_state.md) — 自己完結・署名付きトークン(payload+purposeTag付きHMAC、timingSafeEqual比較)。「新規ファイルはこの2つのみ」制約下でのCSRF対策に再利用可
 
 ## Gate失敗パターン
 
