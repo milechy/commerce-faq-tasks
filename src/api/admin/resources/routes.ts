@@ -65,7 +65,10 @@ function resolveTenantId(req: Request): string | null {
 // ---------------------------------------------------------------------------
 
 function isPrivateOrLocalHostname(hostname: string): boolean {
-  const host = hostname.toLowerCase();
+  // URL#hostname returns IPv6 hosts in bracketed form (e.g. "[::1]"), which
+  // must be stripped before comparing against the bare "::1" literal below —
+  // otherwise an IPv6-loopback external_url silently bypasses this guard.
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
   if (host === "localhost" || host === "0.0.0.0" || host === "::1") return true;
   if (host.startsWith("127.")) return true;
   if (host.startsWith("169.254.")) return true;
