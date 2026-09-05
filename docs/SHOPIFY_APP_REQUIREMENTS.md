@@ -238,10 +238,14 @@ Shopify App Pricing は 2026 年時点で **1アプリ最大8公開プラン・1
 - **★運用上の注意**: App Events API は同期的な課金エラーを返さない（常に202を返し、検証失敗は Partner Dashboard の Logs でのみ確認できる）。**計上の失敗が沈黙する構造**（`CLAUDE.md` 禁止41〜43 と同型のリスク）のため、既存の原価集計（`tenantEconomics.ts`）側で「Shopify 経由テナントの usage_logs 件数と Shopify 側報告件数の突合」を監視項目に加える必要がある（実装時に設計）
 - 請求書は R2C 単独では発行されず、**Shopify 本体の請求（Settings > Billing）に他アプリと合算表示される**。「公開価格＝実際の請求額」という透明性の訴求自体は成立するが、独立した請求書体験にはならない点をオンボーディングで明示する
 
-### 5.3 テナント流入元の識別
+### 5.3 テナント流入元の識別（2026-09-05 実装時に訂正）
 
-WordPress 版 D11 と同型で、`tenants` に流入元列（`manual` / `wordpress_plugin` / `shopify_app`）を持たせ、
-Super Admin 側で識別・監視できるようにする。
+**訂正**: 当初「`tenants` に新規列 `inflow_source` を追加する」としていたが、実装着手時（Asanaタスク01）の
+実機確認で、テナント流入元を識別する列は既に `tenants.provisioning_source`（`src/migrations/phase79_tenants_provisioning_source.sql`、
+CHECK制約 `manual`/`wordpress_plugin`、`wpProvisionRoutes.ts`のINSERT・`actionExecutor.ts`の分岐・`routes.ts`のSELECTで参照済み）
+として実運用されていることが判明した。CLAUDE.md禁止6（同じ関心事を2列に複製したまま片方だけ直さない）に従い、
+**新規列は作らず、既存 `provisioning_source` のCHECK制約に `'shopify_app'` を追加する**形で実装した
+（PR 1228）。以降このドキュメント内の「流入元列」「inflow_source」の記述はすべて `provisioning_source` を指す。
 
 ---
 
@@ -398,7 +402,7 @@ WordPress 版と異なり、本書は初版のため未決定が多く残る。�
 | テナント・運用者への通知 | 既存 `src/lib/notifications.ts` の `createNotification` | 新しい通知テーブル |
 | 監査ログ（`customers/redact` の削除記録等） | 既存 `src/api/admin/agent/agentAuditLog.ts` 相当の仕組み | 新しい監査テーブル |
 | 削除保留期限（受信日+30日）の計算 | `src/lib/date/weekRange.ts` に倣い **process TZ に依存しない**実装（`timestamptz` との比較は `AT TIME ZONE` を片側だけ書かない、禁止16） | サーバ TZ 依存の日付演算 |
-| テナント流入元の識別列 | `tenants` テーブルへの列追加（`manual` / `wordpress_plugin` / `shopify_app`）。**WordPress 版 D11 で計画されたが実装コード上はまだ存在しないことを確認済み**（2026-09-05 grep で未確認）。Shopify 版が先行実装するなら両方の値を見越したスキーマにする | 別テーブルでの流入元管理 |
+| テナント流入元の識別列 | **既存 `tenants.provisioning_source`（`manual`/`wordpress_plugin`）のCHECK制約に`'shopify_app'`を追加する**（新規列は作らない。§5.3の訂正参照、2026-09-05実装時に確認・訂正済み） | 新規列 `inflow_source` の追加。別テーブルでの流入元管理 |
 | DB migration | 機能ディレクトリ内 `migration_<機能>.sql`（`src/lib/billing/` 配下の既存ファイル群と同じ形。`ADD COLUMN IF NOT EXISTS` + `COMMENT ON COLUMN`） | 場当たり的な置き場所。**適用は人間承認**（禁止8） |
 | Shopify CLI アプリプロジェクト本体（埋め込み管理画面 + Theme App Extension） | **新設が前提**（`shopify-app/`、D11）。これは「既存を再実装している」のではなく、Shopify プラットフォームが要求する新種のデプロイ物であり、新設して良いものと明確に区別する | `src/` 側にフロントエンドを混在させる |
 
