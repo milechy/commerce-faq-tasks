@@ -66,9 +66,10 @@ export interface TenantDetail {
     offsetY?: number | string;
     [key: string]: unknown;
   } | null;
-  // WP-15(D11): テナントの流入元。manual = Super Admin作成、
-  // wordpress_plugin = WordPress プラグインのセルフサインアップ経由。
-  provisioning_source?: "manual" | "wordpress_plugin";
+  // WP-15(D11)/13(Shopify D6): テナントの流入元。manual = Super Admin作成、
+  // wordpress_plugin = WordPress プラグインのセルフサインアップ経由、
+  // shopify_app = Shopify アプリインストール経由。
+  provisioning_source?: "manual" | "wordpress_plugin" | "shopify_app";
 }
 
 export interface ApiKey {

@@ -9,6 +9,9 @@ import { supabase } from "../../../lib/supabaseClient";
 import { QuotaBar } from "../billing/QuotaSection";
 import { useLang } from "../../../i18n/LangContext";
 import type { TranslationKey } from "../../../i18n/ja";
+import ShopifyDeletionQueueCard, {
+  type ShopifyDeletionQueueData,
+} from "../../../components/admin/ShopifyDeletionQueueCard";
 
 interface RateMetric {
   numerator: number;
@@ -360,6 +363,10 @@ export default function MonitoringPage() {
   // (エラーバナーは出さない — health同様、片方の失敗がもう片方の表示を止めない設計)。
   const [wpStats, setWpStats] = useState<WpProvisioningStats | null>(null);
 
+  // 13(Shopify D15/FR-16/§7 D-5): shop/redact 削除保留一覧・期限。
+  // client_adminには403で返るため、その場合はカード自体を出さない(wpStatsと同型)。
+  const [shopifyDeletionQueue, setShopifyDeletionQueue] = useState<ShopifyDeletionQueueData | null>(null);
+
   const fetchKpis = useCallback(async () => {
     try {
       const res = await authFetch(`${API_BASE}/v1/admin/monitoring/kpis`);
@@ -425,6 +432,26 @@ export default function MonitoringPage() {
     }
   }, []);
 
+  const fetchShopifyDeletionQueue = useCallback(async () => {
+    try {
+      const res = await authFetch(`${API_BASE}/v1/admin/shopify/deletion-queue`);
+      // client_adminは403 — カードを出さないだけで、エラー扱いにはしない(wpStatsと同型)。
+      if (!res.ok) {
+        setShopifyDeletionQueue(null);
+        return;
+      }
+      const json = (await res.json()) as Partial<ShopifyDeletionQueueData>;
+      if (Array.isArray(json.pending) && typeof json.total === "number") {
+        setShopifyDeletionQueue(json as ShopifyDeletionQueueData);
+      } else {
+        setShopifyDeletionQueue(null);
+      }
+    } catch (err) {
+      if (err instanceof Error && err.message === "__AUTH_REQUIRED__") return; // fetchKpisが遷移を担当
+      setShopifyDeletionQueue(null);
+    }
+  }, []);
+
   useEffect(() => {
     void (async () => {
       const { data } = await supabase.auth.getSession();
@@ -435,13 +462,19 @@ export default function MonitoringPage() {
       void fetchKpis();
       void fetchHealth();
       void fetchWpStats();
-      timerRef.current = setInterval(() => { void fetchKpis(); void fetchHealth(); void fetchWpStats(); }, POLL_INTERVAL_MS);
+      void fetchShopifyDeletionQueue();
+      timerRef.current = setInterval(() => {
+        void fetchKpis();
+        void fetchHealth();
+        void fetchWpStats();
+        void fetchShopifyDeletionQueue();
+      }, POLL_INTERVAL_MS);
     })();
 
     return () => {
       if (timerRef.current !== null) clearInterval(timerRef.current);
     };
-  }, [fetchKpis, fetchHealth, fetchWpStats, navigate]);
+  }, [fetchKpis, fetchHealth, fetchWpStats, fetchShopifyDeletionQueue, navigate]);
 
   const buildTenantRows = (): TenantSlaRow[] => {
     if (!data?.tenants) return [];
@@ -1036,6 +1069,11 @@ export default function MonitoringPage() {
                     )}
                   </MeasurementHealthCard>
                 )}
+
+                {/* 13(Shopify D15/FR-16/§7 D-5): shop/redact 削除保留の件数・期限監視。
+                    禁止50に従い、0件でも「異常なし」ではなく中立に「保留0件」と表示する
+                    (ShopifyDeletionQueueCard内部で処理)。 */}
+                {shopifyDeletionQueue && <ShopifyDeletionQueueCard data={shopifyDeletionQueue} />}
               </div>
             )}
           </section>

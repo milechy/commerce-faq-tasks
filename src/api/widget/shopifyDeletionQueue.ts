@@ -62,14 +62,18 @@ export function getDaysUntilDeadline(deletionRequestedAt: Date, now: Date): numb
   return Math.floor((deadline.getTime() - now.getTime()) / DAY_MS);
 }
 
-type DeadlineSeverity = "warning" | "alert" | "critical";
+export type DeadlineSeverity = "warning" | "alert" | "critical";
 
 /**
  * X-6(境界値): 29日目(残り1日)は警告、30日目(残り0日)でアラート、
  * 31日目以降(超過、残り-1日以下)は重大アラートに切り替える。
  * それより前(残り2日以上)は対象外(null)。
+ *
+ * export済み: Super Admin監視画面のGET /v1/admin/shopify/deletion-queue
+ * (src/api/admin/tenants/routes.ts)が通知を送らずに同じ閾値で severity 表示する
+ * ため再利用する(CLAUDE.md 禁止6: 同じ閾値ロジックを2箇所に複製しない)。
  */
-function getDeadlineSeverity(daysUntilDeadline: number): DeadlineSeverity | null {
+export function getDeadlineSeverity(daysUntilDeadline: number): DeadlineSeverity | null {
   if (daysUntilDeadline < 0) return "critical";
   if (daysUntilDeadline === 0) return "alert";
   if (daysUntilDeadline === 1) return "warning";
