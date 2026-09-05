@@ -1,0 +1,46 @@
+# R2C – AI Sales Concierge
+# Shopify CLI アプリ設定ファイルの雛形。
+#
+# 位置づけ: このファイルは Asana GID 1218199958300312（shopify-app/ scaffold作成）で新設した
+# 静的な雛形であり、実際の Partner Dashboard 登録・`shopify app deploy` は人間が後で行う。
+# 詳細な決定事項・受け入れ条件は docs/SHOPIFY_APP_REQUIREMENTS.md（D9, D11, D14 ほか）を参照。
+#
+# client_id / application_url はプレースホルダ。
+# Partner Dashboard でアプリを作成した後、実際の値に差し替えること（`shopify app config link` でも可）。
+
+name = "R2C – AI Sales Concierge"
+client_id = "REPLACE_WITH_PARTNER_DASHBOARD_CLIENT_ID"
+application_url = "https://api.r2c.biz/v1/public/shopify/install"
+embedded = true
+
+[access_scopes]
+# 最小限の想定スコープ。過剰なスコープを要求しない（Shopify 審査での要求）。
+# v1 は「表示面選択のための商品ページ/カート情報の参照」までを想定し、書き込み系スコープは持たない。
+# 商品データの自動同期（v1.1 以降、docs/SHOPIFY_APP_REQUIREMENTS.md §8）に着手する際に
+# 必要スコープを再検討すること。
+scopes = "read_products"
+
+[webhooks]
+api_version = "2026-04"
+
+  # GDPR 必須 Webhook（Shopify App Store 掲載要件、docs/SHOPIFY_APP_REQUIREMENTS.md §2 #8, §4.4）。
+  # 実装は別タスクで src/api/widget/shopifyWebhookRoutes.ts（仮称）に置く想定。
+  # 以下の uri は仮の値であり、実装タスクで実際のエンドポイントURLに合わせて更新すること。
+
+  [[webhooks.subscriptions]]
+  compliance_topics = ["customers/data_request"]
+  uri = "https://api.r2c.biz/v1/public/shopify/webhooks/customers-data-request"
+
+  [[webhooks.subscriptions]]
+  compliance_topics = ["customers/redact"]
+  uri = "https://api.r2c.biz/v1/public/shopify/webhooks/customers-redact"
+
+  [[webhooks.subscriptions]]
+  compliance_topics = ["shop/redact"]
+  uri = "https://api.r2c.biz/v1/public/shopify/webhooks/shop-redact"
+
+[auth]
+redirect_urls = ["https://api.r2c.biz/v1/public/shopify/callback"]
+
+[build]
+include_config_on_deploy = true
