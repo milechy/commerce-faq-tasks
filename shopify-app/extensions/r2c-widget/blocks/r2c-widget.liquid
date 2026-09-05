@@ -1,0 +1,91 @@
+{% comment %}
+  R2C – AI Sales Concierge / App Embed Block
+
+  位置づけ:
+  - マーチャントが Theme Editor の「アプリの埋め込み」から ON にするだけで、
+    テーマコードを一切編集せずにチャットウィジェットが稼働する（FR-05）。
+  - ここで定義するのは ON/OFF と表示位置（オフセット、0〜320px）のみ。
+    表示面の詳細選択（商品ページ/カート/配送ポリシー等）はここに持たせない。
+    その真実は埋め込み管理画面（App Bridge）側の R2C DB 設定にある
+    （docs/SHOPIFY_APP_REQUIREMENTS.md D18・FR-06）。
+  - 注入するのは既存の動的widget配信ルート（src/api/widget/routes.ts の
+    `GET /widget/:tenantSlug.js`）が生成する script 1本のみ。
+    Shopify の ScriptTag API は使わない（D8。<script> タグをテーマに埋め込む
+    のは Theme App Extension の標準的な仕組みであり、廃止対象の ScriptTag API
+    ＝ REST 経由でスクリプトを注入する別の仕組みとは異なる）。
+  - プラン判定を経由しない静的版（public/widget.js + data-tenant 属性、
+    fail-open経路）は使わない。必ず動的版の URL パターンを踏襲する
+    （docs/SHOPIFY_APP_REQUIREMENTS.md §3.1）。
+
+  tenantSlug の前提:
+  - `shop.permanent_domain`（例: example.myshopify.com）を tenantSlug として使う。
+    Shopify 経由テナントは shop ドメインを唯一のテナント識別子として自動作成する
+    方針（FR-02）に合わせている。OAuth コールバック実装（別タスク）が異なる
+    tenant id 採番方式を採用した場合は、この行の参照元を合わせて更新すること。
+
+  ホスト名について:
+  - `https://api.r2c.biz` は本体バックエンドの既定ホスト
+    （src/api/widget/routes.ts の `API_BASE_URL` 既定値）と同じ値を直書きしている。
+    ステージング等の別ホストに向ける必要が生じた場合は、この定数を差し替える。
+{% endcomment %}
+{%- if block.settings.enabled -%}
+  <script
+    src="https://api.r2c.biz/widget/{{ shop.permanent_domain }}.js"
+    data-position="{{ block.settings.position }}"
+    data-offset-x="{{ block.settings.offset_x }}"
+    data-offset-y="{{ block.settings.offset_y }}"
+    async
+  ></script>
+{%- endif -%}
+
+{% schema %}
+{
+  "name": "t:name",
+  "target": "body",
+  "settings": [
+    {
+      "type": "checkbox",
+      "id": "enabled",
+      "label": "t:settings.enabled.label",
+      "info": "t:settings.enabled.info",
+      "default": true
+    },
+    {
+      "type": "select",
+      "id": "position",
+      "label": "t:settings.position.label",
+      "options": [
+        {
+          "value": "bottom-right",
+          "label": "t:settings.position.options__bottom_right.label"
+        },
+        {
+          "value": "bottom-left",
+          "label": "t:settings.position.options__bottom_left.label"
+        }
+      ],
+      "default": "bottom-right"
+    },
+    {
+      "type": "range",
+      "id": "offset_x",
+      "label": "t:settings.offset_x.label",
+      "min": 0,
+      "max": 320,
+      "step": 8,
+      "unit": "px",
+      "default": 24
+    },
+    {
+      "type": "range",
+      "id": "offset_y",
+      "label": "t:settings.offset_y.label",
+      "min": 0,
+      "max": 320,
+      "step": 8,
+      "unit": "px",
+      "default": 24
+    }
+  ]
+}
+{% endschema %}

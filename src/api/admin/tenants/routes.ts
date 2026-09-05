@@ -39,6 +39,8 @@ import {
   countWpProvisioningsCreatedSince,
 } from "../../widget/wpProvisionRepository";
 import { getDayStartJst } from "../../../lib/date/jstOffset";
+import { listPendingDeletions } from "../../widget/shopifyRepository";
+import { getDeletionDeadline, getDaysUntilDeadline, getDeadlineSeverity } from "../../widget/shopifyDeletionQueue";
 
 // free_ad(starterより下の最下段。広告原資の無料プラン)と
 // standard(starter と growth の間。既定アバターの利用を開放する段)を含む5値。
@@ -744,6 +746,32 @@ export function registerTenantAdminRoutes(app: Express, db: Pool): void {
     } catch (err) {
       logger.warn("[GET /v1/admin/tenants]", err);
       return res.status(500).json({ error: "一覧の取得に失敗しました" });
+    }
+  });
+
+  // GET /v1/admin/shopify/deletion-queue — Shopify shop/redact の削除保留監視(D15/FR-16/§7 D-5)。
+  // 通知は送らない(それは checkAndNotifyApproachingDeadlines の役割)。ここは一覧表示専用。
+  // 0件のときも pending: [] / total: 0 をそのまま返す(禁止50: 「異常なし」を報告しない。
+  // admin-ui 側は total===0 を明示的に「保留0件」と表示し、空欄・非表示にしない)。
+  app.get("/v1/admin/shopify/deletion-queue", tenantAuth, requireSuperAdmin, async (_req: Request, res: Response) => {
+    try {
+      const pending = await listPendingDeletions(db);
+      const now = new Date();
+      const items = pending.map((row) => {
+        const daysUntilDeadline = getDaysUntilDeadline(row.deletion_requested_at, now);
+        return {
+          tenantId: row.id,
+          shopDomain: row.shopify_shop_domain,
+          deletionRequestedAt: row.deletion_requested_at,
+          deadline: getDeletionDeadline(row.deletion_requested_at),
+          daysUntilDeadline,
+          severity: getDeadlineSeverity(daysUntilDeadline),
+        };
+      });
+      return res.json({ pending: items, total: items.length });
+    } catch (err) {
+      logger.warn("[GET /v1/admin/shopify/deletion-queue]", err);
+      return res.status(500).json({ error: "削除保留一覧の取得に失敗しました" });
     }
   });
 

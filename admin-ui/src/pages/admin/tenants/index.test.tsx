@@ -110,6 +110,14 @@ describe("TenantsPage — API応答形状とUIフィールドの整合性", () =
     expect(screen.queryByText("WordPress")).toBeNull();
   });
 
+  it("provisioning_source='shopify_app' のテナントに「Shopify」バッジを表示する(13/D6)", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(200, { tenants: [makeTenant({ provisioning_source: "shopify_app" })] })
+    );
+    renderPage();
+    await waitFor(() => expect(screen.getByText("Shopify")).toBeTruthy());
+  });
+
   it("api_key_count を実際の件数で表示する（0固定のバグの回帰防止）", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       jsonResponse(200, { tenants: [makeTenant({ api_key_count: 3 })] })

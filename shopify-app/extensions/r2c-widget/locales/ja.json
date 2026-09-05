@@ -1,0 +1,24 @@
+{
+  "name": "R2C – AIセールスコンシェルジュ",
+  "settings": {
+    "enabled": {
+      "label": "チャットウィジェットを表示する",
+      "info": "ストアフロントに R2C のチャットウィジェットを表示するかどうかを切り替えます。どのページに表示するかは R2C アプリの管理画面側で設定します（ここでは設定しません）。"
+    },
+    "position": {
+      "label": "表示位置",
+      "options__bottom_right": {
+        "label": "右下"
+      },
+      "options__bottom_left": {
+        "label": "左下"
+      }
+    },
+    "offset_x": {
+      "label": "横方向の余白"
+    },
+    "offset_y": {
+      "label": "縦方向の余白"
+    }
+  }
+}

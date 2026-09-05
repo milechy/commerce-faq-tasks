@@ -1,0 +1,12 @@
+{
+  "name": "shopify-app",
+  "private": true,
+  "version": "0.0.0",
+  "description": "R2C – AI Sales Concierge: Shopify CLI アプリプロジェクト（埋め込み管理画面 + Theme App Extension）。独立ビルド・独立デプロイ。詳細は README.md と docs/SHOPIFY_APP_REQUIREMENTS.md を参照。",
+  "scripts": {
+    "dev": "shopify app dev",
+    "build": "shopify app build",
+    "deploy": "shopify app deploy",
+    "config:link": "shopify app config link"
+  }
+}

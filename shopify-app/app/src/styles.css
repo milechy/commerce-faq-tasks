@@ -1,0 +1,144 @@
+/* shopify-app/app/src/styles.css
+ *
+ * 最小限のスタイル。Shopify Admin の埋め込みフレーム内に表示されるため、
+ * 全体のテーマ(Polaris)には乗らないが、タッチターゲット44px以上・
+ * フォント16px以上(CLAUDE.md Core Principles: Mobile First)は守る。
+ */
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 16px;
+  color: #1a1a1a;
+  background: #f6f6f7;
+}
+
+.r2c-app {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+.r2c-card {
+  background: #ffffff;
+  border: 1px solid #e3e3e3;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.r2c-card__title {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+.r2c-card__desc {
+  margin: 0 0 12px;
+  color: #4a4a4a;
+  line-height: 1.6;
+}
+
+.r2c-status-list {
+  margin: 0;
+}
+
+.r2c-status-list__row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.r2c-status-list__row:last-child {
+  border-bottom: none;
+}
+
+.r2c-status-list__row dt {
+  color: #6b6b6b;
+}
+
+.r2c-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 14px;
+}
+
+.r2c-badge--active {
+  background: #e3f5e9;
+  color: #12693a;
+}
+
+.r2c-badge--inactive {
+  background: #fdeceb;
+  color: #a4231b;
+}
+
+.r2c-surface-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.r2c-surface-list__item + .r2c-surface-list__item {
+  margin-top: 4px;
+}
+
+.r2c-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  cursor: pointer;
+}
+
+.r2c-checkbox input[type="checkbox"] {
+  width: 22px;
+  height: 22px;
+}
+
+.r2c-inline-status {
+  color: #6b6b6b;
+  font-size: 14px;
+}
+
+.r2c-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 16px;
+  border-radius: 6px;
+  text-decoration: none;
+  font-size: 16px;
+}
+
+.r2c-button--primary {
+  background: #1a1a1a;
+  color: #ffffff;
+}
+
+.r2c-banner {
+  background: #fff8e5;
+  border: 1px solid #f0d38a;
+  border-radius: 8px;
+  padding: 12px 16px;
+  color: #6b5100;
+}
+
+.r2c-error {
+  color: #a4231b;
+  margin: 8px 0 0;
+}
+
+.r2c-loading {
+  color: #6b6b6b;
+}

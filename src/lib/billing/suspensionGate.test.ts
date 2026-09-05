@@ -83,6 +83,60 @@ describe('resolveBillingAccess', () => {
   });
 });
 
+describe('resolveBillingAccess: Shopify Billing 追加ゲート(D19)', () => {
+  function shopifyRow(shopifySubscriptionStatus: string | null | undefined): BillingStateRow {
+    return row({
+      plan: 'starter',
+      // Shopify経由テナントは Stripe subscription を持たないため常に null。
+      subscriptionStatus: null,
+      subActive: null,
+      delinquentSince: null,
+      provisioningSource: 'shopify_app',
+      shopifySubscriptionStatus,
+    });
+  }
+
+  it('shopify_subscription_status=null(未承認/webhook未実装で放置)は suspended', () => {
+    expect(resolveBillingAccess(shopifyRow(null), NOW, 7)).toBe('suspended');
+  });
+
+  it("shopify_subscription_status='pending'(課金画面で未承認)は suspended", () => {
+    expect(resolveBillingAccess(shopifyRow('pending'), NOW, 7)).toBe('suspended');
+  });
+
+  it("shopify_subscription_status='active'(承認済み)は active", () => {
+    expect(resolveBillingAccess(shopifyRow('active'), NOW, 7)).toBe('active');
+  });
+
+  it("shopify_subscription_status='cancelled'(承認後に解約)は suspended", () => {
+    expect(resolveBillingAccess(shopifyRow('cancelled'), NOW, 7)).toBe('suspended');
+  });
+
+  it("shopify_subscription_status='frozen'(ストア凍結)は suspended", () => {
+    expect(resolveBillingAccess(shopifyRow('frozen'), NOW, 7)).toBe('suspended');
+  });
+
+  it('provisioning_source が shopify_app 以外(manual/wordpress_plugin/未設定)は従来ロジックのまま(D19ゲート対象外)', () => {
+    expect(
+      resolveBillingAccess(
+        row({ provisioningSource: 'manual', shopifySubscriptionStatus: null, subscriptionStatus: 'active' }),
+        NOW,
+        7,
+      ),
+    ).toBe('active');
+    expect(
+      resolveBillingAccess(
+        row({ provisioningSource: 'wordpress_plugin', shopifySubscriptionStatus: null, subscriptionStatus: 'active' }),
+        NOW,
+        7,
+      ),
+    ).toBe('active');
+    expect(
+      resolveBillingAccess(row({ provisioningSource: undefined, subscriptionStatus: 'unpaid' }), NOW, 7),
+    ).toBe('suspended');
+  });
+});
+
 describe('述語(fail-safe の向き)', () => {
   it('blocksPaidFeature: restricted / suspended で true、null(判定不能)も true(原価保護=fail-closed)', () => {
     expect(blocksPaidFeature('active')).toBe(false);
@@ -154,5 +208,26 @@ describe('queryBillingAccess (DBラッパ)', () => {
   it('その他のDB例外は null(呼び出し側の述語に fail 方向を委ねる)', async () => {
     const pool = { query: jest.fn().mockRejectedValue(new Error('connection lost')) };
     expect(await queryBillingAccess(pool as any, 'tenant-1', NOW)).toBeNull();
+  });
+
+  it('shopify_app テナント: shopify_subscription_status=null(未承認)は suspended', async () => {
+    const pool = poolWith(() => ({
+      rows: [{ plan: 'starter', subscription_status: null, delinquent_since: null, sub_active: null, provisioning_source: 'shopify_app', shopify_subscription_status: null }],
+    }));
+    expect(await queryBillingAccess(pool as any, 'tenant-shopify', NOW)).toBe('suspended');
+  });
+
+  it('shopify_app テナント: shopify_subscription_status=active(承認済み)は active', async () => {
+    const pool = poolWith(() => ({
+      rows: [{ plan: 'starter', subscription_status: null, delinquent_since: null, sub_active: null, provisioning_source: 'shopify_app', shopify_subscription_status: 'active' }],
+    }));
+    expect(await queryBillingAccess(pool as any, 'tenant-shopify', NOW)).toBe('active');
+  });
+
+  it('shopify_app テナント: shopify_subscription_status=cancelled(承認後に失効)は suspended', async () => {
+    const pool = poolWith(() => ({
+      rows: [{ plan: 'starter', subscription_status: null, delinquent_since: null, sub_active: null, provisioning_source: 'shopify_app', shopify_subscription_status: 'cancelled' }],
+    }));
+    expect(await queryBillingAccess(pool as any, 'tenant-shopify', NOW)).toBe('suspended');
   });
 });
