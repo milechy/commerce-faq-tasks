@@ -59,9 +59,12 @@ function getShopifyApiSecret(): string | undefined {
   return process.env.SHOPIFY_API_SECRET || undefined;
 }
 function getShopifyScopes(): string {
-  // v1 はテキストチャット(FAQ/RAG)のみで商品データ自動同期は行わない(D4)。
-  // Billing API 自体は追加スコープを要求しないため、既定値は最小限に留める。
-  return process.env.SHOPIFY_SCOPES || "read_products";
+  // v1 はOAuthでのテナント識別・Webhook受信のみでAdmin APIを一切呼ばない(D4)。
+  // 2026-09-05 に Dev Dashboard(App ID 419596828673)でもスコープなしで登録済みのため、
+  // 既定値は空にする(read_products をデフォルトにすると実際の登録内容と食い違い、
+  // インストール時にスコープエラーになりうる)。商品データ自動同期(v1.1以降)に
+  // 着手する際は、SHOPIFY_SCOPES 環境変数と Dev Dashboard の両方を同時に更新すること。
+  return process.env.SHOPIFY_SCOPES || "";
 }
 function getApiBaseUrl(): string {
   return process.env.API_BASE_URL || "https://api.r2c.biz";
@@ -350,7 +353,12 @@ export function registerShopifyOAuthRoutes(app: Express, db: Pool | null): void 
 
       const authorizeUrl = new URL(`https://${shop}/admin/oauth/authorize`);
       authorizeUrl.searchParams.set("client_id", apiKey);
-      authorizeUrl.searchParams.set("scope", getShopifyScopes());
+      const scopes = getShopifyScopes();
+      if (scopes) {
+        // 空文字の scope パラメータを送らない(Shopify 側の挙動が未確認のため、
+        // 「スコープなし」は「scope パラメータ自体を省略する」で表現する)。
+        authorizeUrl.searchParams.set("scope", scopes);
+      }
       authorizeUrl.searchParams.set("redirect_uri", getShopifyCallbackUrl());
       authorizeUrl.searchParams.set("state", state);
 
