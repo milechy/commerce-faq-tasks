@@ -138,6 +138,34 @@ describe("setPublished", () => {
     expect(sqlOf(query)).toContain("UPDATE tenant_resources SET is_published = $2 WHERE tenant_id = $1");
     expect(query.mock.calls[0][1]).toEqual(["tenant-a", true]);
   });
+
+  // TOCTOU対策(routes.test.tsの「setPublishedがnullを返した場合」テストと対): 公開(true)への
+  // 更新は、この1文のSQL自体がmoderation_status != 'rejected'をWHERE条件に含むことで
+  // アトミックに保証される。routes.ts側の事前getResourceチェックだけに頼ると、チェックと
+  // この更新の間に別リクエストがrejectedへ変えた場合に却下済み資料が公開されてしまう。
+  it("公開(true)へのUPDATEのSQLはmoderation_status != 'rejected'をWHERE条件に含む(TOCTOU対策)", async () => {
+    const { db, query } = makeDb({ rows: [{ id: "r1", tenant_id: "tenant-a", is_published: true }] });
+    await setPublished(db, "tenant-a", true);
+
+    const sql = sqlOf(query);
+    expect(sql).toContain("moderation_status != 'rejected'");
+  });
+
+  it("公開(true)への更新時、moderation_statusが既にrejectedならDB側で0行にマッチしnullを返す", async () => {
+    // 実際のPostgresでは WHERE 条件不一致で0行返る。ここではその応答を模擬する。
+    const { db } = makeDb({ rows: [], rowCount: 0 });
+    const result = await setPublished(db, "tenant-a", true);
+
+    expect(result).toBeNull();
+  });
+
+  it("非公開化(false)はmoderation_statusに関わらず常に許可する(WHERE条件が$2=falseで無条件通過)", async () => {
+    const { db, query } = makeDb({ rows: [{ id: "r1", tenant_id: "tenant-a", is_published: false }] });
+    const result = await setPublished(db, "tenant-a", false);
+
+    expect(result).not.toBeNull();
+    expect(query.mock.calls[0][1]).toEqual(["tenant-a", false]);
+  });
 });
 
 describe("uploadResourcePdfToStorage", () => {

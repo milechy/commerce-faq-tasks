@@ -312,6 +312,44 @@ describe("runDialogTurn — 資料オファー機能 resourceCard", () => {
     expect(result.resourceCard).toBeUndefined();
   });
 
+  it("is_published=true でも moderation_status='rejected' なら resourceCard を設定しない(多層防御: publishエンドポイントのTOCTOU競合で理論上生じうる不整合行を信用しない)", async () => {
+    mockPlanner.mockResolvedValue({ ...basePlan, confidence: "medium" });
+    mockDetectIntents.mockReturnValue({
+      proposeIntent: undefined,
+      recommendIntent: undefined,
+      closeIntent: undefined,
+    });
+    mockPool.query
+      .mockResolvedValueOnce({ rows: [{ enabled: null }] })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: "res-1",
+            tenant_id: "test-tenant",
+            title: "却下済みのはずが公開フラグが残った資料",
+            description: null,
+            storage_path: null,
+            external_url: "https://example.com/rejected.pdf",
+            file_type: "pdf",
+            moderation_status: "rejected",
+            moderation_reason: "著作権侵害の疑い",
+            rights_confirmed: true,
+            is_published: true, // 本来あり得ないが、TOCTOU競合で理論上発生しうる組み合わせ
+            created_at: "2026-01-01T00:00:00.000Z",
+            updated_at: "2026-01-01T00:00:00.000Z",
+          },
+        ],
+      });
+
+    const result = await runDialogTurn({
+      sessionId: "test-session-r-rejected",
+      tenantId: "test-tenant",
+      message: "ちょっと見てるだけです",
+    });
+
+    expect(result.resourceCard).toBeUndefined();
+  });
+
   it("セールスintentが検出済み(confidenceも本番実値のmedium)なら資料オファーより成約導線を優先し問い合わせしない", async () => {
     mockPlanner.mockResolvedValue({ ...basePlan, confidence: "medium" });
     mockDetectIntents.mockReturnValue({

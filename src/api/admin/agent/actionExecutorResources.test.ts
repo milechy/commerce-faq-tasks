@@ -136,6 +136,50 @@ describe('executeToolCall: upload_resource のハードゲート', () => {
     },
   );
 
+  // routes.ts の PUT /v1/admin/resources は zod (`title: z.string().max(200)`) で
+  // 200字超を400で拒否するのに対し、upload_resource(このexecutor)は以前
+  // `.slice(0, 200)` で無言に切り詰めていた — 同じ入力がAPI経由では拒否され
+  // チャット経由では別の文字列として保存される不整合だったため、拒否に揃えた。
+  it('titleが200文字を超えるとチャット経由でも登録せず、無言で切り詰めない', async () => {
+    const pool = makeMockPool();
+    const longTitle = 'あ'.repeat(201);
+
+    const result = await executeToolCall(
+      'upload_resource',
+      { title: longTitle, external_url: 'https://example.com/a.pdf', rights_confirmed: true, confirmed: true },
+      TENANT,
+      pool,
+      'session-1',
+      false,
+      ACTOR,
+    );
+
+    expect(pool.query).not.toHaveBeenCalled();
+    expect(resultText(result)).toContain('200文字');
+  });
+
+  it('titleがちょうど200文字なら受理される(境界値)', async () => {
+    const pool = makeMockPool(
+      { rows: [] },
+      { rows: [{ ...EXISTING_RESOURCE_ROW, id: 'new-id', title: 'あ'.repeat(200), moderation_status: 'pending', is_published: false }] },
+    );
+    const exactTitle = 'あ'.repeat(200);
+
+    const result = await executeToolCall(
+      'upload_resource',
+      { title: exactTitle, external_url: 'https://example.com/new.pdf', rights_confirmed: true, confirmed: true },
+      TENANT,
+      pool,
+      'session-1',
+      false,
+      ACTOR,
+    );
+
+    expect(pool.query).toHaveBeenCalled();
+    const card = (result as { card?: { title?: string } }).card;
+    expect(card?.title).toBe(exactTitle);
+  });
+
   it('全ゲートを満たすと登録し、is_published=falseのままカードを返す', async () => {
     const pool = makeMockPool(
       { rows: [] }, // getResource(既存なし)

@@ -5469,13 +5469,19 @@ export async function executeToolCall(
     // -----------------------------------------------------------------------
     // 外部URLの資料の登録・上書き。PDFはこのcaseでは扱わない(上のコメント参照)。
     case 'upload_resource': {
-      const title = String(args['title'] ?? '').trim().slice(0, 200);
+      const title = String(args['title'] ?? '').trim();
       const externalUrl = String(args['external_url'] ?? '').trim();
       const rightsConfirmed = isConfirmed(args['rights_confirmed']);
       const confirmed = isConfirmed(args['confirmed']);
 
       if (!title || !externalUrl) {
         return truncate('title と external_url は必須です');
+      }
+      // PUT /v1/admin/resources (routes.ts) の zod スキーマは200字超を400で拒否する。
+      // ここで無言でslice(0,200)すると、同じ入力がAPI経由では拒否されチャット経由では
+      // 別の文字列として保存される、という2経路の不整合になる(禁止6と同じ理由で揃える)。
+      if (title.length > 200) {
+        return truncate(`タイトルは200文字以内にしてください(現在${title.length}文字)`);
       }
       // 要件書5.2・CLAUDE.md禁止5: 著作権確認はハードゲート。モデルの自己申告
       // (rights_confirmed=true)を無条件には信頼しないが、チャット経由には

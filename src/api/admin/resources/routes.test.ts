@@ -223,6 +223,15 @@ describe("PUT /v1/admin/resources — external_url の SSRF ガード", () => {
     "http://172.16.0.5/doc.pdf",
     "http://192.168.1.5/doc.pdf",
     "http://169.254.169.254/latest/meta-data",
+    // 以下、実機検証(node -e)で確認済みのバイパス手口。WHATWG URL パーサが
+    // 10進数/16進数/8進数IPv4表記を自動的にドット10進表記へ正規化するため、
+    // それらはガードに到達する前に無害化される(下の「正規化されバイパスできない表記」
+    // で確認する)。一方、末尾ドットとIPv4射影IPv6は正規化されずガードを素通りしていた。
+    "http://localhost./doc.pdf", // 末尾ドット(DNSルートラベル): "localhost" と完全一致しないため素通りしていた
+    "http://localhost../doc.pdf", // 末尾ドット複数
+    "http://[::ffff:127.0.0.1]/doc.pdf", // IPv4射影IPv6(loopback) → "[::ffff:7f00:1]" に正規化され素通りしていた
+    "http://[::ffff:192.168.1.1]/doc.pdf", // IPv4射影IPv6(private) → "[::ffff:c0a8:101]"
+    "http://[::ffff:10.0.0.1]/doc.pdf", // IPv4射影IPv6(private)
   ];
 
   it.each(PRIVATE_OR_LOCAL_URLS)("%s は 400 invalid_url で拒否され、保存されない", async (url) => {
@@ -237,6 +246,25 @@ describe("PUT /v1/admin/resources — external_url の SSRF ガード", () => {
     expect(mockUpsertResource).not.toHaveBeenCalled();
   });
 
+  // WHATWG URL パーサ自身がIPv4の10進数/16進数/8進数表記を通常のドット10進表記へ
+  // 正規化するため、これらは isPrivateOrLocalHostname に渡る前に無害化されている。
+  // 「正規化された結果ガードに引っかかる」ことを実機確認済みなので回帰として固定する。
+  it.each([
+    "http://2130706433/doc.pdf", // 127.0.0.1 の10進数表記
+    "http://0x7f000001/doc.pdf", // 127.0.0.1 の16進数表記
+    "http://017700000001/doc.pdf", // 127.0.0.1 の8進数表記
+    "http://127.1/doc.pdf", // 短縮ドット10進表記(127.0.0.1と等価)
+  ])("%s はURLパーサの正規化を経てガードに拒否される(400 invalid_url)", async (url) => {
+    const res = await request(makeApp())
+      .put("/v1/admin/resources")
+      .field("title", "テスト資料")
+      .field("external_url", url)
+      .field("rights_confirmed", "true");
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_url");
+  });
+
   it("通常の公開 https URL は受理される", async () => {
     mockGetResource.mockResolvedValue(null);
     mockUpsertResource.mockResolvedValue({ ...RESOURCE_ROW, file_type: "external_url", storage_path: null });
@@ -249,6 +277,19 @@ describe("PUT /v1/admin/resources — external_url の SSRF ガード", () => {
 
     expect(res.status).toBe(201);
     expect(mockUpsertResource).toHaveBeenCalled();
+  });
+
+  it("IPv4射影IPv6でも埋め込みアドレスが公開IPなら受理される(誤検知しない、例: Google Public DNS 8.8.8.8)", async () => {
+    mockGetResource.mockResolvedValue(null);
+    mockUpsertResource.mockResolvedValue({ ...RESOURCE_ROW, file_type: "external_url", storage_path: null });
+
+    const res = await request(makeApp())
+      .put("/v1/admin/resources")
+      .field("title", "テスト資料")
+      .field("external_url", "http://[::ffff:8.8.8.8]/doc.pdf")
+      .field("rights_confirmed", "true");
+
+    expect(res.status).toBe(201);
   });
 
   it("file と external_url の同時指定は 400、保存されない", async () => {
@@ -395,6 +436,42 @@ describe("POST /v1/admin/resources/publish", () => {
 
     expect(res.status).toBe(404);
     expect(mockSetPublished).not.toHaveBeenCalled();
+  });
+
+  // TOCTOU対策: 事前チェック(getResource)から実更新(setPublished)までの間に
+  // 別リクエストがmoderation_statusを変えても、setPublished自身のWHERE条件が
+  // アトミックにブロックしnullを返す(resourcesRepository.test.ts参照)。
+  // ここではその「nullが返ってきた場合」にルートが正しく後始末することを検証する。
+  describe("setPublished がTOCTOU競合でnullを返した場合", () => {
+    it("現在の状態が rejected になっていれば 400 moderation_rejected を返す(is_publishedをtrueにしない)", async () => {
+      // 事前チェック時点では approved(公開可能)だったが、setPublished実行直前に
+      // 別リクエストの再アップロードで rejected に変わっていたケース。
+      mockGetResource
+        .mockResolvedValueOnce({ ...RESOURCE_ROW, moderation_status: "approved" }) // 事前チェック
+        .mockResolvedValueOnce({
+          ...RESOURCE_ROW,
+          moderation_status: "rejected",
+          moderation_reason: "競合で却下に変わった",
+        }); // 後始末での再取得
+      mockSetPublished.mockResolvedValue(null);
+
+      const res = await request(makeApp()).post("/v1/admin/resources/publish");
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("moderation_rejected");
+      expect(res.body.moderation_reason).toBe("競合で却下に変わった");
+    });
+
+    it("現在の状態が既に存在しない(削除された)場合は 404 を返す", async () => {
+      mockGetResource
+        .mockResolvedValueOnce({ ...RESOURCE_ROW, moderation_status: "approved" })
+        .mockResolvedValueOnce(null);
+      mockSetPublished.mockResolvedValue(null);
+
+      const res = await request(makeApp()).post("/v1/admin/resources/publish");
+
+      expect(res.status).toBe(404);
+    });
   });
 });
 
