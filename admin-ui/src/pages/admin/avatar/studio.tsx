@@ -57,6 +57,10 @@ export default function AvatarStudioPage() {
   // 画像タブ
   const [imageTab, setImageTab] = useState<'generate' | 'upload'>('generate');
 
+  // COPY-2: 第三者の著作権/商標権/肖像権を侵害しないことの確認チェックボックス
+  // （画像生成・アップロード確定の直前ゲート。既存画像を変更しない保存には影響しない）
+  const [rightsConfirmed, setRightsConfirmed] = useState(false);
+
   // 画像生成（AIタブ）
   const [imageDesc, setImageDesc] = useState("");
   const [generatedImages, setGeneratedImages] = useState<string[]>([]);
@@ -140,7 +144,7 @@ export default function AvatarStudioPage() {
   useEffect(() => { void fetchExisting(); }, [fetchExisting]);
 
   const handleGenerateImage = async () => {
-    if (!imageDesc.trim() || generatingImage) return;
+    if (!imageDesc.trim() || generatingImage || !rightsConfirmed) return;
     // Phase5-D: 禁止ワードチェック（フロントエンド第一防衛線）
     if (containsBannedWord(imageDesc)) {
       setImageDescError("このプロンプトは使用できません。ビジネスに適した表現に変更してください");
@@ -204,7 +208,7 @@ export default function AvatarStudioPage() {
   }
 
   function handleConfirmUpload() {
-    if (!uploadPreview) return;
+    if (!uploadPreview || !rightsConfirmed) return;
     setImageUrl(uploadPreview);
     setUploadConfirmed(true);
   }
@@ -458,6 +462,8 @@ export default function AvatarStudioPage() {
         handleConfirmUpload={handleConfirmUpload}
         handleResetUpload={handleResetUpload}
         fileInputRef={fileInputRef}
+        rightsConfirmed={rightsConfirmed}
+        setRightsConfirmed={setRightsConfirmed}
       />
 
       {/* 3. 声マッチング */}

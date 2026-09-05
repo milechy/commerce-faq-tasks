@@ -2,7 +2,7 @@
 // Gemini 2.5 Flash REST client (Phase46)
 
 import pino from 'pino';
-import { trackUsage } from '../billing/usageTracker';
+import { trackUsage, type FeatureUsed } from '../billing/usageTracker';
 
 const logger = pino();
 
@@ -19,9 +19,12 @@ export interface GeminiUsageContext {
   tenantId?: string;
   requestId?: string;
   billable?: boolean;
+  featureUsed?: FeatureUsed;
 }
 
-export async function callGeminiJudge(prompt: string, usageContext?: GeminiUsageContext): Promise<string> {
+type GeminiPart = { text: string } | { inline_data: { mime_type: string; data: string } };
+
+async function callGeminiGenerateContent(parts: GeminiPart[], usageContext?: GeminiUsageContext): Promise<string> {
   const apiKey = process.env['GEMINI_API_KEY'];
   if (!apiKey) throw new Error('GEMINI_API_KEY not set');
 
@@ -31,22 +34,22 @@ export async function callGeminiJudge(prompt: string, usageContext?: GeminiUsage
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
+      contents: [{ parts }],
       generationConfig: { temperature: 0.3, maxOutputTokens: 4096 },
     }),
   });
 
   if (!res.ok) {
     const body = await res.text().catch(() => '');
-    logger.warn({ status: res.status, body }, 'callGeminiJudge: API error');
+    logger.warn({ status: res.status, body }, 'callGeminiGenerateContent: API error');
     throw new Error(`Gemini API error: ${res.status}`);
   }
 
   const data = await res.json() as Record<string, unknown>;
   const candidates = data['candidates'] as Array<Record<string, unknown>> | undefined;
   const content = candidates?.[0]?.['content'] as Record<string, unknown> | undefined;
-  const parts = content?.['parts'] as Array<Record<string, unknown>> | undefined;
-  const text = (parts?.[0]?.['text'] as string) ?? '';
+  const contentParts = content?.['parts'] as Array<Record<string, unknown>> | undefined;
+  const text = (contentParts?.[0]?.['text'] as string) ?? '';
 
   const usageMetadata = data['usageMetadata'] as
     | { promptTokenCount?: number; candidatesTokenCount?: number }
@@ -62,12 +65,29 @@ export async function callGeminiJudge(prompt: string, usageContext?: GeminiUsage
       model: GEMINI_MODEL,
       inputTokens: usageMetadata?.promptTokenCount ?? 0,
       outputTokens: usageMetadata?.candidatesTokenCount ?? 0,
-      featureUsed: 'admin_tuning',
+      featureUsed: usageContext?.featureUsed ?? 'admin_tuning',
       billable: usageContext?.billable ?? false,
     });
   } catch (err) {
-    logger.warn({ err }, 'callGeminiJudge: trackUsage failed (non-blocking)');
+    logger.warn({ err }, 'callGeminiGenerateContent: trackUsage failed (non-blocking)');
   }
 
   return text;
+}
+
+export async function callGeminiJudge(prompt: string, usageContext?: GeminiUsageContext): Promise<string> {
+  return callGeminiGenerateContent([{ text: prompt }], usageContext);
+}
+
+/** COPY-1: 画像を添付してGeminiに判定させる（アバター参照画像の著作権/NSFWモデレーション等）。 */
+export async function callGeminiVisionJudge(
+  prompt: string,
+  imageBase64: string,
+  mimeType: string,
+  usageContext?: GeminiUsageContext
+): Promise<string> {
+  return callGeminiGenerateContent(
+    [{ text: prompt }, { inline_data: { mime_type: mimeType, data: imageBase64 } }],
+    usageContext
+  );
 }

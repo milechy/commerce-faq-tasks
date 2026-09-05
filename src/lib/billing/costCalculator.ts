@@ -111,6 +111,7 @@ export const FEATURE_BILLING_DIMENSION = {
   book_structurize: 'request',
   option_service: 'request',
   premium_avatar_generation: 'request',
+  avatar_image_moderation: 'none',
   admin_tuning: 'none',
   admin_ai_assist: 'none',
   admin_engagement_suggest: 'none',
