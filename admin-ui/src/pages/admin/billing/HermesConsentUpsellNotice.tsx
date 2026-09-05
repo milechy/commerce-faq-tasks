@@ -108,13 +108,13 @@ export function HermesConsentUpsellNotice() {
   return (
     <section style={{ ...CARD, marginBottom: 24, borderColor: "rgba(59,130,246,0.4)" }}>
       <h2 style={{ fontSize: 15, fontWeight: 600, margin: "0 0 10px", color: "var(--foreground)" }}>
-        🌐 他社の接客ノウハウを、無料でAIに取り込みませんか？
+        🌐 他社が磨いたAIの接客力を、そのまま貴社にも
       </h2>
       <p style={{ margin: 0, fontSize: 14, color: "var(--foreground)" }}>
-        会話データの共有にご協力いただくと、他社の会話から見つかった改善が「グローバルルール」として貴社のAIの応答にも自動で反映されるようになります。
+        全国の参加テナントの会話から見つかった「効果的な言い回し」が「グローバルルール」として、貴社が何もしなくても自動でAIの応答に反映されます。自社の会話データだけでAIを育てるより、はるかに早く賢くなります。
       </p>
       <ul style={{ margin: "10px 0 0", paddingLeft: 18, fontSize: 14, color: "var(--foreground)" }}>
-        <li>追加費用は一切かかりません</li>
+        <li>参加は無料。追加費用は一切かかりません</li>
         <li>共有されるのは匿名化された会話ログ・行動データのみで、金額情報は含まれません</li>
         <li>いつでもOFFに戻せます</li>
       </ul>

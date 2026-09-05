@@ -46,7 +46,7 @@ describe("HermesConsentUpsellNotice", () => {
       features: { learning: { learn: true, share: false } },
     }));
     renderNotice();
-    expect(await screen.findByText(/他社の接客ノウハウを、無料でAIに取り込みませんか/)).toBeTruthy();
+    expect(await screen.findByText(/他社が磨いたAIの接客力を、そのまま貴社にも/)).toBeTruthy();
     expect(screen.getByText("🌐 今すぐ参加する")).toBeTruthy();
     expect(screen.getByText(/追加費用は一切かかりません/)).toBeTruthy();
     expect(screen.getByText(/いつでもOFFに戻せます/)).toBeTruthy();

@@ -5374,7 +5374,7 @@ describe("CopilotPreviewPage — 共有学習プール(Hermes)への参加勧誘
 
     renderPage();
 
-    expect(await screen.findByText(/他社の接客ノウハウを、無料でAIに取り込みませんか/)).toBeTruthy();
+    expect(await screen.findByText(/他社が磨いたAIの接客力を、そのまま貴社にも/)).toBeTruthy();
     expect(screen.getByText("🌐 参加する")).toBeTruthy();
     expect(screen.getByText("あとで")).toBeTruthy();
     // 通常の週次ブリーフィングには進まない(このターンでは agent/chat を呼ばない)
@@ -5397,7 +5397,7 @@ describe("CopilotPreviewPage — 共有学習プール(Hermes)への参加勧誘
     renderPage();
 
     expect(await screen.findByText("今週も順調です。")).toBeTruthy();
-    expect(screen.queryByText(/他社の接客ノウハウを、無料でAIに取り込みませんか/)).toBeNull();
+    expect(screen.queryByText(/他社が磨いたAIの接客力を、そのまま貴社にも/)).toBeNull();
   });
 
   it("旧フラグ hermes_raw_data_consent が無い(未設定)テナントにも勧誘チップが出る(後方互換のfail-safe側)", async () => {
@@ -5411,7 +5411,7 @@ describe("CopilotPreviewPage — 共有学習プール(Hermes)への参加勧誘
 
     renderPage();
 
-    expect(await screen.findByText(/他社の接客ノウハウを、無料でAIに取り込みませんか/)).toBeTruthy();
+    expect(await screen.findByText(/他社が磨いたAIの接客力を、そのまま貴社にも/)).toBeTruthy();
   });
 
   it("「🌐 参加する」を押すと、共有への同意をONにする自然文が実送信される", async () => {
@@ -5450,7 +5450,7 @@ describe("CopilotPreviewPage — 共有学習プール(Hermes)への参加勧誘
 
     renderPage(SUPER_ADMIN_IN_PREVIEW);
 
-    expect(await screen.findByText(/他社の接客ノウハウを、無料でAIに取り込みませんか/)).toBeTruthy();
+    expect(await screen.findByText(/他社が磨いたAIの接客力を、そのまま貴社にも/)).toBeTruthy();
   });
 });
 
