@@ -1,0 +1,16 @@
+# R2C – AI Sales Concierge
+# Theme App Extension（App Embed Block）の設定ファイル。
+#
+# 位置づけ: Asana GID 1218199856729994 で実装した静的な雛形。
+# この環境では `shopify app generate extension` / `shopify app deploy` を
+# 実行できないため、ディレクトリ構成とファイル内容を手書きしている。
+# 実際の Partner Dashboard への反映（`shopify app deploy`）は人間が後で行う。
+#
+# 詳細な決定事項・受け入れ条件: docs/SHOPIFY_APP_REQUIREMENTS.md
+# （D8: ScriptTag不使用・Theme App Extension一択 / D18: 面の詳細選択は
+#  埋め込み管理画面側に置き、ここにはON/OFFと表示位置のみを持たせる /
+#  §3.1: 既存の動的widget配信ルートを踏襲し静的版・フォールバックは使わない /
+#  FR-05〜FR-07）。
+
+name = "r2c-widget"
+type = "theme"
