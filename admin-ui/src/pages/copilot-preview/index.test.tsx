@@ -7151,12 +7151,14 @@ describe("CopilotPreviewPage — 資料オファーカード(get_resource/PDFの
     }
   });
 
-  // handleFileChange(admin-ui/src/pages/copilot-preview/index.tsx の ResourceCard)は
-  // canUpload/uploadingの状態を確認せず、ファイルが選ばれたら無条件で onUploadPdf を呼ぶ。
-  // 二重送信を防いでいるのは「アップロード中はボタンをdisabledにする」UI層のみで、
-  // 隠しinput自体やonUploadResourcePdf側には多重呼び出しに対するガードが無い
-  // (tests/widget/buildResourceCard.test.tsの「既知の制約」と同様、現状の挙動を固定する)。
-  it("【現状の挙動】アップロード中でも隠しinputへ直接changeイベントを送ると、ボタンのdisabledをバイパスして2件目の送信が始まる(排他制御なし)", async () => {
+  // 発見の経緯: 当初 handleFileChange は canUpload/uploading の状態を確認せず、
+  // ファイルが選ばれたら無条件で onUploadPdf を呼んでいた。二重送信を防いでいたのは
+  // 「アップロード中はボタンをdisabledにする」UI層だけで、隠しinput自体や
+  // onUploadResourcePdf側には多重呼び出しに対するガードが無く、直接changeイベントを
+  // 送るとボタンのdisabledをバイパスして2件目の送信が始まっていた
+  // (Storageアップロード・Geminiモデレーション呼び出しの重複課金につながるため修正)。
+  // handleFileChange自身にcanUploadの再検証を追加し、この経路を閉じた。
+  it("アップロード中に隠しinputへ直接changeイベントを送っても、ハンドラ自身のガードで2件目の送信は始まらない", async () => {
     MockXHR.instances = [];
     vi.stubGlobal("XMLHttpRequest", MockXHR as unknown as typeof XMLHttpRequest);
     try {
@@ -7173,8 +7175,9 @@ describe("CopilotPreviewPage — 資料オファーカード(get_resource/PDFの
       // 1件目はまだ fireLoad していない(アップロード中)状態のまま、隠しinputへ直接2件目を流す
       fireEvent.change(fileInput, { target: { files: [makeFile("2件目.pdf", "application/pdf")] } });
 
-      await waitFor(() => expect(MockXHR.instances.length).toBe(2));
-      expect(MockXHR.instances[1]!.open).toHaveBeenCalledWith("PUT", "http://localhost:3100/v1/admin/resources");
+      // ガードにより2件目のXHRは発行されない(1件目のままであることを確認)
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(MockXHR.instances.length).toBe(1);
     } finally {
       vi.unstubAllGlobals();
     }
