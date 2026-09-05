@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      App Bridge (2024+) はスクリプトタグ + meta タグで自動初期化する方式。
+      Provider コンポーネントでのラップは不要(shopify.dev の現行方式)。
+      content はプレースホルダ。Partner Dashboard でアプリを作成した後、
+      shopify.app.toml の client_id と同じ値に人間が差し替えること。
+    -->
+    <meta name="shopify-api-key" content="REPLACE_WITH_PARTNER_DASHBOARD_CLIENT_ID" />
+    <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
+    <title>R2C – AI Sales Concierge</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -72,6 +72,9 @@ import { assertAuthSecretsConfigured } from "./lib/startup/authSecretsGuard";
 import { registerWidgetRoutes } from "./api/widget/routes";
 import { registerWpProvisionRoutes } from "./api/widget/wpProvisionRoutes";
 import { registerWpSettingsRoutes } from "./api/widget/wpSettingsRoutes";
+import { registerShopifyOAuthRoutes } from "./api/widget/shopifyOAuthRoutes";
+import { registerShopifyWebhookRoutes } from "./api/widget/shopifyWebhookRoutes";
+import { registerShopifySettingsRoutes } from "./api/widget/shopifySettingsRoutes";
 import { registerAuthRoutes } from "./api/auth/routes";
 import { registerLiveKitTokenRoutes } from "./api/avatar/livekitTokenRoutes";
 import { registerAnamRoutes } from "./api/avatar/anamRoutes";
@@ -147,6 +150,11 @@ app.post(
   express.raw({ type: "application/json" }),
   createStripeWebhookHandler(db, logger)
 );
+
+// Shopify GDPR Webhook 3種 + app/uninstalled（raw body必須 — Stripe Webhookと
+// 同一の理由・同一のパターン。ファイル内部で該当4ルートにのみ express.raw() を
+// 適用しているため、この呼び出し自体は express.json() より前でなければならない）
+registerShopifyWebhookRoutes(app, db);
 
 app.use(express.json({ limit: "1mb" }));
 
@@ -750,6 +758,12 @@ registerWpProvisionRoutes(app, db);
 // WordPressプラグイン計画 WP-13: 設定の読み書きAPI(D9/§13.2)。
 // 真実は常にR2C側DBにあり、WPは遠隔操作であって権威ではない。
 registerWpSettingsRoutes(app, db);
+
+// Shopifyアプリ連携（docs/SHOPIFY_APP_REQUIREMENTS.md）。OAuthインストール・
+// コールバックと、表示面選択・設定の読み書きAPI(D9/D18: 真実は常にR2C側DB)。
+// Webhookは express.json() より前に registerShopifyWebhookRoutes で登録済み。
+registerShopifyOAuthRoutes(app, db);
+registerShopifySettingsRoutes(app, db);
 
 // Phase55: 行動イベント受信 API (Widget → Server)
 if (db) registerEventRoutes(app, apiStack, db);

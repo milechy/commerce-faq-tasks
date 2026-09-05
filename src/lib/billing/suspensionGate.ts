@@ -69,6 +69,17 @@ export interface BillingStateRow {
   subActive: boolean | null | undefined;
   /** tenants.delinquent_since(past_due 起点)。 */
   delinquentSince: Date | string | null | undefined;
+  /**
+   * tenants.provisioning_source。'shopify_app' のときのみ下記
+   * shopifySubscriptionStatus によるD19追加ゲートを適用する(それ以外は無視される)。
+   */
+  provisioningSource?: string | null | undefined;
+  /**
+   * tenants.shopify_subscription_status(Shopify Billing の AppSubscription 状態。
+   * pending/active/cancelled/frozen。この列を更新する webhook/ポーリングは未実装のため、
+   * provisioning_source='shopify_app' のテナントは長期間 null/pending のまま留まり得る)。
+   */
+  shopifySubscriptionStatus?: string | null | undefined;
 }
 
 /**
@@ -88,6 +99,19 @@ export function resolveBillingAccess(
   now: Date = new Date(),
   graceDays: number = getPastDueGraceDays(),
 ): BillingAccess {
+  // ★D19: Shopify Billing 追加ゲート★
+  // provisioning_source='shopify_app' のテナントは Stripe subscription を持たないため、
+  // 下記の plan/subscriptionStatus/subActive ベースの判定だけでは常に「active」に
+  // 落ちてしまう(Shopify Billing を未承認のまま素通りする穴)。既存ロジックには
+  // 手を入れず、Shopify経由テナントに限定した追加ゲートとして先に判定する。
+  // fail-safe は「不明なら機能を開かない」— 'active' 以外(null/pending/cancelled/
+  // frozen 含む)はすべて suspended 相当として扱う。この列を更新する webhook/
+  // ポーリングは本タスクの範囲外のため、実装されるまで shopify_app テナントの
+  // テキストチャットは稼働しない(意図した挙動。CLAUDE.md 禁止10)。
+  if (row.provisioningSource === "shopify_app") {
+    return row.shopifySubscriptionStatus === "active" ? "active" : "suspended";
+  }
+
   const plan = row.plan ?? undefined;
   if (!plan || !SELF_SERVE_PAID_PLANS.has(plan)) {
     // free_ad / enterprise / 未知/null は自動停止の対象外。
@@ -128,8 +152,13 @@ function toDate(v: Date | string | null | undefined): Date | null {
 /**
  * DB からテナントの課金状態を引いてアクセス段を返す。
  *
- * - 42703(subscription_status / delinquent_since 未適用)は fail-open で 'active' を返す。
- *   migration 適用前にコードが先行デプロイされてもゲートを無効化するだけで本番を壊さない。
+ * - 42703(subscription_status / delinquent_since / shopify_subscription_status 未適用)は
+ *   fail-open で 'active' を返す。migration 適用前にコードが先行デプロイされても
+ *   ゲートを無効化するだけで本番を壊さない(shopify_app テナントも含め、この
+ *   ブートストラップ期間中は一時的に無制限になるが、対象の migration を人間が
+ *   適用するまでの短い窓に限られる。適用後は resolveBillingAccess の
+ *   D19 追加ゲートが有効化され、shopify_subscription_status !== 'active' は
+ *   suspended に倒れる)。
  * - それ以外のDB例外は null を返し、fail-safe の向きは呼び出し側の述語に委ねる
  *   (テキストchatは allow、avatar/voiceは block)。
  */
@@ -144,10 +173,14 @@ export async function queryBillingAccess(
       subscription_status: string | null;
       delinquent_since: Date | string | null;
       sub_active: boolean | null;
+      provisioning_source: string | null;
+      shopify_subscription_status: string | null;
     }>(
       `SELECT t.plan,
               t.subscription_status,
               t.delinquent_since,
+              t.provisioning_source,
+              t.shopify_subscription_status,
               s.is_active AS sub_active
          FROM tenants t
          LEFT JOIN stripe_subscriptions s ON s.tenant_id = t.id
@@ -162,6 +195,8 @@ export async function queryBillingAccess(
         subscriptionStatus: r.subscription_status,
         subActive: r.sub_active,
         delinquentSince: r.delinquent_since,
+        provisioningSource: r.provisioning_source,
+        shopifySubscriptionStatus: r.shopify_subscription_status,
       },
       now,
     );

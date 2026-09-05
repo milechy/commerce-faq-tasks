@@ -869,3 +869,80 @@ describe("MonitoringPage — WordPress経由テナントの総量ガード", () 
     expect(screen.queryByText("WordPress経由テナントの総量ガード")).toBeNull();
   });
 });
+
+// 13(Shopify D15/FR-16/§7 D-5): shop/redact 削除保留の件数・期限監視カード。
+// 禁止50と同じ精神で、保留0件のときも中立に「保留0件」と表示することを固定する。
+describe("MonitoringPage — Shopify削除保留(shop/redact)監視", () => {
+  const BASE_HEALTH = {
+    sourceBreakdown: [{ source: "user", count: 13 }],
+    emptySessionCount: 0,
+    cvSessionLinkRate: { numerator: 0, denominator: 0, rate: null },
+    outcomeRecordRate: { numerator: 0, denominator: 0, rate: null, autoRecorded: 0 },
+    validUserSessionCount: 13,
+  };
+
+  it("保留0件のとき、異常なしではなく「保留0件」を表示する", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
+      if (url.includes("/measurement-health")) return mockOk(BASE_HEALTH);
+      if (url.includes("/shopify/deletion-queue")) return mockOk({ pending: [], total: 0 });
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("Shopify削除保留(shop/redact)")).toBeTruthy();
+    });
+    expect(screen.getByText(/削除保留中のテナントはありません\(保留0件\)/)).toBeTruthy();
+    expect(screen.queryByText("異常なし")).toBeNull();
+  });
+
+  it("期限が迫った保留がある場合は件数と警告バッジを表示する", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
+      if (url.includes("/measurement-health")) return mockOk(BASE_HEALTH);
+      if (url.includes("/shopify/deletion-queue")) {
+        return mockOk({
+          pending: [
+            {
+              tenantId: "tenant-a",
+              shopDomain: "a.myshopify.com",
+              deletionRequestedAt: "2026-08-06T00:00:00.000Z",
+              deadline: "2026-09-05T00:00:00.000Z",
+              daysUntilDeadline: 0,
+              severity: "alert",
+            },
+          ],
+          total: 1,
+        });
+      }
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("a.myshopify.com")).toBeTruthy();
+    });
+    expect(screen.getByText("本日が期限")).toBeTruthy();
+  });
+
+  it("client_admin(APIが403を返す)のときカード自体を出さない", async () => {
+    vi.mocked(authFetch).mockImplementation((url: string) => {
+      if (url.includes("/monitoring/kpis")) return mockOk(KPIS_OK);
+      if (url.includes("/measurement-health")) return mockOk(BASE_HEALTH);
+      if (url.includes("/shopify/deletion-queue")) {
+        return Promise.resolve({ ok: false, status: 403, json: () => Promise.resolve({}) } as Response);
+      }
+      return mockOk({});
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("会話完了率")).toBeTruthy();
+    });
+    expect(screen.queryByText("Shopify削除保留(shop/redact)")).toBeNull();
+  });
+});

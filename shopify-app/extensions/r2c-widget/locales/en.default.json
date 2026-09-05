@@ -1,0 +1,24 @@
+{
+  "name": "R2C – AI Sales Concierge",
+  "settings": {
+    "enabled": {
+      "label": "Show chat widget",
+      "info": "Turns the R2C chat widget on or off on your storefront. Which pages it appears on is configured in the R2C app, not here."
+    },
+    "position": {
+      "label": "Position",
+      "options__bottom_right": {
+        "label": "Bottom right"
+      },
+      "options__bottom_left": {
+        "label": "Bottom left"
+      }
+    },
+    "offset_x": {
+      "label": "Horizontal offset"
+    },
+    "offset_y": {
+      "label": "Vertical offset"
+    }
+  }
+}
