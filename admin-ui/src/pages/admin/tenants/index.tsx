@@ -19,8 +19,8 @@ interface Tenant {
   billing_enabled?: boolean;
   billing_free_from?: string | null;
   billing_free_until?: string | null;
-  // WP-15(D11): 流入元。manual(既定)なら特に何も表示しない。
-  provisioning_source?: "manual" | "wordpress_plugin";
+  // WP-15(D11)/13(Shopify D6): 流入元。manual(既定)なら特に何も表示しない。
+  provisioning_source?: "manual" | "wordpress_plugin" | "shopify_app";
 }
 
 // ─── 認証ヘルパー ─────────────────────────────────────────────────────────────
@@ -587,10 +587,15 @@ export default function TenantsPage() {
                         </span>
                       );
                     })()}
-                    {/* 流入元バッジ(WP-15/D11): manualは既定で無表示、識別できれば十分 */}
+                    {/* 流入元バッジ(WP-15/D11、13/Shopify D6): manualは既定で無表示、識別できれば十分 */}
                     {tenant.provisioning_source === "wordpress_plugin" && (
                       <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: "rgba(59,130,246,0.15)", color: "#60a5fa", border: "1px solid rgba(96,165,250,0.3)" }}>
                         WordPress
+                      </span>
+                    )}
+                    {tenant.provisioning_source === "shopify_app" && (
+                      <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: "rgba(34,197,94,0.15)", color: "#4ade80", border: "1px solid rgba(74,222,128,0.3)" }}>
+                        Shopify
                       </span>
                     )}
                   </div>
