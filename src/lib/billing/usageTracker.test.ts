@@ -694,6 +694,55 @@ describe('usageTracker', () => {
       expect(errorLog).toHaveBeenCalled();
     });
   });
+
+  // WordPressプラグイン経由テナント(WP-1〜WP-13)はfree_adプランで作成され
+  // (wpProvisionRoutes.test.ts で確認済み)、専用のチャットコードパスを持たず
+  // 通常テナントと同一の src/api/chat/route.ts → trackUsage() を通る(設計上、
+  // provisioning_source による分岐は存在しない)。よってこの経路自体は
+  // 上の「plan / plan_multiplier の焼き付け」テストで既にカバーされているが、
+  // D-3(受け入れ条件 §7)が明示的に要求する「請求ゼロでも trackUsage を通り、
+  // usage_logs.cost_total_cents に行が残ること」を、
+  // WordPress経由テナント想定の文脈として直接言い切るテストが無かった
+  // (WP-11 E2E作業でのカバレッジ調査により判明)ため追加する。
+  describe('D-3: WordPress経由テナント(free_adプラン)でも請求ゼロで記録が消えない', () => {
+    it('free_adテナントのチャット利用でも usage_logs に行が残り、cost_total_cents が欠落しない', async () => {
+      const mockQuery = jest.fn().mockImplementation((sql: string) => {
+        if (sql.includes('SELECT plan FROM tenants')) {
+          return Promise.resolve({ rows: [{ plan: 'free_ad' }] });
+        }
+        return Promise.resolve({ rowCount: 1 });
+      });
+      initUsageTracker({ query: mockQuery } as any, {
+        warn: jest.fn(), error: jest.fn(), debug: jest.fn(), info: jest.fn(),
+      } as any);
+
+      trackUsage({
+        tenantId: 'tenant-wp-provisioned',
+        requestId: 'req-wp-d3-check',
+        model: 'llama-3.1-8b-instant',
+        inputTokens: 120,
+        outputTokens: 80,
+        featureUsed: 'chat',
+      });
+      await flushSetImmediate();
+      await flushSetImmediate();
+      await flushSetImmediate();
+
+      const insertCall = mockQuery.mock.calls.find(
+        ([sql, p]: [string, any[]]) => sql.includes('INSERT INTO usage_logs') && p?.[1] === 'req-wp-d3-check'
+      );
+      expect(insertCall).toBeDefined();
+      const params = insertCall![1];
+
+      // cost_total_cents は VALUES ($1..$17) の8番目 = params[7]。
+      // free_adの倍率0で金額自体は0でもよいが、列が欠落(undefined)したり
+      // INSERT自体がスキップされたりしないことがD-3の要求。
+      const COST_TOTAL_CENTS_PARAM_INDEX = 7;
+      expect(typeof params[COST_TOTAL_CENTS_PARAM_INDEX]).toBe('number');
+      expect(params[PLAN_PARAM_INDEX]).toBe('free_ad');
+      expect(params[PLAN_MULTIPLIER_PARAM_INDEX]).toBe(0);
+    });
+  });
 });
 
 // ─── #920↔#921 の継ぎ目・テナント境界・fail-safe の向き ─────────────────────

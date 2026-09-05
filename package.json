@@ -52,6 +52,7 @@
     "security-scan": "bash SCRIPTS/security-scan.sh",
     "verify": "pnpm typecheck && pnpm lint && pnpm test && (cd admin-ui && pnpm install --frozen-lockfile && pnpm test:ui) && bash SCRIPTS/security-scan.sh",
     "sync:notion": "ts-node SCRIPTS/sync-notion.ts",
+    "verify:wp-provisioning-security-live": "ts-node SCRIPTS/verify-wp-provisioning-security-live.ts",
     "build": "tsc -p tsconfig.json",
     "build:admin": "cd admin-ui && pnpm install --frozen-lockfile && pnpm build",
     "build:all": "pnpm build && pnpm build:admin",
