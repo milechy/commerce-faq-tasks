@@ -449,6 +449,26 @@ describe('public/widget.js — 資料オファー(buildResourceCard)', () => {
     expect(WIDGET_SRC).not.toMatch(/bubble\.appendChild\(buildResourceCard\(/);
     expect(WIDGET_SRC).not.toMatch(/bubble\.textContent\s*[+]?=\s*buildResourceCard\(/);
   });
+
+  // tests/widget/buildResourceCard.test.ts は buildResourceCard() のロジックを
+  // コピーしてテストしているため、実ファイル側の形が変わってもコピー側のテストは
+  // 気づかず緑のままになりうる(ドリフト)。ここで実ファイルの該当箇所が
+  // コピー側の前提と一致し続けていることを構造的に固定する。
+  it('資料リンクの href は resourceCard.url をスキーム検証なしでそのまま渡している' +
+    '(buildResourceCard.test.tsの「既知の制約」テストの前提。ここが変わったら両方直すこと)', () => {
+    const idx = WIDGET_SRC.indexOf('function buildResourceCard(');
+    expect(idx).toBeGreaterThan(-1);
+    const block = WIDGET_SRC.slice(idx, idx + 600);
+    expect(block).toMatch(/href:\s*resourceCard\.url/);
+  });
+
+  it('資料タイトルは textContent 経由で設定され、innerHTML は使わない(XSS対策)', () => {
+    const idx = WIDGET_SRC.indexOf('function buildResourceCard(');
+    expect(idx).toBeGreaterThan(-1);
+    const block = WIDGET_SRC.slice(idx, idx + 600);
+    expect(block).toMatch(/titleEl\.textContent\s*=\s*resourceCard\.title;/);
+    expect(block).not.toMatch(/innerHTML/);
+  });
 });
 
 // S5a(「D1・D5決定案」): 消費者向けデータ共有開示バナー
