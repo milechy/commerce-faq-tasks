@@ -23,6 +23,12 @@ jest.mock("../../../auth/supabaseClient", () => ({
   },
 }));
 
+// COPY-1: 既定は許可（blocked:false）。ブロック挙動を検証するdescribeだけ差し替える。
+const mockCheckImageForInfringement = jest.fn().mockResolvedValue({ blocked: false });
+jest.mock("../../../lib/imageContentGuard", () => ({
+  checkImageForInfringement: (...args: any[]) => mockCheckImageForInfringement(...args),
+}));
+
 const mockTenantHasFeature = jest.fn().mockResolvedValue(true);
 // queryTenantPlan の既定は "growth"（avatar機能あり）。プラン制限テストのみ個別に上書きする。
 const mockQueryTenantPlan = jest.fn().mockResolvedValue("growth");
@@ -371,6 +377,43 @@ describe("POST /v1/admin/avatar/configs — emotion_tags validation", () => {
       .send({ name: "テスト", emotion_tags: ["happy", "落ち着き"] });
 
     expect(res.status).not.toBe(400);
+  });
+});
+
+// --------------------------------------------------------------------------
+// COPY-1: POST /v1/admin/avatar/configs — アップロード画像の著作権/NSFWモデレーション
+// --------------------------------------------------------------------------
+describe("POST /v1/admin/avatar/configs — 画像アップロードのモデレーション", () => {
+  const DATA_URL_PNG =
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+
+  afterEach(() => {
+    mockCheckImageForInfringement.mockClear();
+    mockCheckImageForInfringement.mockResolvedValue({ blocked: false });
+  });
+
+  it("モデレーションでブロックされた画像は保存されず400を返す", async () => {
+    mockCheckImageForInfringement.mockResolvedValue({ blocked: true, reason: "NSFWコンテンツが検出されました" });
+    const db = { query: jest.fn() };
+
+    const res = await request(makeApp(db, "client_admin"))
+      .post("/v1/admin/avatar/configs")
+      .send({ name: "テスト", image_url: DATA_URL_PNG });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("NSFWコンテンツが検出されました");
+    expect(db.query).not.toHaveBeenCalled();
+  });
+
+  it("data: URLでない image_url はモデレーションを呼ばずそのまま通過する", async () => {
+    const db = { query: jest.fn().mockResolvedValue({ rows: [{ ...CONFIG_ROW }] }) };
+
+    const res = await request(makeApp(db, "client_admin"))
+      .post("/v1/admin/avatar/configs")
+      .send({ name: "テスト", image_url: "https://cdn.example/already-hosted.png" });
+
+    expect(res.status).toBe(201);
+    expect(mockCheckImageForInfringement).not.toHaveBeenCalled();
   });
 });
 
@@ -950,11 +993,31 @@ describe("PATCH /v1/admin/avatar/configs/:id — 画像アップロードの保�
 
   beforeEach(() => {
     mockSupabaseAdmin.current = makeStorageAdmin();
+    mockCheckImageForInfringement.mockResolvedValue({ blocked: false });
   });
 
   afterEach(() => {
     // 他のdescribe(ストレージ無効前提)へ影響を残さない
     mockSupabaseAdmin.current = null;
+  });
+
+  // COPY-1: アップロード画像の著作権/NSFWモデレーションでブロックされた場合、
+  // Supabase Storageへは一切書き込まず400を返す。
+  it("[COPY-1] モデレーションでブロックされた画像は保存されず400を返す", async () => {
+    mockCheckImageForInfringement.mockResolvedValue({ blocked: true, reason: "著作権キャラクターが検出されました" });
+    const dbQuery = jest.fn().mockResolvedValueOnce({ rows: [{ is_default: false }] });
+
+    const db = { query: dbQuery };
+
+    const res = await request(makeApp(db, "client_admin", "tenant-a"))
+      .patch("/v1/admin/avatar/configs/config-1")
+      .send({ image_url: DATA_URL_PNG });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("著作権キャラクターが検出されました");
+    expect(uploadedPaths).toHaveLength(0);
+    // is_defaultチェックの1回のみで、UPDATEには到達しない
+    expect(dbQuery).toHaveBeenCalledTimes(1);
   });
 
   it("super_admin + ?tenant=tenant-b → 保存パスが tenant-b/ で始まる", async () => {

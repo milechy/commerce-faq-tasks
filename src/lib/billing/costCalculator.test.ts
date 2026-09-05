@@ -1003,14 +1003,16 @@ describe('NON_BILLABLE_FEATURES', () => {
   });
 
   // S4(GID 1218086647623729系): FEATURE_BILLING_DIMENSION の 'none' エントリから
-  // 導出するようになった後も、従来と同じ5要素のままであることを固定する。
-  it('FEATURE_BILLING_DIMENSIONから導出した後も従来と同じ5要素のまま', () => {
-    expect(NON_BILLABLE_FEATURES.size).toBe(5);
+  // 導出するようになった後も、要素が意図せず増減しないことを固定する。
+  // COPY-1(2026-09-05)で avatar_image_moderation を追加し5→6要素になった。
+  it('FEATURE_BILLING_DIMENSIONから導出した後も従来と同じ6要素のまま', () => {
+    expect(NON_BILLABLE_FEATURES.size).toBe(6);
     expect([...NON_BILLABLE_FEATURES].sort()).toEqual([
       'admin_ai_assist',
       'admin_engagement_suggest',
       'admin_option_estimator',
       'admin_tuning',
+      'avatar_image_moderation',
       'sai_agent',
     ]);
   });
@@ -1034,7 +1036,7 @@ describe('FEATURE_BILLING_DIMENSION', () => {
     expect(FEATURE_BILLING_DIMENSION.anam_session).toBe('avatar');
   });
 
-  it('NON_BILLABLE_FEATURESの5機能は"none"次元', () => {
+  it('NON_BILLABLE_FEATURESの各機能は"none"次元', () => {
     for (const feature of NON_BILLABLE_FEATURES) {
       expect(FEATURE_BILLING_DIMENSION[feature as keyof typeof FEATURE_BILLING_DIMENSION]).toBe('none');
     }
@@ -1062,13 +1064,13 @@ describe('FEATURE_BILLING_DIMENSION', () => {
   // 異常検知の対象にすら乗らない)。
   //
   // 制約は DROP+ADD で置き換わる累積 migration なので、最後に更新された
-  // ファイル(2026-09時点は migration_agent_search_feature.sql)が現在の
-  // 完全なリストを持つ。次に featureUsed を追加する人は、この migration ファイルの
-  // 隣に新しい migration_*.sql を足して制約を置き換えること
-  // (このテストの読み先を書き換えるのではなく、新しいファイルを追加する形)。
-  it('FEATURE_BILLING_DIMENSION のキーは usage_logs_feature_used_check 制約(migration_agent_search_feature.sql)の値と1対1', () => {
+  // ファイル(2026-09-05時点は migration_avatar_image_moderation_feature.sql)が
+  // 現在の完全なリストを持つ。次に featureUsed を追加する人は、この migration
+  // ファイルの隣に新しい migration_*.sql を足して制約を置き換え、この読み先を
+  // その新しいファイルに更新すること(過去の migration ファイルの中身は書き換えない)。
+  it('FEATURE_BILLING_DIMENSION のキーは usage_logs_feature_used_check 制約(migration_avatar_image_moderation_feature.sql)の値と1対1', () => {
     const migrationSql = readFileSync(
-      join(__dirname, 'migration_agent_search_feature.sql'),
+      join(__dirname, 'migration_avatar_image_moderation_feature.sql'),
       'utf8',
     );
     const match = migrationSql.match(/CHECK \(feature_used IN \(([\s\S]*?)\)\)/);

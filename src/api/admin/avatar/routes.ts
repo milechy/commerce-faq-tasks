@@ -12,6 +12,7 @@ import { trackUsage } from '../../../lib/billing/usageTracker';
 import { tenantHasFeature, queryTenantPlan, planHasFeature } from '../../../lib/billing/planFeatures';
 import { resolveEffectiveTenantId } from '../../middleware/roleAuth';
 import { adoptVoiceForConfig } from './fishVoiceModel';
+import { checkImageForInfringement } from '../../../lib/imageContentGuard';
 
 // ---------------------------------------------------------------------------
 // Supabase Storage: base64 data URL → 公開 HTTP URL
@@ -446,6 +447,14 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
       // base64 data URL → Supabase Storage HTTP URL に変換
       let resolvedImageUrl = image_url ?? null;
       if (resolvedImageUrl?.startsWith("data:")) {
+        // COPY-1: アップロード画像そのものの著作権/NSFWチェック（プロンプト側と非対称だった穴）
+        const moderation = await checkImageForInfringement(resolvedImageUrl, {
+          tenantId: effectiveTenantId,
+          requestId: crypto.randomUUID(),
+        });
+        if (moderation.blocked) {
+          return res.status(400).json({ error: moderation.reason ?? "この画像はアップロードできません" });
+        }
         const uploaded = await uploadBase64ToStorage(
           resolvedImageUrl,
           effectiveTenantId,
@@ -529,6 +538,14 @@ export function registerAvatarConfigRoutes(app: Express, db: any): void {
         // #P0-3と同じ理由: テナントが解決できないままバケット直下へ書き込まない。
         if (!storageTenantId) {
           return res.status(400).json({ error: "テナント情報が取得できません" });
+        }
+        // COPY-1: アップロード画像そのものの著作権/NSFWチェック（プロンプト側と非対称だった穴）
+        const moderation = await checkImageForInfringement(data.image_url, {
+          tenantId: storageTenantId,
+          requestId: crypto.randomUUID(),
+        });
+        if (moderation.blocked) {
+          return res.status(400).json({ error: moderation.reason ?? "この画像はアップロードできません" });
         }
         const uploaded = await uploadBase64ToStorage(
           data.image_url,

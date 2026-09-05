@@ -26,6 +26,8 @@ export function StudioImageSection({
   handleConfirmUpload,
   handleResetUpload,
   fileInputRef,
+  rightsConfirmed,
+  setRightsConfirmed,
 }: {
   isDefault: boolean;
   imageUrl: string;
@@ -47,6 +49,8 @@ export function StudioImageSection({
   handleConfirmUpload: () => void;
   handleResetUpload: () => void;
   fileInputRef: RefObject<HTMLInputElement | null>;
+  rightsConfirmed: boolean;
+  setRightsConfirmed: (v: boolean) => void;
 }) {
   const { lang } = useLang();
 
@@ -109,6 +113,29 @@ export function StudioImageSection({
         ))}
       </div>
 
+      {/* COPY-2: 第三者の権利を侵害しないことの確認（画像生成/アップロード確定の前提条件） */}
+      <label style={{
+        display: "flex",
+        alignItems: "flex-start",
+        gap: 8,
+        marginBottom: 16,
+        fontSize: 13,
+        color: "var(--muted-foreground)",
+        cursor: "pointer",
+      }}>
+        <input
+          type="checkbox"
+          checked={rightsConfirmed}
+          onChange={(e) => setRightsConfirmed(e.target.checked)}
+          style={{ marginTop: 2 }}
+        />
+        <span>
+          {lang === "ja"
+            ? "この画像が第三者の著作権・商標権・肖像権を侵害しないことを確認しました"
+            : "I confirm this image does not infringe any third party's copyright, trademark, or right of publicity"}
+        </span>
+      </label>
+
       {/* AIで生成タブ */}
       {imageTab === 'generate' && (
         <>
@@ -128,11 +155,11 @@ export function StudioImageSection({
           </div>
           <button
             onClick={() => void handleGenerateImage()}
-            disabled={generatingImage || !imageDesc.trim()}
+            disabled={generatingImage || !imageDesc.trim() || !rightsConfirmed}
             style={{
               ...BTN_PRIMARY,
-              opacity: generatingImage || !imageDesc.trim() ? 0.5 : 1,
-              cursor: generatingImage || !imageDesc.trim() ? "not-allowed" : "pointer",
+              opacity: generatingImage || !imageDesc.trim() || !rightsConfirmed ? 0.5 : 1,
+              cursor: generatingImage || !imageDesc.trim() || !rightsConfirmed ? "not-allowed" : "pointer",
             }}
           >
             {generatingImage
@@ -242,6 +269,7 @@ export function StudioImageSection({
                 <button
                   type="button"
                   onClick={handleConfirmUpload}
+                  disabled={!rightsConfirmed}
                   style={{
                     marginTop: 16,
                     padding: "14px 32px",
@@ -250,7 +278,8 @@ export function StudioImageSection({
                     border: "none",
                     borderRadius: 8,
                     fontSize: 16,
-                    cursor: "pointer",
+                    cursor: rightsConfirmed ? "pointer" : "not-allowed",
+                    opacity: rightsConfirmed ? 1 : 0.5,
                     width: "100%",
                   }}
                 >
