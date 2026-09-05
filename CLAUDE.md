@@ -146,6 +146,11 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
   固定費 ¥22,500/月 はテナント数で割るため、**安いプランで頭数が増えると全員の按分負担が下がる** —
   入門プランは値引きではなく、既存 Growth の採算も改善する施策である
   （Growth 2社のみ：総粗利 ¥19,400/月 → Standard 3社追加：総粗利 ¥42,830/月）。
+- **資料オファー（会話内資料提示）は、確度の低い訪問者を離脱させず受け止めるためのLayer 0の一形態である。**
+  テナントが用意する営業資料（PDF/外部URL）を、AIが会話の文脈から判断して1会話1回まで提示する。
+  **書籍PDF（Phase47 Book RAG、R2C運用限定）とは完全に別物** — 資料はAIの回答知識にせず、検索・埋め込みの
+  対象にしない。資料は「そのままダウンロード/閲覧させる静的アセット」であり、書籍RAGの200字抜粋制約とは
+  無関係。1テナント1件固定から始める（詳細: `docs/RESOURCE_OFFER_REQUIREMENTS.md`）。
 
 ## 管理UIの構造（チャット・ファースト移行中の不変ルール）
 
@@ -206,6 +211,9 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
 | API キーのドメイン束縛 | **既存の `tenant_api_keys.allowed_origins TEXT[]`**（`src/migrations/phase_security_level3.sql` でキー単位に追加済み。「空=テナント設定に委譲」）。第2の許可リストを作らない |
 | Origin 検証 | `src/api/middleware/originCheck.ts`。**`src/middleware/` にも別のミドルウェア群がある**（`inputSanitizer` / `promptFirewall` 等）。ディレクトリを取り違えると、検証を通したつもりで通っていない |
 | プロビジョニングのメール送信 | 既存 `supabaseAdmin.auth.admin.inviteUserByEmail`（`src/api/admin/tenants/routes.ts` の招待経路）。**専用のメール基盤はこのリポジトリに存在しない**。nodemailer / SendGrid 等を新規導入しない |
+| テナント資料（ホワイトペーパー等）の管理 | `src/api/admin/resources/`（routes.ts + resourcesRepository.ts + migration_tenant_resources.sql）。**書籍PDF取り込み経路（`POST /v1/admin/knowledge/book-pdf`）とは別物、混在させない**（詳細: `docs/RESOURCE_OFFER_REQUIREMENTS.md`） |
+| 資料アップロード時のコンテンツモデレーション | `src/lib/resourceContentGuard.ts`（`imageContentGuard.ts` と同型、`callGeminiJudge()` を再利用、fail-open）。PDFテキスト抽出は `pdf-parse` を直接呼ぶ新関数を使い、`book-pipeline/pdfExtractor.ts` の `extractPdfText()`（書籍PDF復号に結合）は流用しない |
+| 顧客向け会話での資料オファー判断 | `src/agent/orchestrator/sales/` 配下、既存 `ProposeIntent` 等と同型の構造化出力に `resourceOffer` を追加。顧客向けチャットには native tool-calling 機構が無いため新設しない |
 
 **新規ファイルを作ってよいのは**、テスト可能な純関数として切り出す場合のみ。
 その場合も `confirmPolicy.ts` / `agentAuditLog.ts` と同じ粒度・同じディレクトリに置き、隣に `*.test.ts` を作る。
@@ -664,6 +672,20 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
     なお**プロビジョニングトークンを `SUPABASE_JWT_SECRET` で署名しない**（→ 27）、
     **認証前のレートリミッタを単一バケットにしない**（→ 28。`trust proxy` 未設定のため `req.ip` は常に
     `127.0.0.1`。`X-Real-IP` を使う）。
+64. **資料（ホワイトペーパー等）をAIの回答生成の知識源にする、または書籍PDF取り込みパイプラインに混入させる。**
+    資料は静的な配布アセットであり、書籍RAG（R2C運用限定・200字抜粋制約）とは別の概念。同じアップロード
+    導線に見えても、pgvector/Elasticsearchへの埋め込み・索引投入関数を資料ハンドラから呼ばない
+    （詳細: `docs/RESOURCE_OFFER_REQUIREMENTS.md`）。
+65. **テナントが登録する外部URL（資料リンク等）を検証なしで保存する。**
+    URL形式チェックに加え、内部IP/localhost/プライベートレンジを拒否する（SSRF対策）。
+    `allowed_origins` と同様、ここもfail-openにしない。
+66. **「1テナントN件まで」という制約をアプリ層のバリデーションだけで守ろうとする。**
+    DB制約（UNIQUE等）を伴わない上限は、並行リクエストや直接API叩きで容易に破れる。テナント境界の
+    手書きWHERE句（→ 24）と同じ理由で、**DB制約が唯一の防波堤**になる設計にする。
+67. **バックエンドで構造化データ（カード等）を配線しても、widget側の実描画を後回しにする。**
+    `DialogTurnResult.productCard`（Phase73）は `src/api/chat/route.ts` でAPIレスポンスに載っているが、
+    `public/widget.js` は現在も一切参照しておらず、機能として届いていない（→ 15と同型）。新しい顧客向け
+    カードを追加するときは、**バックエンド配線とwidget描画を同一PRのスコープに含める**ことを必須条件とする。
 
 ## テストの最低ライン
 
@@ -792,6 +814,13 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
   次の応答のシステムプロンプトに実際に入ることを実機で確認する（→ 禁止29）
 - **母数ゼロ・母数1・3往復/4往復の境界**を必ず含める
 - ユーザーがやりそうなイレギュラーな操作15件は `docs/SALES_AGENT_REQUIREMENTS.md` §9-3 に列挙
+- **添付/アップロード系のクライアント検証は、必ずサーバ側でも同じ検証を再実行するテストを書く。**
+  クライアントのみの検証はブラウザの開発者ツールや直接API呼び出しで容易にバイパスされる。
+- **「N件まで」の上限はDB制約とアプリ層の両方が効いていることをテストで固定する。**
+  片方だけのテストでは、もう片方が抜けていても緑になる。
+- **fail-open設計の自動判定機能は、判定APIの障害シミュレーションと「疑わしい」判定の両方を書く。**
+  障害時に処理を止めないことと、疑わしい場合に自動公開しないことは別のテストで担保する
+  （片方だけでは足りない）。
 
 ## 命名・エラーハンドリング
 
@@ -822,6 +851,8 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
 - **実行系（書き込み）の冪等キーは、操作対象＋操作種別から導出する。**
   `request_id` と同じ理由で、時刻や乱数を含めると二重クリック・リトライで業務が2回実行される。
   会話からの実行は再送されやすいため、キーの安定性を実装前に決める。
+- **コンテンツモデレーション関連のカラム/フィールドは `moderation_status` / `moderation_reason` の
+  命名で統一する**（`imageContentGuard.ts` の前例に倣う。独自の命名を新たに考案しない）。
 
 **エラーハンドリング**
 
@@ -873,6 +904,9 @@ R2C は、テナント（店舗・EC事業者）のサイトに1行で埋め込�
   429（レート制限）を同じ文言にまとめると、利用者は「動かない」以外の情報を得られない。
 - **プロビジョニングの状態は `pending` / `verified` / `expired` / `not_found` を区別する**（→ 20）。
   「トークンが無い」と「期限が切れた」を同じ応答にすると、再送導線を出せない。
+- **テナントが作成したエンドユーザー向けコンテンツ（資料含む）は、アップロード直後は
+  `is_published=false` が既定。** 「自動生成物だから」ではなく「エンドユーザーに出るものだから」
+  確認を挟む、という判断軸を統一する（→ 5）。
 
 ## Security Middleware Order (src/index.ts)
 1. requestIdMiddleware (global)
