@@ -133,6 +133,13 @@ export const WRITE_TOOL_RISK_TIERS: Record<string, RiskTier> = {
   // CP-3: 直接課金は発生しないが、Stripe Checkoutという外部システムへユーザーを
   // 送出しカード情報の入力に進ませる操作(highの定義「外部システムへ何かを送出する」に該当)。
   start_billing_checkout: 'high',
+
+  // 外部URLの資料(顧客に提示しうる永続コンテンツ)を1件登録・上書きする。
+  // is_published=false で保存するため公開はされないが、save_faq と同じ「永続コンテンツを
+  // 作成・変更する」操作でmedium。PDFの登録はこのツールを経由しない(直接アップロード)。
+  upload_resource: 'medium',
+  // 登録済み資料の完全削除。不可逆な破棄で delete_faq と同じ階層。
+  delete_resource: 'high',
 };
 
 // 書き込みを伴わないツール。DBへの書き込みも外部への副作用のある送出も行わない。
@@ -185,6 +192,8 @@ export const NON_WRITE_TOOLS: readonly string[] = [
   // GID 1218167748520497 (L3-3): sitemap.xmlからFAQ候補URLを提示するだけ。
   // FAQ生成もDB書き込みも行わない(生成は別途suggest_faq_import_from_urlsで行う)。
   'discover_faq_urls_from_sitemap',
+  // 登録済み資料(1テナント1件)の状態を返すだけの読み取り専用ツール。
+  'get_resource',
 ];
 
 /**

@@ -6942,3 +6942,189 @@ describe("CopilotPreviewPage — ウィジェット設置位置カード(L3-1b)"
     expect(offsetXSlider().max).toBe("320");
   });
 });
+
+describe("CopilotPreviewPage — 資料オファーカード(get_resource/PDFの直接アップロード/公開)", () => {
+  const NOT_EXISTS_CARD = {
+    kind: "resource",
+    exists: false,
+    id: null,
+    title: null,
+    description: null,
+    fileType: null,
+    moderationStatus: null,
+    moderationReason: null,
+    rightsConfirmed: false,
+    isPublished: false,
+    downloadUrl: null,
+  };
+
+  const EXISTS_UNPUBLISHED_CARD = {
+    kind: "resource",
+    exists: true,
+    id: "res-1",
+    title: "サービス紹介資料",
+    description: null,
+    fileType: "external_url",
+    moderationStatus: "approved",
+    moderationReason: null,
+    rightsConfirmed: true,
+    isPublished: false,
+    downloadUrl: "https://example.com/whitepaper.pdf",
+  };
+
+  function mockAgent(card: Record<string, unknown>) {
+    vi.mocked(authFetch).mockReset();
+    mockNavigate.mockReset();
+    let agentCalls = 0;
+    vi.mocked(authFetch).mockImplementation((url: string, init?: RequestInit) => {
+      if (isBadgeUrl(url)) return mockEmptyBadges();
+      if (String(url).includes("/v1/admin/my-tenant")) {
+        return mockOk({ onboarding_completed_at: "2026-01-01T00:00:00Z" });
+      }
+      if (isUnreadFeedbackUrl(url)) return mockNoFeedbackReplies();
+      if (String(url).includes("/v1/admin/resources/publish") && String(init?.method) === "POST") {
+        return mockOk({ ...EXISTS_UNPUBLISHED_CARD, is_published: true, download_url: EXISTS_UNPUBLISHED_CARD.downloadUrl });
+      }
+      agentCalls += 1;
+      if (agentCalls === 1) return mockOk({ reply: "今週も順調です。", actions: [] });
+      if (agentCalls === 2) {
+        return mockOk({
+          reply: "資料の状況です。",
+          actions: [{ tool: "get_resource", result: "資料の状況です。", card }],
+        });
+      }
+      return mockOk({ reply: "了解しました。", actions: [] });
+    });
+  }
+
+  async function send(text: string) {
+    renderPage();
+    await waitForBootstrapSendStarted();
+    fireEvent.change(getComposer(), { target: { value: text } });
+    fireEvent.click(screen.getByLabelText("送信"));
+  }
+
+  async function renderCard(card: Record<string, unknown>) {
+    mockAgent(card);
+    await send("資料の登録状況を教えて");
+    await waitFor(() => expect((screen.getByLabelText("送信") as HTMLButtonElement).disabled).toBe(false));
+  }
+
+  function rightsCheckbox(): HTMLInputElement {
+    return screen.getByRole("checkbox") as HTMLInputElement;
+  }
+  function uploadButton(): HTMLButtonElement {
+    return screen.getByRole("button", { name: /PDFをアップロードする|アップロードしています/ }) as HTMLButtonElement;
+  }
+
+  it("未登録の場合でもカードが出て、動線(アップロード操作)が塞がれない", async () => {
+    await renderCard(NOT_EXISTS_CARD);
+
+    expect(await screen.findByText("資料はまだ登録されていません")).toBeTruthy();
+    expect(uploadButton()).toBeTruthy();
+  });
+
+  it("登録済みの場合はタイトル・種類・公開状況・資料へのリンクを表示する", async () => {
+    await renderCard(EXISTS_UNPUBLISHED_CARD);
+
+    expect(await screen.findByText("資料「サービス紹介資料」")).toBeTruthy();
+    expect(screen.getByText("外部URL")).toBeTruthy();
+    expect(screen.getByText("未公開")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "資料を開く" })).toBeTruthy();
+  });
+
+  it("著作権確認チェックボックスは既定で未チェックで、PDFアップロードボタンが無効", async () => {
+    await renderCard(NOT_EXISTS_CARD);
+    await screen.findByText("資料はまだ登録されていません");
+
+    expect(rightsCheckbox().checked).toBe(false);
+    expect(uploadButton().disabled).toBe(true);
+  });
+
+  it("チェックを入れるとアップロードボタンが有効になり、外すと再び無効になる", async () => {
+    await renderCard(NOT_EXISTS_CARD);
+    await screen.findByText("資料はまだ登録されていません");
+
+    fireEvent.click(rightsCheckbox());
+    expect(uploadButton().disabled).toBe(false);
+
+    fireEvent.click(rightsCheckbox());
+    expect(uploadButton().disabled).toBe(true);
+  });
+
+  it("チェック無しでファイル選択ダイアログを開いても通信は始まらない(クリックはできるが選択後にサーバ側と同じ理由で断られる想定でボタン自体がdisabled)", async () => {
+    await renderCard(NOT_EXISTS_CARD);
+    await screen.findByText("資料はまだ登録されていません");
+
+    // disabled なボタンなのでクリックしても何も起きないことを確認する
+    fireEvent.click(uploadButton());
+    expect(vi.mocked(authFetch).mock.calls.some(([url]) => String(url).includes("/v1/admin/resources"))).toBe(false);
+  });
+
+  it("チェック済みでPDFを選ぶとPUT /v1/admin/resourcesへ直接送信され、成功すると資料の状態が更新される", async () => {
+    MockXHR.instances = [];
+    vi.stubGlobal("XMLHttpRequest", MockXHR as unknown as typeof XMLHttpRequest);
+    try {
+      await renderCard(NOT_EXISTS_CARD);
+      await screen.findByText("資料はまだ登録されていません");
+
+      fireEvent.click(rightsCheckbox());
+      const fileInput = document.querySelector('input[type="file"][accept="application/pdf"]') as HTMLInputElement;
+      fireEvent.change(fileInput, { target: { files: [makeFile("サービス紹介.pdf", "application/pdf")] } });
+
+      await waitFor(() => expect(MockXHR.instances.length).toBe(1));
+      const xhr = MockXHR.instances[0]!;
+      expect(xhr.open).toHaveBeenCalledWith("PUT", "http://localhost:3100/v1/admin/resources");
+      expect(await screen.findByText("アップロードしています…")).toBeTruthy();
+
+      xhr.fireLoad(201, {
+        id: "res-2",
+        title: "サービス紹介",
+        description: null,
+        file_type: "pdf",
+        moderation_status: "pending",
+        moderation_reason: null,
+        rights_confirmed: true,
+        is_published: false,
+        download_url: "https://storage.example.com/res-2.pdf",
+      });
+
+      expect(await screen.findByText("資料「サービス紹介」")).toBeTruthy();
+      expect(screen.getByText("PDF")).toBeTruthy();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("公開する操作は、登録済み・未公開・モデレーション問題なしのときだけ表示される", async () => {
+    await renderCard(EXISTS_UNPUBLISHED_CARD);
+    await screen.findByText("資料「サービス紹介資料」");
+
+    expect(screen.getByRole("button", { name: "公開する" })).toBeTruthy();
+  });
+
+  it("モデレーションが要確認(rejected)のときは公開するボタンを出さない", async () => {
+    await renderCard({ ...EXISTS_UNPUBLISHED_CARD, moderationStatus: "rejected", moderationReason: "著作権表示が確認できません" });
+    await screen.findByText("資料「サービス紹介資料」");
+
+    expect(screen.queryByRole("button", { name: "公開する" })).toBeNull();
+    expect(screen.getByText("著作権表示が確認できません")).toBeTruthy();
+  });
+
+  it("公開するを押すとPOST /v1/admin/resources/publishが呼ばれ、成功すると公開中の表示になる", async () => {
+    await renderCard(EXISTS_UNPUBLISHED_CARD);
+    await screen.findByText("資料「サービス紹介資料」");
+
+    fireEvent.click(screen.getByRole("button", { name: "公開する" }));
+
+    await waitFor(() =>
+      expect(
+        vi.mocked(authFetch).mock.calls.some(
+          ([url, init]) => String(url).includes("/v1/admin/resources/publish") && String((init as RequestInit)?.method) === "POST",
+        ),
+      ).toBe(true),
+    );
+    expect(await screen.findByText("公開中")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "公開する" })).toBeNull();
+  });
+});

@@ -78,7 +78,9 @@ function isPrivateOrLocalHostname(hostname: string): boolean {
   return false;
 }
 
-function isValidExternalResourceUrl(value: string): boolean {
+// 資料オファーのCopilot UIツール(actionExecutor.ts の upload_resource)が外部URLの
+// LLM経由入力を同じ基準で検証するために export する(SSRFガードの二重実装を避ける)。
+export function isValidExternalResourceUrl(value: string): boolean {
   let parsed: URL;
   try {
     parsed = new URL(value);

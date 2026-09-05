@@ -69,6 +69,15 @@ import {
   DEFAULT_WIDGET_OFFSET,
   type WidgetPosition,
 } from './widgetPlacement';
+import { randomUUID } from 'crypto';
+import {
+  getResource,
+  upsertResource,
+  deleteResource,
+  getResourcePublicUrl,
+  type ResourceModerationStatus,
+} from '../resources/resourcesRepository';
+import { isValidExternalResourceUrl } from '../resources/routes';
 
 // 有人返信1件の最大文字数。POST /v1/admin/chat-history/sessions/:id/reply の
 // zod スキーマ(z.string().min(1).max(2000))と揃える。
@@ -106,6 +115,13 @@ function isConfirmed(raw: unknown): boolean {
   if (raw === true) return true;
   return typeof raw === 'string' && raw.trim().toLowerCase() === 'true';
 }
+
+// get_resource の一言サマリーに使う、資料の自動モデレーション状態の店主向け語彙。
+const RESOURCE_MODERATION_LABEL: Record<ResourceModerationStatus, string> = {
+  pending: '未検査',
+  approved: '問題なし',
+  rejected: '要確認',
+};
 
 // set_faq_published / set_avatar_feature の真偽値引数を解析する。isConfirmed と同じ理由
 // (Groqがbooleanを文字列化して送ってくることがある)で、真偽値そのものに加え "true"/"false"
@@ -777,6 +793,27 @@ export type WidgetPlacementCardPayload = {
   defaultOffsetY: number;
 };
 
+// get_resource/upload_resource が返す、資料(1テナント1件固定)の状態カード。
+// 未登録の場合も exists: false で返す(このカードだけで「登録済みか」「あと何をすれば
+// 公開できるか」が完結するようにするため。禁止15: 動線として閉じていないツールを作らない)。
+// PDFはこのツール経由では登録しない(チャット欄の📎からの直接アップロードのみ)ため、
+// downloadUrl はサーバ側で解決済みの1本(storage_pathならStorageの公開URL、
+// external_urlならそのまま)にして、フロント側でstorage_path/external_urlを
+// 組み立て直させない。
+export type ResourceCardPayload = {
+  kind: 'resource';
+  exists: boolean;
+  id: string | null;
+  title: string | null;
+  description: string | null;
+  fileType: 'pdf' | 'external_url' | null;
+  moderationStatus: ResourceModerationStatus | null;
+  moderationReason: string | null;
+  rightsConfirmed: boolean;
+  isPublished: boolean;
+  downloadUrl: string | null;
+};
+
 export type ActionCardPayload =
   | LegacyLinkCardPayload
   | AvatarPresetCardPayload
@@ -795,7 +832,8 @@ export type ActionCardPayload =
   | KnowledgeAttributionCardPayload
   | BillingSummaryCardPayload
   | PlanChangedCardPayload
-  | WidgetPlacementCardPayload;
+  | WidgetPlacementCardPayload
+  | ResourceCardPayload;
 
 // ツール結果は既定では素の文字列で、構造化データを添えるツールだけが
 // { text, card } 形を返す。card は text の置き換えではなく追加である
@@ -5373,6 +5411,137 @@ export async function executeToolCall(
       } catch (err) {
         logger.warn('[actionExecutor] get_tuning_rule_effect failed', err);
         return truncate('ルール効果の取得に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // 資料オファー(docs/RESOURCE_OFFER_REQUIREMENTS.md)。1テナント1件固定。
+    // PDFの登録はチャット欄への直接アップロード(PUT /v1/admin/resources)のみで、
+    // このツール経由では扱わない(バイナリはツール結果の500字に収まらない。
+    // PDF取り込みと同じ理由)。
+    case 'get_resource': {
+      try {
+        const resource = await getResource(db, tenantId);
+        if (!resource) {
+          return {
+            text: truncate('資料はまだ登録されていません。PDFはチャット欄の📎から、外部URLの資料は upload_resource で登録できます'),
+            card: {
+              kind: 'resource',
+              exists: false,
+              id: null,
+              title: null,
+              description: null,
+              fileType: null,
+              moderationStatus: null,
+              moderationReason: null,
+              rightsConfirmed: false,
+              isPublished: false,
+              downloadUrl: null,
+            },
+          };
+        }
+        const downloadUrl = resource.storage_path ? getResourcePublicUrl(resource.storage_path) : resource.external_url;
+        return {
+          text: truncate(
+            `資料「${resource.title}」が登録されています(${resource.is_published ? '公開中' : '未公開'}・` +
+            `モデレーション: ${RESOURCE_MODERATION_LABEL[resource.moderation_status]})`,
+          ),
+          card: {
+            kind: 'resource',
+            exists: true,
+            id: resource.id,
+            title: resource.title,
+            description: resource.description,
+            fileType: (resource.file_type as 'pdf' | 'external_url' | null) ?? null,
+            moderationStatus: resource.moderation_status,
+            moderationReason: resource.moderation_reason,
+            rightsConfirmed: resource.rights_confirmed,
+            isPublished: resource.is_published,
+            downloadUrl,
+          },
+        };
+      } catch (err) {
+        logger.warn('[actionExecutor] get_resource failed', err);
+        return truncate('資料の取得に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // 外部URLの資料の登録・上書き。PDFはこのcaseでは扱わない(上のコメント参照)。
+    case 'upload_resource': {
+      const title = String(args['title'] ?? '').trim().slice(0, 200);
+      const externalUrl = String(args['external_url'] ?? '').trim();
+      const rightsConfirmed = isConfirmed(args['rights_confirmed']);
+      const confirmed = isConfirmed(args['confirmed']);
+
+      if (!title || !externalUrl) {
+        return truncate('title と external_url は必須です');
+      }
+      // 要件書5.2・CLAUDE.md禁止5: 著作権確認はハードゲート。モデルの自己申告
+      // (rights_confirmed=true)を無条件には信頼しないが、チャット経由には
+      // チェックボックスに相当するUIが無いため、ここでの明示フラグが唯一の砦になる。
+      if (!rightsConfirmed) {
+        return truncate('第三者の著作権等を侵害しないことの確認が必要です。ユーザーから明確な同意を得てから rights_confirmed=true を指定して再度実行してください');
+      }
+      if (!confirmed) {
+        return truncate('資料の登録には確認が必要です。ユーザーに内容(タイトル・URL)を提示し、同意を得てから confirmed=true で再度呼び出してください');
+      }
+      if (!isValidExternalResourceUrl(externalUrl)) {
+        return truncate('外部URLの形式が正しくないか、利用できないアドレスです(http/httpsのみ、社内・ローカルアドレスは登録できません)');
+      }
+
+      try {
+        const existing = await getResource(db, tenantId);
+        const resourceId = existing?.id ?? randomUUID();
+        const saved = await upsertResource(db, {
+          id: resourceId,
+          tenantId,
+          title,
+          description: null,
+          storagePath: null,
+          externalUrl,
+          fileType: 'external_url',
+          moderationStatus: 'pending',
+          moderationReason: null,
+          rightsConfirmed,
+        });
+        return {
+          text: truncate(`資料「${saved.title}」を登録しました。まだ公開はされていません。公開するには別途「公開する」操作が必要です`),
+          card: {
+            kind: 'resource',
+            exists: true,
+            id: saved.id,
+            title: saved.title,
+            description: saved.description,
+            fileType: 'external_url',
+            moderationStatus: saved.moderation_status,
+            moderationReason: saved.moderation_reason,
+            rightsConfirmed: saved.rights_confirmed,
+            isPublished: saved.is_published,
+            downloadUrl: saved.external_url,
+          },
+        };
+      } catch (err) {
+        logger.warn('[actionExecutor] upload_resource failed', err);
+        return truncate('資料の登録に失敗しました');
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    case 'delete_resource': {
+      const confirmed = isConfirmed(args['confirmed']);
+      if (!confirmed) {
+        return truncate('資料の削除には確認が必要です。confirmed=true を指定して再度実行してください');
+      }
+      try {
+        const deleted = await deleteResource(db, tenantId);
+        if (!deleted) {
+          return truncate('資料が見つかりません');
+        }
+        return truncate('資料を削除しました');
+      } catch (err) {
+        logger.warn('[actionExecutor] delete_resource failed', err);
+        return truncate('資料の削除に失敗しました');
       }
     }
 

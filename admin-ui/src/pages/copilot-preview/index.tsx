@@ -31,7 +31,7 @@ import {
   AGENT_CHAT_HISTORY_MAX_ENTRIES,
   useAgentChatTransport,
 } from "../../lib/useAgentChatTransport";
-import type { AnsweredFrom, WeeklySummaryAgentActionCard, RuleEffectAgentActionCard, AnalyticsTrendAgentActionCard, AbTestResultsAgentActionCard, KnowledgeAttributionAgentActionCard, BillingSummaryAgentActionCard, FaqImportPreviewAgentActionCard, PlanChangedAgentActionCard, WidgetPlacementAgentActionCard } from "../../lib/useAgentChatTransport";
+import type { AnsweredFrom, WeeklySummaryAgentActionCard, RuleEffectAgentActionCard, AnalyticsTrendAgentActionCard, AbTestResultsAgentActionCard, KnowledgeAttributionAgentActionCard, BillingSummaryAgentActionCard, FaqImportPreviewAgentActionCard, PlanChangedAgentActionCard, WidgetPlacementAgentActionCard, ResourceAgentActionCard } from "../../lib/useAgentChatTransport";
 // アバター画像候補のプロンプト組み立ては旧UIウィザードと同じ関数を使う(再実装しない)。
 // チャットは選択肢を集めないため、固定の標準的な選択で呼ぶ。
 import { buildAvatarPrompt, type AvatarPromptInput } from "../../lib/buildAvatarPrompt";
@@ -47,7 +47,9 @@ import {
   defaultBookTitle,
   uploadBookPdfWithProgress,
   validateBookPdfFile,
+  validateResourceFile,
   type BookPdfRejection,
+  type ResourceFileRejection,
 } from "../../lib/bookPdfUpload";
 import { getAccessToken } from "../../components/knowledge/shared";
 import { useAuth, type OnboardingStageFlags } from "../../auth/useAuth";
@@ -284,7 +286,16 @@ type Card =
   // GID 1218167820775294 (L3-1a): get_widget_placement の現在値提示カード(読み取り専用)。
   // フィールド形状は WidgetPlacementAgentActionCard(useAgentChatTransport.ts)と同一に保つ
   // (weeklySummaryと同じ作法)。
-  | ({ kind: "widgetPlacement" } & Omit<WidgetPlacementAgentActionCard, "kind">);
+  | ({ kind: "widgetPlacement" } & Omit<WidgetPlacementAgentActionCard, "kind">)
+  // 資料オファー(get_resource/upload_resource)。フィールド形状は
+  // ResourceAgentActionCard(useAgentChatTransport.ts)と同一に保つ(weeklySummaryと同じ作法)。
+  // PDFの直接アップロード(チャット欄への添付ではなく、このカード上のボタンから開始する)
+  // だけはツール経由ではなくPUT /v1/admin/resourcesへの直接fetchのため、進行状態を
+  // このカード自身に持たせる(pdfUpload/avatarPhotoUploadと同じ3状態の作法)。
+  | ({ kind: "resource" } & Omit<ResourceAgentActionCard, "kind"> & {
+      uploadStatus?: { status: "uploading" | "success" | "error"; fileName: string; message?: string };
+      publishStatus?: { status: "publishing" | "error"; message?: string };
+    });
 
 // 優先度3段階(lib/tuningPriority.ts)の店主向け表示ラベル。rule / rulesList カードで共有する。
 const TIER_LABEL: Record<"low" | "normal" | "high", string> = { low: "低", normal: "普通", high: "高" };
@@ -372,6 +383,9 @@ const REAL_TOOL_LABEL: Record<string, string> = {
   commit_faq_import: "FAQの一括登録",
   discard_faq_import: "FAQ一括提案の破棄",
   publish_faq_drafts: "下書きFAQの公開",
+  get_resource: "資料の登録状況の取得",
+  upload_resource: "資料(外部URL)の登録",
+  delete_resource: "資料の削除",
 };
 
 // 「進捗」としてカウントしてよいツール名。
@@ -430,6 +444,8 @@ const REAL_WRITE_TOOLS = new Set([
   // confirmPolicy.test.ts はこの一覧とWRITE_TOOL_RISK_TIERSの完全一致(双方向)を
   // 検査するため、highに分類した以上ここにも含める(下記コメント参照)。
   "start_billing_checkout",
+  "upload_resource",
+  "delete_resource",
 ]);
 
 // 確認待ち/連鎖ブロックの判定に使う部分一致マーカー。サーバ側の実体は
@@ -585,6 +601,17 @@ const PDF_UPLOAD_ZIP_EMPTY_ERROR = "ZIPの中に取り込めるPDFが見つか�
 // 出さず、優しい日本語で断る。バックエンド(bookPdfRoutes.ts)の拒否文言とも揃える。
 const PDF_UPLOAD_TENANT_RESTRICTED_MESSAGE =
   "この機能は現在ご利用いただけません。内容を文章で教えていただければ、代わりに登録いたします。";
+
+// ─── 資料オファーのPDF受付判定(docs/RESOURCE_OFFER_REQUIREMENTS.md) ───────────
+// 書籍PDFと同じisPdfFileを使うが、上限(20MB)・ZIP不可の点が異なるため別の
+// 判定関数(validateResourceFile)・別の案内文を使う。通信エラー文言は書籍PDFと
+// 同じ内容(「ファイルを送れなかった」という体験は共通)なので複製しない。
+const RESOURCE_REJECTION_MESSAGE: Record<ResourceFileRejection, string> = {
+  type: "PDFファイルを送ってください。",
+  size: "PDFは1ファイル20MBまでです。分割してから送ってみてください。",
+};
+const RESOURCE_RIGHTS_NOT_CONFIRMED_ERROR = "第三者の著作権等を侵害しないことの確認が必要です。チェックを入れてからお試しください。";
+const RESOURCE_PUBLISH_GENERIC_ERROR = "資料の公開に失敗しました。少し時間をおいてもう一度お試しください。";
 
 const AVATAR_GENERATE_GENERIC_ERROR = "画像を生成できませんでした。少し時間をおいてもう一度お試しください。";
 const AVATAR_PREMIUM_GENERATE_GENERIC_ERROR = "高品質画像を生成できませんでした。少し時間をおいてもう一度お試しください。";
@@ -1082,6 +1109,14 @@ export default function CopilotPreviewPage() {
           id: nextId(),
           role: "ai",
           card: { kind: "widgetPlacement", position, offsetX, offsetY, defaultPosition, defaultOffsetX, defaultOffsetY },
+        };
+      }
+      if (a.card?.kind === "resource") {
+        const { exists, id, title, description, fileType, moderationStatus, moderationReason, rightsConfirmed, isPublished, downloadUrl } = a.card;
+        return {
+          id: nextId(),
+          role: "ai",
+          card: { kind: "resource", exists, id, title, description, fileType, moderationStatus, moderationReason, rightsConfirmed, isPublished, downloadUrl },
         };
       }
       // D6: 優先度を含め、正規表現では拾えなかった内容(複数行の対応方針)もそのまま運ぶ。
@@ -1887,6 +1922,121 @@ export default function CopilotPreviewPage() {
     }
   };
 
+  // ─── 資料オファー: PDFの直接アップロード・公開(docs/RESOURCE_OFFER_REQUIREMENTS.md) ──
+  // PDFはツール(upload_resource)経由にしない(バイナリはツール結果の500字に収まらない。
+  // PDF取り込みと同じ理由)。「公開する」も同じ理由でツール経由にしない — 単純な状態変更
+  // で、LLMの文脈判断を必要としないため(uploadAvatarPhotoと同じ「落とした/押した行為が
+  // 意思表示そのもの」の作法)。どちらも既存の PUT/POST /v1/admin/resources* を直接叩く
+  // (Phase2で実装済みの契約は変えない)。
+  const resourceUploadUrl = isSuperAdmin && scopedTenantId
+    ? `${API_BASE}/v1/admin/resources?tenant=${encodeURIComponent(scopedTenantId)}`
+    : `${API_BASE}/v1/admin/resources`;
+  const resourcePublishUrl = isSuperAdmin && scopedTenantId
+    ? `${API_BASE}/v1/admin/resources/publish?tenant=${encodeURIComponent(scopedTenantId)}`
+    : `${API_BASE}/v1/admin/resources/publish`;
+
+  const updateResourceCard = useCallback((msgId: number, patch: Partial<Extract<Card, { kind: "resource" }>>) => {
+    setMsgs((prev) =>
+      prev.map((m) =>
+        m.id === msgId && m.card?.kind === "resource" ? { ...m, card: { ...m.card, ...patch } } : m,
+      ),
+    );
+  }, []);
+
+  type ResourceUploadResponse = {
+    id: string;
+    title: string;
+    description: string | null;
+    file_type: "pdf" | "external_url";
+    moderation_status: "pending" | "approved" | "rejected";
+    moderation_reason: string | null;
+    rights_confirmed: boolean;
+    is_published: boolean;
+    download_url: string | null;
+  };
+
+  const uploadResourcePdf = async (msgId: number, file: File, rightsConfirmed: boolean) => {
+    // 要件書5.2・CLAUDE.md禁止5: チェックボックスはハードゲート。ボタン自体は
+    // disabled になるはずだが、通信する前にもう一段この場で断る(クライアントバイパス対策の
+    // 二重防御。サーバ側の再検証はPUT /v1/admin/resources自体が行う)。
+    if (!rightsConfirmed) {
+      updateResourceCard(msgId, { uploadStatus: { status: "error", fileName: file.name, message: RESOURCE_RIGHTS_NOT_CONFIRMED_ERROR } });
+      return;
+    }
+    const verdict = validateResourceFile(file);
+    if (verdict.kind === "rejected") {
+      updateResourceCard(msgId, { uploadStatus: { status: "error", fileName: file.name, message: RESOURCE_REJECTION_MESSAGE[verdict.reason] } });
+      return;
+    }
+
+    updateResourceCard(msgId, { uploadStatus: { status: "uploading", fileName: file.name } });
+
+    const token = await getAccessToken();
+    const form = new FormData();
+    form.append("file", file);
+    form.append("title", defaultBookTitle(file.name));
+    form.append("rights_confirmed", "true");
+
+    const { status, body, networkError } = await uploadBookPdfWithProgress(resourceUploadUrl, form, token, () => {}, "PUT");
+
+    if (networkError) {
+      updateResourceCard(msgId, { uploadStatus: { status: "error", fileName: file.name, message: PDF_UPLOAD_NETWORK_ERROR } });
+      return;
+    }
+    if (status < 200 || status >= 300) {
+      const kind = classifyUploadStatus(status);
+      const serverMessage = (body as { message?: string; error?: string } | null)?.message ?? (body as { error?: string } | null)?.error;
+      updateResourceCard(msgId, {
+        uploadStatus: {
+          status: "error",
+          fileName: file.name,
+          message:
+            kind === "auth" ? PDF_UPLOAD_AUTH_ERROR
+            : kind === "too_large" ? PDF_UPLOAD_TOO_LARGE_ERROR
+            : serverMessage || PDF_UPLOAD_GENERIC_ERROR,
+        },
+      });
+      return;
+    }
+
+    const saved = body as ResourceUploadResponse | null;
+    updateResourceCard(msgId, {
+      exists: true,
+      id: saved?.id ?? null,
+      title: saved?.title ?? file.name,
+      description: saved?.description ?? null,
+      fileType: "pdf",
+      moderationStatus: saved?.moderation_status ?? null,
+      moderationReason: saved?.moderation_reason ?? null,
+      rightsConfirmed: true,
+      isPublished: false,
+      downloadUrl: saved?.download_url ?? null,
+      uploadStatus: { status: "success", fileName: file.name },
+    });
+    setRealActionCount((n) => n + 1);
+  };
+
+  const publishResource = async (msgId: number) => {
+    updateResourceCard(msgId, { publishStatus: { status: "publishing" } });
+    try {
+      const res = await authFetch(resourcePublishUrl, { method: "POST" });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { message?: string; error?: string } | null;
+        updateResourceCard(msgId, { publishStatus: { status: "error", message: body?.message || body?.error || RESOURCE_PUBLISH_GENERIC_ERROR } });
+        return;
+      }
+      const saved = (await res.json()) as ResourceUploadResponse;
+      updateResourceCard(msgId, { isPublished: true, downloadUrl: saved.download_url ?? null, publishStatus: undefined });
+      setRealActionCount((n) => n + 1);
+    } catch (err) {
+      const message =
+        (err as { message?: string } | null)?.message === "__AUTH_REQUIRED__"
+          ? AGENT_CHAT_AUTH_REQUIRED_MESSAGE
+          : RESOURCE_PUBLISH_GENERIC_ERROR;
+      updateResourceCard(msgId, { publishStatus: { status: "error", message } });
+    }
+  };
+
   // ─── アバターの声の選択・採用 ─────────────────────────────────────────────────
   // POST /match-voice はテキストの候補(id/title/description/score)のみを返す
   // (旧UIウィザードのStudioVoiceSectionも同様に試聴機能を持たない。Fish Audio
@@ -2325,6 +2475,8 @@ export default function CopilotPreviewPage() {
                 onDesignAvatarVoice={designAvatarVoice}
                 onAdoptDesignedVoice={adoptDesignedVoice}
                 onCommitFaqImportSelection={commitFaqImportSelection}
+                onUploadResourcePdf={uploadResourcePdf}
+                onPublishResource={publishResource}
               />
             ))}
             {/* key に直近メッセージのidを与え、回答が変わるたびに新しい確認として出す
@@ -2583,6 +2735,8 @@ function MessageRow({
   onDesignAvatarVoice,
   onAdoptDesignedVoice,
   onCommitFaqImportSelection,
+  onUploadResourcePdf,
+  onPublishResource,
 }: {
   m: Msg;
   onChip: (a: string, id: number) => void;
@@ -2596,6 +2750,8 @@ function MessageRow({
   onDesignAvatarVoice: (configId: string, instruction: string) => void | Promise<void>;
   onAdoptDesignedVoice: (cardMsgId: number, configId: string, candidateId: string) => void | Promise<void>;
   onCommitFaqImportSelection: (msgId: number, selectedIndices: number[]) => void | Promise<void>;
+  onUploadResourcePdf: (msgId: number, file: File, rightsConfirmed: boolean) => void | Promise<void>;
+  onPublishResource: (msgId: number) => void | Promise<void>;
 }) {
   const isMe = m.role === "me";
   return (
@@ -2630,6 +2786,8 @@ function MessageRow({
           onDesignAvatarVoice={onDesignAvatarVoice}
           onAdoptDesignedVoice={onAdoptDesignedVoice}
           onCommitFaqImportSelection={onCommitFaqImportSelection}
+          onUploadResourcePdf={onUploadResourcePdf}
+          onPublishResource={onPublishResource}
           onSendReal={(action) => onChip(action, m.id)}
         />
       )}
@@ -2833,6 +2991,8 @@ function CardView({
   onDesignAvatarVoice,
   onAdoptDesignedVoice,
   onCommitFaqImportSelection,
+  onUploadResourcePdf,
+  onPublishResource,
   onSendReal,
 }: {
   card: Card;
@@ -2847,6 +3007,8 @@ function CardView({
   onDesignAvatarVoice: (configId: string, instruction: string) => void | Promise<void>;
   onAdoptDesignedVoice: (cardMsgId: number, configId: string, candidateId: string) => void | Promise<void>;
   onCommitFaqImportSelection: (msgId: number, selectedIndices: number[]) => void | Promise<void>;
+  onUploadResourcePdf: (msgId: number, file: File, rightsConfirmed: boolean) => void | Promise<void>;
+  onPublishResource: (msgId: number) => void | Promise<void>;
   onSendReal?: (action: string) => void;
 }) {
   switch (card.kind) {
@@ -3200,6 +3362,8 @@ function CardView({
       return <PlanChangedCard card={card} />;
     case "widgetPlacement":
       return <WidgetPlacementCard card={card} onSendReal={onSendReal} />;
+    case "resource":
+      return <ResourceCard card={card} msgId={msgId} onUploadPdf={onUploadResourcePdf} onPublish={onPublishResource} />;
     case "knowledgeGapsList":
       return (
         <CardShell hd={<><span>📚</span>知識ギャップ一覧（{card.totalCount}件）</>}>
@@ -4121,6 +4285,124 @@ function WidgetPlacementCard({ card, onSendReal }: { card: Extract<Card, { kind:
             重なりを直す
           </button>
         </div>
+      )}
+    </CardShell>
+  );
+}
+
+// 資料オファーの自動モデレーション状態(docs/RESOURCE_OFFER_REQUIREMENTS.md)。
+// actionExecutor.ts の RESOURCE_MODERATION_LABEL と語彙を揃える。
+const RESOURCE_MODERATION_UI_LABEL: Record<"pending" | "approved" | "rejected", string> = {
+  pending: "未検査",
+  approved: "問題なし",
+  rejected: "要確認",
+};
+
+// 資料オファー(get_resource/upload_resource)のカード。1テナント1件固定。
+// PDFの直接アップロード・「公開する」は、WidgetPlacementCardの「適用」やAvatarAdoptedCardの
+// 写真アップロードと同じく、ツール呼び出しループを経由せずここから直接バックエンドを叩く
+// (押した/選んだ行為が意思表示そのもの)。外部URLの登録・削除は、この画面ではなく
+// 会話(upload_resource/delete_resourceツール)で行う — LLMの判断(タイトル・URLの妥当性、
+// 削除前の内容提示)を要するため。
+function ResourceCard({
+  card,
+  msgId,
+  onUploadPdf,
+  onPublish,
+}: {
+  card: Extract<Card, { kind: "resource" }>;
+  msgId: number;
+  onUploadPdf: (msgId: number, file: File, rightsConfirmed: boolean) => void | Promise<void>;
+  onPublish: (msgId: number) => void | Promise<void>;
+}) {
+  const [rightsConfirmed, setRightsConfirmed] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (file) void onUploadPdf(msgId, file, rightsConfirmed);
+  };
+
+  const uploading = card.uploadStatus?.status === "uploading";
+  const publishing = card.publishStatus?.status === "publishing";
+  const canUpload = rightsConfirmed && !uploading;
+
+  return (
+    <CardShell
+      tone={card.exists ? (card.isPublished ? "good" : "brand") : "agent"}
+      hd={<><span>📎</span>{card.exists ? `資料「${card.title}」` : "資料はまだ登録されていません"}</>}
+    >
+      {card.exists && (
+        <>
+          <Field k="種類" v={card.fileType === "pdf" ? "PDF" : "外部URL"} />
+          <Field k="公開状況" v={card.isPublished ? "公開中" : "未公開"} />
+          {card.moderationStatus && <Field k="モデレーション" v={RESOURCE_MODERATION_UI_LABEL[card.moderationStatus]} />}
+          {card.moderationStatus === "rejected" && card.moderationReason && (
+            <div style={{ fontSize: 13.5, color: "#f87171", lineHeight: 1.6 }}>{card.moderationReason}</div>
+          )}
+          {card.downloadUrl && (
+            <a href={card.downloadUrl} target="_blank" rel="noreferrer" style={{ fontSize: 14, color: AGENT }}>
+              資料を開く
+            </a>
+          )}
+        </>
+      )}
+
+      <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13.5, color: "var(--muted-foreground)", cursor: "pointer" }}>
+        <input
+          type="checkbox"
+          checked={rightsConfirmed}
+          onChange={(e) => setRightsConfirmed(e.target.checked)}
+          style={{ marginTop: 2, width: 18, height: 18 }}
+        />
+        <span>この資料が第三者の著作権・商標権等を侵害しないことを確認しました</span>
+      </label>
+
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="application/pdf"
+          style={{ display: "none" }}
+          aria-hidden="true"
+          tabIndex={-1}
+          onChange={handleFileChange}
+        />
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          disabled={!canUpload}
+          style={{
+            alignSelf: "flex-start", fontSize: 14.5, fontWeight: 700, padding: "10px 18px", borderRadius: 12, minHeight: 44,
+            border: "none", background: AGENT, color: "#fff",
+            cursor: canUpload ? "pointer" : "not-allowed", opacity: canUpload ? 1 : 0.5,
+          }}
+        >
+          {uploading ? "アップロードしています…" : "PDFをアップロードする"}
+        </button>
+        {card.exists && !card.isPublished && card.moderationStatus !== "rejected" && (
+          <button
+            onClick={() => void onPublish(msgId)}
+            disabled={publishing}
+            style={{
+              alignSelf: "flex-start", fontSize: 14.5, fontWeight: 700, padding: "10px 18px", borderRadius: 12, minHeight: 44,
+              border: "1px solid var(--border)", background: "transparent", color: "var(--foreground)",
+              cursor: publishing ? "not-allowed" : "pointer", opacity: publishing ? 0.6 : 1,
+            }}
+          >
+            {publishing ? "公開しています…" : "公開する"}
+          </button>
+        )}
+      </div>
+
+      {card.uploadStatus?.status === "error" && (
+        <div style={{ fontSize: 13.5, color: "#f87171", lineHeight: 1.6 }}>{card.uploadStatus.message}</div>
+      )}
+      {card.uploadStatus?.status === "success" && (
+        <div style={{ fontSize: 13.5, color: "#4ade80", lineHeight: 1.6 }}>アップロードしました。公開するには「公開する」を押してください。</div>
+      )}
+      {card.publishStatus?.status === "error" && (
+        <div style={{ fontSize: 13.5, color: "#f87171", lineHeight: 1.6 }}>{card.publishStatus.message}</div>
       )}
     </CardShell>
   );
