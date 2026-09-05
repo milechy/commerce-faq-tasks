@@ -1,0 +1,25 @@
+{
+  "name": "shopify-app-admin",
+  "private": true,
+  "version": "0.0.0",
+  "description": "R2C – AI Sales Concierge 埋め込み管理画面(Shopify Admin, App Bridge)。接続状態表示・表示面選択・次にやること導線のみを持つ薄いUI。ロジック・プロンプト・指示ルールは持たず、既存バックエンドAPI(src/api/widget/shopifySettingsRoutes.ts)を呼び出すだけ(docs/SHOPIFY_APP_REQUIREMENTS.md D9)。npm install は未実施・ロックファイルも未生成(Asana 1218199817782431の制約により、この環境ではPartner Dashboard認証を要する実インストール/ビルドを行わない)。",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && tsc --noEmit",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@shopify/app-bridge-react": "^4.1.6",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.3",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10"
+  }
+}
