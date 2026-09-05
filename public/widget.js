@@ -531,6 +531,28 @@
     '}',
     '.action-btn:focus-visible { outline: 3px solid #93c5fd; outline-offset: 2px; }',
     '.action-btn:hover { background: #1d4ed8; }',
+    '.resource-card {',
+    '  margin-top: 8px;',
+    '  padding: 12px;',
+    '  border: 1px solid #e2e8f0;',
+    '  border-radius: 10px;',
+    '  background: #f8fafc;',
+    '}',
+    '.resource-card-title { font-size: 14px; color: #334155; margin-bottom: 8px; }',
+    '.resource-card-link {',
+    '  display: inline-flex;',
+    '  align-items: center;',
+    '  justify-content: center;',
+    '  min-height: 44px;',
+    '  padding: 10px 14px;',
+    '  border-radius: 10px;',
+    '  background: var(--accent);',
+    '  color: #fff;',
+    '  font-size: 16px;',
+    '  text-decoration: none;',
+    '}',
+    '.resource-card-link:hover { background: #1d4ed8; }',
+    '.resource-card-link:focus-visible { outline: 3px solid #93c5fd; outline-offset: 2px; }',
     '.ts { font-size: 11px; color: #94a3b8; margin-top: 4px; text-align: center; }',
     '.empty-state {',
     '  flex: 1;',
@@ -2610,6 +2632,27 @@
     return row;
   }
 
+  // 資料オファー機能: AI回答テキストと構造的に分離したカードとして提示する。
+  // textContent / createElement のみ(innerHTML禁止)。
+  function buildResourceCard(resourceCard) {
+    var card = el('div', { className: 'resource-card' });
+    var titleEl = el('div', { className: 'resource-card-title' });
+    titleEl.textContent = resourceCard.title;
+    card.appendChild(titleEl);
+    var link = el('a', {
+      className: 'resource-card-link',
+      href: resourceCard.url,
+      target: '_blank',
+      rel: 'noopener',
+    });
+    link.textContent = '資料を見る';
+    link.addEventListener('click', function () {
+      if (_tracker) _tracker.track('resource_clicked', { tenant_id: tenantId });
+    });
+    card.appendChild(link);
+    return card;
+  }
+
   function renderMessages() {
     // R0-②: エスカレーションボタンは会話開始前(空セッション)では無効。
     // サーバ側(escalateSession)は「来訪者が最低1通送っているか」で判定するため、
@@ -2677,6 +2720,10 @@
         }
       } else {
         inner.appendChild(bubble);
+      }
+      // 資料オファー機能: AI回答テキストと構造的に分離したDOM(禁止40と同じ考え方)。
+      if (msg.role === 'assistant' && msg.resourceCard) {
+        inner.appendChild(buildResourceCard(msg.resourceCard));
       }
       // 要件Rj/F5: AI回答テキストと構造的に分離したDOM(禁止40)。
       // bubble/actions/ts の兄弟要素として追加し、textContentの一部にしない。
@@ -3120,9 +3167,23 @@
                   return action.label.length > 0 && action.url.length > 0;
                 })
               : undefined,
+          resourceCard:
+            json.data &&
+            json.data.resourceCard &&
+            typeof json.data.resourceCard.title === 'string' &&
+            typeof json.data.resourceCard.url === 'string'
+              ? { title: json.data.resourceCard.title, url: json.data.resourceCard.url }
+              : undefined,
           timestamp: (json.data && json.data.timestamp) || Date.now(),
         };
         messages.push(assistantMsg);
+
+        // 資料オファー機能: カードが提示された瞬間(=このターンで受信した瞬間)に1回だけ計測する。
+        // renderMessages()は再描画のたびに全メッセージを作り直すため、そちら側で数えると
+        // 過去に提示済みのカードまで再カウントしてしまう。
+        if (assistantMsg.resourceCard && _tracker) {
+          _tracker.track('resource_offered', { tenant_id: tenantId });
+        }
 
         // S6: サーバ解決済みtenantId(ChatMessage.tenantId)を同意キーに反映する。
         if (json.data && typeof json.data.tenantId === 'string' && json.data.tenantId) {

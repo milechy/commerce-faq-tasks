@@ -10,6 +10,9 @@ export interface SalesSessionMeta {
   proposeTriggered?: boolean;
   recommendTriggered?: boolean;
   closeTriggered?: boolean;
+  // 資料オファー機能: 1会話につき最大1回という上限(仕様)を次ターンへ引き継ぐためのフラグ。
+  // proposeTriggered 等と同じ「一度だけトリガー」パターン(GID 1216970103691946)を踏襲する。
+  resourceOfferShown?: boolean;
   lastUpdatedAt: string;
 }
 
@@ -58,6 +61,7 @@ export function setSalesSessionMeta(
     proposeTriggered: meta.proposeTriggered,
     recommendTriggered: meta.recommendTriggered,
     closeTriggered: meta.closeTriggered,
+    resourceOfferShown: meta.resourceOfferShown,
     lastUpdatedAt: now,
   };
   sessionStore.set(toInternalKey(key), {
@@ -84,6 +88,7 @@ export function updateSalesSessionMeta(
     proposeTriggered: patch.proposeTriggered ?? existing?.proposeTriggered,
     recommendTriggered: patch.recommendTriggered ?? existing?.recommendTriggered,
     closeTriggered: patch.closeTriggered ?? existing?.closeTriggered,
+    resourceOfferShown: patch.resourceOfferShown ?? existing?.resourceOfferShown,
     lastUpdatedAt: new Date().toISOString(),
   };
 

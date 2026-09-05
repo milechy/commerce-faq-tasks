@@ -18,6 +18,7 @@ import {
 } from '../admin/chat-history/chatHistoryRepository';
 import { detectGap } from '../../agent/gap/gapDetector';
 import { resolveTrafficSource, TRAFFIC_SOURCE_HEADER } from '../../lib/traffic/trafficSource';
+import { createNotification } from '../../lib/notifications';
 
 const VALID_EVENT_TYPES = [
   'page_view', 'scroll_depth', 'idle_time', 'product_view',
@@ -33,6 +34,11 @@ const VALID_EVENT_TYPES = [
   // (=開き直した)ケース。chat_open(離脱率計算の分母)と別名にして、
   // 分母を歪めずに開き直しの回数を計測できるようにする(widget.js参照)。
   'chat_reopen',
+  // 資料オファー機能: 資料カードを提示した瞬間(widget.js) / お客様がクリックした瞬間。
+  // クリックはインプレッションより強いホットリード信号のため通知の対象にする
+  // (bridgeResourceClickToNotification参照。オファーの都度は通知しない)。
+  'resource_offered',
+  'resource_clicked',
 ] as const;
 
 /** answer_feedback の event_data。どの回答への評価かを識別できる必要がある。 */
@@ -216,6 +222,9 @@ export function registerEventRoutes(
 
       // ナレッジ配線是正P14: answer_feedback(👎)をギャップ検出に橋渡しする (best-effort)
       await bridgeAnswerFeedbackToGaps(db, tenantId, { chatSessionId: chat_session_id, visitorId: visitor_id }, events);
+
+      // 資料オファー機能: resource_clicked(クリック=ホットリード信号)を通知に橋渡しする (best-effort)
+      await bridgeResourceClickToNotification(db, tenantId, { chatSessionId: chat_session_id, visitorId: visitor_id }, events);
 
       return res.status(202).json({ accepted: events.length });
     } catch (err) {
@@ -483,4 +492,41 @@ async function resolveFeedbackTargetMessage(
   }
 
   return getApproxUserMessage();
+}
+
+// ---------------------------------------------------------------------------
+// 資料オファー機能: resource_clicked → 通知ブリッジ
+// behavioral_events INSERT 後に best-effort で呼び出す。失敗しても202維持。
+//
+// resource_offered(インプレッション)は通知しない — 都度通知は運用者にとってノイズに
+// なるため、より強いホットリード信号である resource_clicked のみ通知する。
+// ---------------------------------------------------------------------------
+
+export async function bridgeResourceClickToNotification(
+  db: Pool,
+  tenantId: string,
+  sessionRef: ConversionSessionRef,
+  events: EventInput[],
+): Promise<void> {
+  const clicks = events.filter((e) => e.event_type === 'resource_clicked');
+  if (clicks.length === 0) return;
+
+  const sessionDbId = await resolveChatSessionUuid(db, tenantId, sessionRef).catch((err) => {
+    logger.warn({ msg: '[events→resource notification bridge] session resolve failed', error: (err as Error).message, tenantId });
+    return null;
+  });
+
+  // createNotification 自体は内部でエラーを握りつぶす契約だが、この橋渡し自体が
+  // 202レスポンスを阻害しないよう(他のbridge*関数と同じbest-effort方針)念のため囲う。
+  await createNotification({
+    recipientRole: 'client_admin',
+    recipientTenantId: tenantId,
+    type: 'resource_clicked',
+    title: '資料がクリックされました',
+    message: 'お客様がAIから案内された資料をクリックしました。関心の高いお客様の可能性があります。',
+    link: '/admin/chat-history',
+    metadata: { tenantId, sessionId: sessionDbId ?? undefined },
+  }).catch((err) => {
+    logger.warn({ msg: '[events→resource notification bridge] createNotification failed', error: (err as Error).message, tenantId });
+  });
 }
