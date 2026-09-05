@@ -5,27 +5,28 @@
 # 静的な雛形であり、実際の Partner Dashboard 登録・`shopify app deploy` は人間が後で行う。
 # 詳細な決定事項・受け入れ条件は docs/SHOPIFY_APP_REQUIREMENTS.md（D9, D11, D14 ほか）を参照。
 #
-# client_id / application_url はプレースホルダ。
-# Partner Dashboard でアプリを作成した後、実際の値に差し替えること（`shopify app config link` でも可）。
+# client_id は2026-09-05にDev Dashboard（Partner組織234198330、アプリID419596828673）で
+# 実際に発行された値。client_secretは機密情報のためこのファイルにもリポジトリにも置かない
+# （運用時は環境変数で渡す）。application_url / redirect_urlsはDev Dashboard側にも
+# 同じ仮URLを登録済み（実デプロイ時に両方を差し替えること）。
 
 name = "R2C – AI Sales Concierge"
-client_id = "REPLACE_WITH_PARTNER_DASHBOARD_CLIENT_ID"
+client_id = "3e7af6d816d16cc63aa9ed0967fb05d0"
 application_url = "https://api.r2c.biz/v1/public/shopify/install"
 embedded = true
 
 [access_scopes]
-# 最小限の想定スコープ。過剰なスコープを要求しない（Shopify 審査での要求）。
-# v1 は「表示面選択のための商品ページ/カート情報の参照」までを想定し、書き込み系スコープは持たない。
-# 商品データの自動同期（v1.1 以降、docs/SHOPIFY_APP_REQUIREMENTS.md §8）に着手する際に
-# 必要スコープを再検討すること。
-scopes = "read_products"
+# v1はAdmin APIを呼ばない設計（OAuthでテナント識別・Webhook受信のみ）のため、
+# 2026-09-05時点でスコープなしでDev Dashboardに登録済み。商品データの自動同期
+# （v1.1以降、docs/SHOPIFY_APP_REQUIREMENTS.md §8）に着手する際に必要スコープを追加すること。
+scopes = ""
 
 [webhooks]
-api_version = "2026-04"
+api_version = "2026-07"
 
   # GDPR 必須 Webhook（Shopify App Store 掲載要件、docs/SHOPIFY_APP_REQUIREMENTS.md §2 #8, §4.4）。
-  # 実装は別タスクで src/api/widget/shopifyWebhookRoutes.ts（仮称）に置く想定。
-  # 以下の uri は仮の値であり、実装タスクで実際のエンドポイントURLに合わせて更新すること。
+  # 実装済み: src/api/widget/shopifyWebhookRoutes.ts（PR 1229、パスはこの実装と一致させてある）。
+  # ドメイン(api.r2c.biz)は本番デプロイが完了するまで仮。デプロイ時に実ドメインへ差し替えること。
 
   [[webhooks.subscriptions]]
   compliance_topics = ["customers/data_request"]
